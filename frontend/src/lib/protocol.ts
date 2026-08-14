@@ -40,10 +40,11 @@ export class ProtocolClient {
   }
 
   connect(): void {
-    if (!this._sessionId || (this.ws && this.ws.readyState <= WebSocket.OPEN)) {
-      if (!this._sessionId) this.setState("disconnected");
-      return;
+    // If an old WS connection is open (e.g., from a previous session), close it first
+    if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
+      try { this.ws.close(1000, "Session change"); } catch (_) {}
     }
+    if (!this._sessionId) { this.setState("disconnected"); return; }
     this.setState("connecting");
     this.reconnectAttempts++;
     try {

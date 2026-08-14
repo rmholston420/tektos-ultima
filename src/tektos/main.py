@@ -499,6 +499,9 @@ async def switch_model(session_id: str, req: ModelRequest):
         await append_event(session_id, "session.updated", {
             "changes": {"model": req.model, "from": old_model},
         })
+        await _emit_schema_event(session_id, "model_switched", {
+            "model": req.model, "old_model": old_model,
+        })
         return {"ok": True, "model": req.model, "old_model": old_model}
     except _HTTPException:
         raise
