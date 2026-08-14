@@ -1,24 +1,31 @@
 # Tektos-Ultima-v1 — SESSION HANDOFF
 
-**Generated:** 2026-08-13  
+**Generated:** 2026-08-14  
 **Profile:** default  
 **Model:** Qwen3.6 35B A3B UD Q4_K_XL.gguf on `:8081/v1`; Embedder on `:8090/v1`  
 **Working directory:** `/home/rmholston/dev/tektos-ultima-v1`  
-**Branch:** `main` (git initialized, 2 commits)  
-**Previous commit:** `4cc8cfd docs(adrs): expand ADR-001 with full database selection rationale`
+**Branch:** `main` (git initialized, 11 files committed)  
+**Previous commit:** `94eeaec Phase 3: Self-improvement adapter + schema evolution engine wired into FastAPI`
 
 ---
 
 ## SESSION STATUS
 
-**Context limit reached.** This file is the continuation brief. The next session should read this, load the skills listed below, and continue from **PHASE 3** (self-improvement + schema evolution wiring).
+**Context limit reached.** This file is the continuation brief. The next session should read this, load the skills listed below, and continue from **PHASE 5** (hardening: tests, CI/CD, contract tests).
+
+**Current progress:**
+- ✅ Phase 1: Backend (39/39 tests passing)
+- ✅ Phase 2: Frontend (Next.js + Archive Browser)
+- ✅ Phase 3: Self-improvement + Schema Evolution
+- ✅ Phase 4: Archive Browser API + LAST_KNOWN_STATE.md integration
+- 🚧 Phase 5: Hardening (tests, CI/CD, contract tests)
 
 **To resume:** The next agent should run:
 ```bash
 cd /home/rmholston/dev/tektos-ultima-v1
 source .venv/bin/activate
 ```
-Then read this file and continue from Phase 3.
+Then read this file and continue from Phase 5.
 
 ---
 
@@ -119,35 +126,61 @@ User directive: *"use the best and most optimal databases possible as long as th
 - `docs/WORKFLOWS.md` — Exemplar workflows guide
 - `adrs/README.md` — Architecture Decision Records (ADR-001: SQLite selection rationale)
 
-### Phase 3: Self-Improvement + Schema Evolution (IN PROGRESS)
-- **SchemaEvolutionEngine** (`src/tektos/migrations/schema_evolution.py`): Full lifecycle — introspect, detect patterns, propose, validate, apply, rollback
+### Phase 3: Self-Improvement + Schema Evolution ✅ COMPLETE
+- **SchemaEvolutionEngine** (`src/tektos/migrations/schema_evolution.py`): Full lifecycle — introspect, detect patterns, propose, validate, apply, rollback (658 lines)
 - **SchemaMigrationEngine** (`src/tektos/migrations/engine.py`): Versioned, idempotent DDL migrations
 - **Initial migrations** (`src/tektos/migrations/initial.py`): v1→v2 (self-improvement fields), v2→v3 (dynamic learning)
 - **main.py wiring:** SchemaEvolutionEngine initialized in lifespan, apply_migrations() called, self-improvement adapter connected
+- **Verified:** `curl http://localhost:8020/api/schema` returns 200 OK with valid self-improvement stats
+- **Fixed:** `SelfImprovementAdapter` attribute access (`get_experience()`, `get_learning_metrics()`), duplicate `_handle_prompt` removed
 
-**What's been wired into main.py:**
-- `schema_engine` and `self_improvement` added to AppGlobals
-- `lifespan()` creates SchemaEvolutionEngine, applies migrations, connects to SelfImprovementAdapter
-- `_emit_schema_event()` helper for WebSocket fanout
-- `_handle_prompt()` helper for WS prompt processing
-- Schema version logged on startup: `log.info("Tektos-Ultima-v1 backend started (schema v%d)")`
+### Phase 4: Archive Browser + LAST_KNOWN_STATE.md ✅ COMPLETE
+- **Archive Browser** (`frontend/src/components/archive/ArchiveBrowser.tsx`): 637-line component with search, detail view, resume/fork/rename/tag
+- **Archive API endpoints:** `/api/archive/sessions`, `/api/archive/sessions/{id}`, rename, tag, messages
+- **LAST_KNOWN_STATE.md integration:**
+  - `src/tektos/runtime/session_state.py`: `SessionState` dataclass with markdown serialization (311 lines)
+  - `src/tektos/runtime/state_manager.py`: `SessionStateManager` for save/load/snapshot (314 lines)
+  - API endpoints: `GET /api/state/{session_id}`, `POST /api/state/{session_id}/save`, `POST /api/state/{session_id}/snapshot`
+  - All fields round-trip correctly: objective, progress, completion_pct, current_file, next_steps, key_decisions, blockers, todo_items
+  - File format: human-readable markdown at `/home/rmholston/LAST_KNOWN_STATE.md`
+- **Fixed:** `_connections` → `_sessions` attribute in `_emit_schema_event()`
+- **Fixed:** CORS updated for frontend on `:3003`
+
+### Phase 5: Hardening (IN PROGRESS)
+- [ ] Convert all PlexClaw bug fixes into tests
+- [ ] Add contract tests for REST endpoints
+- [ ] Add integration tests for LAST_KNOWN_STATE.md workflow
+- [ ] Set up CI/CD pipeline (GitHub Actions)
+- [ ] Add Playwright E2E tests for Archive Browser
 
 ---
 
-## WHAT TO CONTINUE (PHASE 3)
+## WHAT TO CONTINUE (PHASE 5)
 
 ### Immediate next steps:
-1. **Verify the main.py wiring compiles** — run the backend to confirm no import errors
-2. **Add schema introspection REST endpoint** — `GET /api/schema` to expose current schema + migration history
-3. **Wire schema evolution into self-improvement cycle:**
-   - Agent should periodically introspect its own database
-   - Detect patterns (e.g., "X% of sessions have field Y in metadata that isn't a column")
-   - Propose migration
-   - Validate (no data loss, constraints OK)
-   - Apply atomically
-   - Log to evolution history
-4. **Write Phase 3 tests** — test schema introspection, pattern detection, proposal generation, migration application
-5. **Add self-awareness model:** The agent should maintain a model of itself in the database (schema version, applied migrations, self-improvement history)
+1. **Convert PlexClaw bug fixes into tests:**
+   - JSON parsing errors in WS handler (bug #9)
+   - approve/reject errors (bug #10)
+   - FS_ROOT env var (bug #12)
+   - All external calls wrapped in try/except
+   - Dead connection cleanup (bug #24)
+2. **Add contract tests for REST endpoints:**
+   - Test all session CRUD endpoints
+   - Test archive endpoints
+   - Test LAST_KNOWN_STATE.md endpoints
+   - Test schema introspection endpoint
+3. **Add integration tests for LAST_KNOWN_STATE.md:**
+   - Test save → load round-trip
+   - Test snapshot version bump
+   - Test markdown parsing accuracy
+4. **Set up CI/CD pipeline:**
+   - GitHub Actions workflow
+   - Run pytest on Python changes
+   - Run Next.js build on frontend changes
+5. **Add Playwright E2E tests for Archive Browser:**
+   - Search functionality
+   - Session detail view
+   - Rename/tag operations
 
 ### Schema Evolution Architecture:
 The engine enables:
@@ -241,13 +274,24 @@ ss -tlnp | grep -E ':(8020|5555|3003|8081|8090) '
 
 - [ ] Read this SESSION_HANDOFF.md
 - [ ] `cd /home/rmholston/dev/tektos-ultima-v1 && source .venv/bin/activate`
-- [ ] Load skills: hermes-agent, devops/watchers, software-development/systematic-debugging
-- [ ] Run backend: `cd src/tektos && uvicorn main:app --host 0.0.0.0 --port 8020`
-- [ ] Verify imports compile (no missing modules)
-- [ ] Add `GET /api/schema` endpoint
-- [ ] Wire schema evolution into self-improvement cycle
-- [ ] Write Phase 3 tests
-- [ ] Update TODO list: Phase 3 in progress, Phase 4 (archive browser) pending
+- [ ] Load skills: hermes-agent, software-development/test-driven-development, software-development/systematic-debugging
+- [ ] Run backend: `uvicorn tektos.main:app --host 0.0.0.0 --port 8020`
+- [ ] Verify backend: `curl http://localhost:8020/api/schema` returns 200 OK
+- [ ] Start Phase 5: Convert PlexClaw bug fixes to tests
+- [ ] Add contract tests for REST endpoints
+- [ ] Add integration tests for LAST_KNOWN_STATE.md workflow
+- [ ] Set up CI/CD pipeline (GitHub Actions)
+- [ ] Update TODO list: Phase 5 in progress
+
+## LAST_KNOWN_STATE.md WORKFLOW
+
+The app now uses LAST_KNOWN_STATE.md as the anchor document for session continuity:
+
+1. **Save state:** `POST /api/state/{session_id}/save` with current progress
+2. **Load state:** `GET /api/state/{session_id}` returns parsed state + markdown
+3. **Snapshot:** `POST /api/state/{session_id}/snapshot` creates versioned checkpoint
+4. **File location:** `/home/rmholston/LAST_KNOWN_STATE.md` (human-readable)
+5. **Auto-save cron:** Pending implementation (Phase 5)
 
 ---
 

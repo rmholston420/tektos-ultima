@@ -21,13 +21,14 @@ import logging as _log
 import os as _os
 import sys as _sys
 from contextlib import asynccontextmanager as _asynccontextmanager
+from datetime import datetime as _datetime, timezone as _timezone
 from pathlib import Path as _Path
 from typing import Any
 
 from fastapi import FastAPI as _FastAPI, HTTPException as _HTTPException, WebSocket as _WebSocket, WebSocketDisconnect as _WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware as _CORSMiddleware
 from fastapi.responses import JSONResponse as _JSONResponse
-from pydantic import BaseModel as _BaseModel
+from pydantic import BaseModel as _BaseModel, Field as _Field
 
 
 log = _log.getLogger("tektos.main")
@@ -40,6 +41,7 @@ log = _log.getLogger("tektos.main")
 from tektos.runtime.session import SessionManager, LiveSession
 from tektos.runtime.sdk import RuntimeSDK, HookContext
 from tektos.runtime.ws_manager import WebSocketManager
+from tektos.runtime.session_state import SessionStateManager, SessionState
 from tektos.store.event_store import append_event, get_events, get_replay, search_events, close as store_close, get_db_path
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
 from tektos.self_improvement.engine import SelfImprovementAdapter
@@ -62,6 +64,7 @@ runtime_sdk: RuntimeSDK
 ws_manager: WebSocketManager
 schema_engine: SchemaEvolutionEngine
 self_improvement: SelfImprovementAdapter
+state_managers: dict[str, SessionStateManager] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +137,7 @@ app = _FastAPI(
 # Middleware: CORS (applied after TrustedHost in reverse order — correct)
 app.add_middleware(
     _CORSMiddleware,
-    allow_origins=["http://localhost:5555"],  # Frontend URL
+    allow_origins=["http://localhost:3003", "http://localhost:5555"],  # Frontend URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -460,13 +463,121 @@ async def get_schema_info():
 
 
 # ---------------------------------------------------------------------------
+# LAST_KNOWN_STATE.md endpoints
+# ---------------------------------------------------------------------------
+
+class StateSaveRequest(_BaseModel):
+    """Request body for saving session state."""
+    session_id: str
+    objective: str = ""
+    progress: str = ""
+    completion_pct: float = 0.0
+    current_file: str = ""
+    current_command: str = ""
+    next_steps: list[str] = _Field(default_factory=list)
+    key_decisions: list[str] = _Field(default_factory=list)
+    constraints: list[str] = _Field(default_factory=list)
+    blockers: list[str] = _Field(default_factory=list)
+    todo_items: list[dict[str, Any]] = _Field(default_factory=list)
+    notes: list[str] = _Field(default_factory=list)
+    referenced_files: list[str] = _Field(default_factory=list)
+
+
+@app.get("/api/state/{session_id}")
+async def get_session_state(session_id: str):
+    """Get LAST_KNOWN_STATE.md for a session.
+    
+    Returns the structured state as markdown, plus the parsed SessionState object.
+    This is the anchor document that any resumed session will load first.
+    """
+    if session_id not in state_managers:
+        raise _HTTPException(status_code=404, detail=f"No state manager for session {session_id}")
+    
+    state_mgr = state_managers[session_id]
+    state = state_mgr.load_state()
+    
+    return {
+        "session_id": session_id,
+        "state": state.to_dict(),
+        "markdown": state.to_markdown(),
+    }
+
+
+@app.post("/api/state/{session_id}/save")
+async def save_session_state(session_id: str, req: StateSaveRequest):
+    """Save/update session state to LAST_KNOWN_STATE.md.
+    
+    Called after each major step to preserve progress.
+    Any resumed session will load this to know exactly where to continue.
+    """
+    if session_id not in state_managers:
+        state_managers[session_id] = SessionStateManager(
+            session_id=session_id,
+            project="Tektos-Ultima-v1",
+        )
+    
+    state_mgr = state_managers[session_id]
+    state = SessionState(
+        session_id=session_id,
+        project="Tektos-Ultima-v1",
+        timestamp=_datetime.now(_timezone.utc).isoformat(),
+        objective=req.objective,
+        progress=req.progress,
+        completion_pct=req.completion_pct,
+        current_file=req.current_file,
+        current_command=req.current_command,
+        next_steps=req.next_steps,
+        key_decisions=req.key_decisions,
+        constraints=req.constraints,
+        blockers=req.blockers,
+        todo_items=req.todo_items,
+        notes=req.notes,
+        referenced_files=req.referenced_files,
+    )
+    
+    state_mgr.save_state(state)
+    
+    # Emit state event to connected clients
+    await _emit_schema_event(session_id, "session.state.saved", {
+        "objective": req.objective,
+        "progress": req.progress,
+        "completion_pct": req.completion_pct,
+    })
+    
+    return {"ok": True, "version": state.version}
+
+
+@app.post("/api/state/{session_id}/snapshot")
+async def snapshot_session_state(session_id: str):
+    """Save a full state snapshot with version bump.
+    
+    Called at session boundaries (complete, archive, interrupt).
+    This creates a durable checkpoint that can be resumed later.
+    """
+    if session_id not in state_managers:
+        raise _HTTPException(status_code=404, detail=f"No state manager for session {session_id}")
+    
+    state_mgr = state_managers[session_id]
+    state = state_mgr.load_state()
+    state_mgr.save_full_snapshot(state)
+    
+    # Emit state event
+    await _emit_schema_event(session_id, "session.state.snapshot", {
+        "version": state.version,
+        "timestamp": state.timestamp,
+    })
+    
+    return {"ok": True, "version": state.version}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 async def _emit_schema_event(session_id: str, event_type: str, payload: dict[str, Any]) -> None:
     """Emit an event to all connected WebSocket clients."""
     try:
-        for ws in list(ws_manager._connections.get(session_id, [])):
+        for ws in list(ws_manager._sessions.get(session_id, set())):
             await ws.send_text(_json.dumps({
                 "type": event_type,
                 "payload": payload,
@@ -638,39 +749,6 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
         log.error(f"WS handler error: {exc}", exc_info=True)
     finally:
         await session_manager.remove_ws_connection(session_id, websocket)
-
-
-async def _handle_prompt(
-    websocket: _WebSocket,
-    session: LiveSession,
-    prompt: str,
-    system_prompt: str | None,
-) -> None:
-    """Handle a prompt submission. Streams events to the WebSocket."""
-    approved_tools: dict[str, bool] = {}
-    approval_event: _asyncio.Event = _asyncio.Event()
-
-    async def on_event(envelope):
-        """Send envelope to WebSocket."""
-        await websocket.send_text(envelope.to_json())
-
-    async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
-        """Wait for user approval on a tool call."""
-        # Wait for approval message (timeout after 30 seconds)
-        try:
-            await asyncio.wait_for(approval_event.wait(), timeout=30.0)
-            return approved_tools.get(tool_id, False)
-        except asyncio.TimeoutError:
-            log.warning(f"Tool approval timeout for {tool_id}")
-            return False
-
-    await runtime_sdk.submit_prompt(
-        session=session,
-        prompt=prompt,
-        system_prompt=system_prompt,
-        on_event=on_event,
-        on_tool_approval=on_tool_approval,
-    )
 
 
 # ---------------------------------------------------------------------------
