@@ -47,7 +47,8 @@ export default function App() {
       setConnectionState(state.state);
     });
 
-    protocolClient.connect();
+    // Only connect after a session exists
+    // protocolClient.connect() is called from handleCreateSession and handleSelectSession
 
     // Cleanup on unmount
     return () => {
@@ -209,6 +210,7 @@ export default function App() {
     sessionStore.createSession().then((session) => {
       setActiveSession(session);
       protocolClient.setSessionId(session.id);
+      protocolClient.connect();
     });
   }, [sessionStore, protocolClient]);
 

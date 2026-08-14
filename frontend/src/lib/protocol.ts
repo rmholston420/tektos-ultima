@@ -70,7 +70,9 @@ export type StateHandler = (state: ConnectionStateChange) => void;
 
 export class ProtocolClient {
   private ws: WebSocket | null = null;
-  private url: string;
+  private host: string;
+  private port: number;
+  private protocol: string;
   private handlers = new Map<EventType, Set<EventHandler>>();
   private errorHandlers = new Set<ErrorHandler>();
   private stateHandlers = new Set<StateHandler>();
@@ -80,21 +82,20 @@ export class ProtocolClient {
   private state: ConnectionState = "disconnected";
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private lastPong: number = 0;
+  private lastSessionId: string = "";
 
   constructor(options: {
     host?: string;
     port?: number;
     protocol?: string;
   } = {}) {
-    const { host = "localhost", port = 8020, protocol } = options;
-    this.url =
-      protocol ??
-      (typeof window !== "undefined" && window.location.protocol === "https:" ? "wss" : "ws") +
-      "://" +
-      host +
-      ":" +
-      port +
-      "/ws";
+    this.host = options.host ?? "localhost";
+    this.port = options.port ?? 8020;
+    this.protocol = options.protocol ?? (typeof window !== "undefined" && window.location.protocol === "https:" ? "wss" : "ws");
+  }
+
+  private buildWsUrl(sessionId: string): string {
+    return `${this.protocol}://${this.host}:${this.port}/ws/${sessionId}`;
   }
 
   // -----------------------------------------------------------------------
@@ -102,6 +103,12 @@ export class ProtocolClient {
   // -----------------------------------------------------------------------
 
   connect(): void {
+    if (!this.lastSessionId) {
+      // No session ID yet — skip WebSocket connection
+      this.setState("disconnected");
+      return;
+    }
+
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
       return; // Already connected or connecting
     }
@@ -110,7 +117,8 @@ export class ProtocolClient {
     this.reconnectAttempts++;
 
     try {
-      this.ws = new WebSocket(this.url);
+      const wsUrl = this.buildWsUrl(this.lastSessionId);
+      this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
@@ -145,6 +153,12 @@ export class ProtocolClient {
     }
   }
 
+  /** Called when session ID changes — reconnect with new session */
+  reconnect(): void {
+    this.disconnect();
+    this.connect();
+  }
+
   disconnect(): void {
     if (this.ws) {
       this.ws.close(1000, "Client disconnect");
@@ -162,7 +176,7 @@ export class ProtocolClient {
     const envelope: WSOutgoing = {
       type: "prompt",
       session_id: options?.model ? `${this.lastSessionId}-${Date.now()}` : this.lastSessionId,
-      content: message,
+      prompt: message,
       model: options?.model,
       cwd: options?.cwd,
     };
