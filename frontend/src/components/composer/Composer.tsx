@@ -106,6 +106,30 @@ export function Composer({
     e.target.value = "";
   };
 
+  // Metrics display helpers
+  const formatTokens = (count: number): string => {
+    if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+    return `${count}`;
+  };
+
+  const getUsageColor = (pct: number): string => {
+    if (pct < 50) return "text-text-muted";
+    if (pct < 75) return "text-status-warning";
+    return "text-status-error";
+  };
+
+  const getUsageBarColor = (pct: number): string => {
+    if (pct < 50) return "bg-status-success";
+    if (pct < 75) return "bg-status-warning";
+    return "bg-status-error";
+  };
+
+  // Calculate live metrics from textarea content
+  const charCount = value.length;
+  const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
+  const estTokenCount = wordCount ? Math.ceil(wordCount * 1.3) : 0;
+  const estContextPct = estTokenCount > 0 ? Math.min((estTokenCount / 128000) * 100, 100) : 0;
+
   return (
     <div className="composer">
       <div className="max-w-4xl mx-auto">
@@ -117,37 +141,52 @@ export function Composer({
           </div>
         )}
 
-        {/* Input wrapper */}
-        <div className={`composer-input-wrapper ${isFocused ? "shadow-glow" : ""}`}>
-          {/* File attachment preview */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={handleFileChange}
-          />
+          {/* Input wrapper */}
+          <div className={`composer-input-wrapper ${isFocused ? "shadow-glow" : ""}`}>
+            {/* File attachment preview */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFileChange}
+            />
 
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={handleTextareaChange}
-            onKeyDown={handleKeyDown}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            placeholder={
-              isStreaming
-                ? "AI is responding... press Ctrl+Shift+M to interrupt"
-                : isActive
-                ? "Ask anything..."
-                : "Start or select a session to begin"
-            }
-            disabled={!isActive || (isStreaming && false)} // Allow typing while streaming for notes
-            rows={Math.min(lineCount, 8)}
-            className="w-full bg-transparent border-none text-text-primary text-sm
-                       resize-none focus:ring-0 placeholder-text-muted
-                       px-4 py-3 min-h-[2.75rem]"
-          />
+            {/* Placeholder overlay (shown when empty and not focused) */}
+            {!value && !isFocused && (
+              <div className="absolute inset-x-4 top-3 pointer-events-none">
+                <p className="text-xs text-text-muted">
+                  Paste/Upload a{" "}
+                  <span className="text-accent font-medium">Spec</span>
+                  {" , "}
+                  <span className="text-accent font-medium">Describe what you want to </span>
+                  <span className="text-accent font-medium">Build</span>
+                  {", or Select a "}
+                  <span className="text-accent font-medium">Session</span>
+                  {" to begin..."}
+                </p>
+              </div>
+            )}
+
+            <textarea
+              ref={textareaRef}
+              value={value}
+              onChange={handleTextareaChange}
+              onKeyDown={handleKeyDown}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              placeholder={
+                isStreaming
+                  ? "AI is responding... press Ctrl+Shift+M to interrupt"
+                  : "Describe what you want to build or ask anything..."
+              }
+              disabled={!isActive || (isStreaming && false)}
+              rows={Math.min(lineCount, 8)}
+              className={`w-full bg-transparent border-none text-text-primary text-sm
+                         resize-none focus:ring-0 placeholder-text-muted
+                         px-4 py-3 min-h-[2.75rem]
+                         ${!value && !isFocused ? "pt-6" : ""}`}
+            />
 
           {/* Bottom bar */}
           <div className="flex items-center justify-between px-3 py-2 border-t border-transparent">
@@ -172,14 +211,36 @@ export function Composer({
                   {model}
                 </span>
               )}
+
+              {/* Context usage bar (only when text entered) */}
+              {isActive && !isFocused && estTokenCount > 0 && (
+                <div className="flex items-center gap-2 ml-2">
+                  <div className="w-16 h-1 rounded-full bg-bg-3 overflow-hidden">
+                    <div
+                      className={`h-full ${getUsageBarColor(estContextPct)} transition-all duration-200`}
+                      style={{ width: `${estContextPct}%` }}
+                    />
+                  </div>
+                  <span className={`text-[10px] ${getUsageColor(estContextPct)}`}>
+                    {formatTokens(estTokenCount)} tok
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Keyboard hints */}
-              {!isFocused && (
-                <span className="text-xs text-text-muted hidden sm:inline">
-                  Enter to send · Shift+Enter for newline
-                </span>
+              {/* Keyboard hints & metrics */}
+              {!isFocused && isActive && (
+                <div className="flex items-center gap-2 text-xs text-text-muted">
+                  <span className="hidden sm:inline">
+                    {wordCount > 0 && `${wordCount}w`}
+                    {wordCount > 0 && estTokenCount > 0 && `·`}
+                    {estTokenCount > 0 && `${formatTokens(estTokenCount)}tok`}
+                    {wordCount > 0 && `·`}
+                    {charCount > 0 && `${charCount}c`}
+                  </span>
+                  <span className="hidden sm:inline">Enter to send · Shift+Enter for newline</span>
+                </div>
               )}
 
               {/* Send/Interrupt button */}
@@ -212,7 +273,7 @@ export function Composer({
         {/* Footer hint */}
         <div className="text-center mt-2">
           <p className="text-xs text-text-muted">
-            Tektos-Ultima v1 · Local LLM · Self-Improving Agent
+            Tektos-Ultima v1 · Local LLM · Self-Improving Autonomous Coding Agent
           </p>
         </div>
       </div>
