@@ -92,13 +92,13 @@ Quick reference for ports, versions, commands, and key facts. Updated on each co
 
 | Suite | Location | Count | Framework |
 |-------|----------|-------|-----------|
-| Python Backend | `tests/` | 1144 passing | pytest |
+| Python Backend | `tests/` | 1174 passing | pytest |
 | E2E Integration | `frontend/tests/e2e-integration.spec.ts` | 15 passing | Playwright |
 | E2E Full | `frontend/tests/e2e.spec.ts` | 129 passing | Playwright |
 | E2E Archive | `frontend/tests/e2e-archive.spec.ts` | 15 passing | Playwright |
 | Model Switch | `frontend/tests/e2e-model-switch.spec.ts` | 3 passing | Playwright |
 | Jest Unit/Component | `frontend/src/**/__tests__/` | 234 passing | Jest + RTL |
-| **Total** | | **1545 passing** | |
+| **Total** | | **1590 passing** | |
 
 **Run all E2E:** `cd frontend && npx playwright test tests/ --reporter=list`
 **Run integration only:** `cd frontend && npx playwright test tests/e2e-integration.spec.ts`
@@ -213,4 +213,4 @@ tektos-ultima-v1/
 
 ---
 
-*Last updated: Phase 6.30 — 2026-08-14*
+*Last updated: Phase 6.34 — 2026-08-14 — Full audit complete, 1590 tests passing*
