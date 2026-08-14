@@ -178,7 +178,7 @@ export function Composer({
               placeholder={
                 isStreaming
                   ? "AI is responding... press Ctrl+Shift+M to interrupt"
-                  : "Describe what you want to build or ask anything..."
+                  : "Describe what you want to build..."
               }
               disabled={!isActive || (isStreaming && false)}
               rows={Math.min(lineCount, 8)}
