@@ -109,9 +109,15 @@ export function Composer({
         e.preventDefault();
         handleSubmit();
       }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "M") {
+      // Ctrl+C = interrupt (like Hermes Agent & Terminal)
+      if ((e.ctrlKey || e.metaKey) && e.key === "c" && isStreaming) {
         e.preventDefault();
         onInterrupt();
+      }
+      // Ctrl+Shift+M = toggle metrics display
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "M") {
+        e.preventDefault();
+        setShowMetrics(prev => !prev);
       }
     },
     [handleSubmit, onInterrupt, value, promptHistory, historyIndex]
@@ -193,7 +199,7 @@ export function Composer({
   // Context-aware placeholder
   const getPlaceholder = () => {
     if (!isActive) return "Create a session to start";
-    if (isStreaming) return "AI is responding... Ctrl+Shift+M to interrupt";
+    if (isStreaming) return "AI is responding... Ctrl+C to interrupt";
     return "Describe what you want to build...";
   };
 
@@ -410,15 +416,15 @@ export function Composer({
               </span>
               <span className="flex items-center gap-1">
                 <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
-                  Ctrl+D
+                  Ctrl+C
                 </kbd>
-                <span>send</span>
+                <span>stop</span>
               </span>
               <span className="flex items-center gap-1">
                 <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
-                  Ctrl+Shift+M
+                  ↑↓
                 </kbd>
-                <span>stop</span>
+                <span>history</span>
               </span>
             </div>
           </div>
