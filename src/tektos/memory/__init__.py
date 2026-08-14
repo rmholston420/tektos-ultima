@@ -1,47 +1,11 @@
-"""Memory system — 4-tier architecture modeled on the human brain.
+"""Tektos memory system.
 
-Tiers:
-1. Sensory (100ms - 4s) — Raw perception buffer
-2. Working (seconds - minutes) — Active cognition workspace (7±2 items)
-3. Long-term (days - permanent) — Knowledge repository
-4. Procedural (permanent) — Skills, wisdom, encoded patterns
+Modules:
+- experience_replay.py: ExperienceReplay — bridges SynthesisEngine → Planner
+- memory_system.py: MemorySystem — unified memory facade
+- reflection_engine.py: ReflectionEngine — Hegelian reflection (S2→S3)
+- synthesis_engine.py: SynthesisEngine — reflection → actionable guidance
 
-Bicameral: left hemisphere = operative (S1), right hemisphere = speculative (S4)
-Creativity = Generation of Novelty (McKenna)
-
-Reflection:
-- Active contemplation/meditation = deliberate self-examination
-- Passive dreamtime = background latent pattern emergence
-- Both are forms of periodic reflection
-- Direct experience > inference (yogic principle)
+Self-improvement loop:
+SynthesisEngine → ExperienceReplay → Planner.plan(synthesis_guidance) → BuildSpec
 """
-
-from src.tektos.memory.memory_system import (
-    DreamResult,
-    DreamState,
-    DreamtimeEngine,
-    Hemisphere,
-    MemoryEntry,
-    MemorySystem,
-    MemoryTier,
-    TierConfig,
-)
-from src.tektos.memory.reflection_engine import (
-    ReflectionEngine,
-    ReflectionInsight,
-    ReflectionState,
-)
-
-__all__ = [
-    "DreamResult",
-    "DreamState",
-    "DreamtimeEngine",
-    "Hemisphere",
-    "MemoryEntry",
-    "MemorySystem",
-    "MemoryTier",
-    "ReflectionEngine",
-    "ReflectionInsight",
-    "ReflectionState",
-    "TierConfig",
-]
