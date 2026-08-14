@@ -146,12 +146,14 @@ User directive: *"use the best and most optimal databases possible as long as th
 - **Fixed:** `_connections` → `_sessions` attribute in `_emit_schema_event()`
 - **Fixed:** CORS updated for frontend on `:3003`
 
-### Phase 5: Hardening (IN PROGRESS)
-- [ ] Convert all PlexClaw bug fixes into tests
-- [ ] Add contract tests for REST endpoints
-- [ ] Add integration tests for LAST_KNOWN_STATE.md workflow
-- [ ] Set up CI/CD pipeline (GitHub Actions)
-- [ ] Add Playwright E2E tests for Archive Browser
+|### Phase 5: Hardening ✅ COMPLETE|
+|- ✅ Convert all PlexClaw bug fixes into tests (15/15 passing)
+|- ✅ Add contract tests for REST endpoints (29/29 passing)
+|- ✅ Add integration tests for LAST_KNOWN_STATE.md workflow (11/11 passing)
+|- ✅ Set up CI/CD pipeline (GitHub Actions: ruff, mypy, pytest, Next.js build)
+|- ✅ Add Playwright E2E tests for Archive Browser (15 tests, 28/28 total passing)|
+|**Total test suite:** 94 Python tests + 28 Playwright E2E = 122/122 passing|
+|**Ruff:** Clean (all linting errors resolved)|
 
 ---
 
