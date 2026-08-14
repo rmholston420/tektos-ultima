@@ -101,6 +101,21 @@ export default function App() {
   }, [protocolClient]);
 
   // -------------------------------------------------------------------
+  // Reconnect WS when session changes
+  // -------------------------------------------------------------------
+
+  useEffect(() => {
+    if (activeSession?.id) {
+      protocolClient.setSessionId(activeSession.id);
+      // Small delay to let backend fully initialize session before WS upgrade
+      const timer = setTimeout(() => {
+        protocolClient.connect();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [activeSession?.id, protocolClient]);
+
+  // -------------------------------------------------------------------
   // Event handling from backend
   // -------------------------------------------------------------------
 
@@ -226,18 +241,33 @@ export default function App() {
   );
 
   const handleAttachFiles = useCallback((files: File[]) => {
-    // TODO: Handle file attachment to session
-    console.log("Files attached:", files.map(f => f.name));
-  }, []);
+    // Upload files to backend and attach to session
+    if (!files.length || !activeSession?.id) return;
+    
+    const formData = new FormData();
+    files.forEach(file => formData.append('files', file));
+    
+    fetch(`/api/sessions/${activeSession.id}/attach`, {
+      method: 'POST',
+      body: formData,
+    }).then(res => {
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      return res.json();
+    }).then(data => {
+      console.log('Files attached:', data);
+    }).catch(err => {
+      console.error('File upload error:', err);
+    });
+  }, [activeSession?.id]);
 
   const handleCreateSession = useCallback(() => {
     sessionStore.createSession().then((session) => {
       setActiveSession(session);
-      protocolClient.setSessionId(session.id);
-      protocolClient.connect();
       setShowWelcome(false);
+      // Note: protocolClient.setSessionId() and connect() are handled by the
+      // useEffect that watches activeSession?.id — no duplicate calls here.
     });
-  }, [sessionStore, protocolClient]);
+  }, [sessionStore]);
 
   // -------------------------------------------------------------------
   // Dashboard tab renderer
@@ -375,6 +405,7 @@ export default function App() {
                   isStreaming={isStreaming}
                   sessionId={activeSession?.id}
                   model={activeSession?.model}
+                  connectionState={connectionState}
                   onSendMessage={handleSendMessage}
                   onInterrupt={handleInterrupt}
                   onAttach={handleAttachFiles}

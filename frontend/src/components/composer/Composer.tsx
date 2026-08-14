@@ -29,6 +29,7 @@ interface ComposerProps {
   isStreaming: boolean;
   sessionId?: string;
   model?: string;
+  connectionState?: "disconnected" | "connecting" | "connected" | "reconnecting";
   onSendMessage: (message: string) => void;
   onInterrupt: () => void;
   onAttach?: (files: File[]) => void;
@@ -39,6 +40,7 @@ export function Composer({
   isStreaming,
   sessionId,
   model,
+  connectionState = "disconnected",
   onSendMessage,
   onInterrupt,
   onAttach,
@@ -50,10 +52,22 @@ export function Composer({
   const [showMetrics, setShowMetrics] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Prompt history for up/down arrow navigation
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
 
   const handleSubmit = useCallback(() => {
     const trimmed = value.trim();
     if (!trimmed || !isActive || isStreaming) return;
+
+    // Add to history
+    setPromptHistory(prev => {
+      const newHistory = [...prev, trimmed];
+      // Keep only last 50 messages
+      return newHistory.slice(-50);
+    });
+    setHistoryIndex(-1); // Reset history navigation
 
     onSendMessage(trimmed);
     setValue("");
@@ -64,6 +78,29 @@ export function Composer({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Up arrow: navigate back through history
+      if (e.key === "ArrowUp" && !value) {
+        e.preventDefault();
+        if (promptHistory.length > 0) {
+          setHistoryIndex(promptHistory.length - 1);
+          setValue(promptHistory[promptHistory.length - 1]);
+        }
+        return;
+      }
+      // Down arrow: navigate forward through history
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (historyIndex < promptHistory.length - 1) {
+          const nextIndex = historyIndex + 1;
+          setHistoryIndex(nextIndex);
+          setValue(promptHistory[nextIndex]);
+        } else {
+          // Reached the end, clear input
+          setHistoryIndex(-1);
+          setValue("");
+        }
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();
@@ -77,7 +114,7 @@ export function Composer({
         onInterrupt();
       }
     },
-    [handleSubmit, onInterrupt]
+    [handleSubmit, onInterrupt, value, promptHistory, historyIndex]
   );
 
   // Auto-resize textarea
@@ -229,7 +266,7 @@ export function Composer({
               )}
 
               {/* Model selector */}
-              {model && wordCount > 0 && (
+              {model && (
                 <span className="text-[10px] text-text-muted/60 px-1.5 py-0.5 rounded bg-bg-3/50">
                   {model}
                 </span>
@@ -245,9 +282,16 @@ export function Composer({
                     />
                   </div>
                   <span className={`text-[10px] ${getUsageColor(estContextPct)}`}>
-                    {formatTokens(estTokenCount)} tok
+                    {formatTokens(estTokenCount)}/128k tok
                   </span>
                 </div>
+              )}
+
+              {/* Elapsed time when streaming */}
+              {isStreaming && (
+                <span className="text-[10px] text-accent/70 ml-1">
+                  ⏱ {formatElapsed(elapsedSec)}
+                </span>
               )}
             </div>
 
@@ -303,6 +347,49 @@ export function Composer({
               )}
             </div>
           </div>
+
+          {/* Persistent status bar — always visible when active */}
+          {isActive && (
+            <div className="flex items-center justify-between px-3 py-1.5 border-t border-text-muted/5">
+              <div className="flex items-center gap-2">
+                {/* Connection status */}
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-1.5 h-1.5 rounded-full ${
+                    connectionState === "connected" ? "bg-status-success" :
+                    connectionState === "connecting" || connectionState === "reconnecting" ? "bg-status-warning animate-pulse" :
+                    "bg-status-error"
+                  }`} />
+                  <span className="text-[10px] text-text-muted/50 capitalize">
+                    {connectionState === "reconnecting" ? "reconnecting" : connectionState}
+                  </span>
+                </div>
+
+                {/* Active session indicator */}
+                {sessionId && (
+                  <span className="text-[10px] text-text-muted/40">
+                    {sessionId.slice(0, 8)}...
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Model + context */}
+                {model && (
+                  <span className="text-[10px] text-text-muted/40">
+                    {model}
+                  </span>
+                )}
+                {isStreaming && (
+                  <>
+                    <span className="text-[10px] text-text-muted/30">·</span>
+                    <span className="text-[10px] text-accent/70">
+                      ⏱ {formatElapsed(elapsedSec)}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Keyboard hints */}
