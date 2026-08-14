@@ -9,7 +9,7 @@ so tests run without an LLM server or live database.
 
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # ---------------------------------------------------------------------------
 # 1. Patch RuntimeSDK before importing main
+#    — Use per-module patching to avoid polluting sdk.py's global namespace.
 # ---------------------------------------------------------------------------
 
 mock_sdk_class = MagicMock()
@@ -30,9 +31,12 @@ mock_sdk_instance._llm_model = "test-model"
 mock_sdk_instance.interrupt = AsyncMock(return_value=None)
 mock_sdk_class.return_value = mock_sdk_instance
 
+import tektos.main as main_module
 import tektos.runtime.sdk as sdk_module
 
-sdk_module.RuntimeSDK = mock_sdk_class
+# Patch ONLY in main_module's namespace (where main.py references it)
+# Do NOT overwrite sdk_module.RuntimeSDK to avoid polluting the real module
+main_module.RuntimeSDK = mock_sdk_class
 
 # ---------------------------------------------------------------------------
 # 2. Patch class constructors so lifespan creates mock instances

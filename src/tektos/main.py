@@ -66,6 +66,7 @@ runtime_sdk: RuntimeSDK
 ws_manager: WebSocketManager
 schema_engine: SchemaEvolutionEngine
 self_improvement: SelfImprovementAdapter
+telegram_gateway: Any = None
 state_managers: dict[str, SessionStateManager] = {}
 
 
@@ -116,10 +117,38 @@ async def lifespan(app: _FastAPI):
     # 8. Start runtime SDK
     await runtime_sdk.start()
 
+    # 9. Initialize Telegram gateway (optional — only if bot token is set)
+    telegram_bot_token = _os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN")
+    telegram_admin_chat_id = _os.getenv("TEKTOS_TELEGRAM_ADMIN_CHAT_ID")
+    telegram_admin_chat_id_int = int(telegram_admin_chat_id) if telegram_admin_chat_id else None
+    if telegram_bot_token:
+        global telegram_gateway
+        try:
+            from tektos.telegram_gateway import create_telegram_gateway
+            telegram_gateway = create_telegram_gateway(
+                bot_token=telegram_bot_token,
+                admin_chat_id=telegram_admin_chat_id_int,
+                runtime_sdk=runtime_sdk,
+                session_manager=session_manager,
+                ws_manager=ws_manager,
+            )
+            log.info("Telegram gateway initialized (polling mode)")
+        except Exception as exc:
+            log.warning("Failed to initialize Telegram gateway: %s", exc)
+            telegram_gateway = None
+    else:
+        log.info("Telegram gateway skipped (TEKTOS_TELEGRAM_BOT_TOKEN not set)")
+
     log.info("Tektos-Ultima-v1 backend started (schema v%d)", schema_engine.get_current_version())
     yield
 
     # Cleanup
+    if telegram_gateway:
+        try:
+            await telegram_gateway.stop()
+            log.info("Telegram gateway stopped")
+        except Exception as exc:
+            log.warning("Error stopping Telegram gateway: %s", exc)
     await runtime_sdk.stop()
     await store_close()
     log.info("Tektos-Ultima-v1 backend stopped")

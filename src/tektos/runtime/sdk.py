@@ -26,12 +26,20 @@ import httpx
 from tektos.protocol.envelope import (
     assistant_completed,
     assistant_delta,
+    loop_safety_warning,
     session_failed,
     tool_completed,
     tool_permission_required,
     tool_started,
 )
 from tektos.providers.sandbox_provider import SandboxProvider
+from tektos.runtime.loop_safety import (
+    LoopSafetyConfig,
+    LoopSafetyMonitor,
+    LoopSafetyReport,
+    LoopState,
+    StopReason,
+)
 from tektos.runtime.session import LiveSession
 from tektos.store.event_store import append_event
 
@@ -204,12 +212,14 @@ class RuntimeSDK:
         self,
         llm_base_url: str = LLM_BASE_URL,
         llm_model: str = LLM_MODEL,
+        loop_safety_config: LoopSafetyConfig | None = None,
     ) -> None:
         self._llm_base_url = llm_base_url
         self._llm_model = llm_model
         self._client: httpx.AsyncClient | None = None
         self._lock = _asyncio.Lock()
         self._sandbox = SandboxProvider()
+        self._loop_monitor = LoopSafetyMonitor(loop_safety_config or LoopSafetyConfig())
 
     async def start(self) -> None:
         """Create the httpx client."""
@@ -307,10 +317,40 @@ class RuntimeSDK:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        max_turns = 10  # Safety limit to prevent infinite loops
+        turn = 0  # 1-indexed, checked by loop_safety_monitor
+        while True:
+            # Check loop safety before this turn
+            safety_report = self._loop_monitor.check_turn(
+                turn_num=turn + 1,
+                tool_calls=[],  # will be updated after LLM response
+                text_length=0,  # will be updated after LLM response
+            )
 
-        for turn in range(max_turns):
+            if not safety_report.is_safe():
+                log.warning(
+                    f"Loop safety triggered in {session.id[:8]}: "
+                    f"state={safety_report.state.value} "
+                    f"reason={safety_report.stop_reason.value} "
+                    f"turns={safety_report.current_turn}/{safety_report.max_turns} "
+                    f"tokens={safety_report.tokens_used}/{safety_report.tokens_total} "
+                    f"warnings={safety_report.warnings}"
+                )
+                if on_event:
+                    await on_event(loop_safety_warning(
+                        session.id,
+                        safety_report.state.value,
+                        safety_report.stop_reason.value if safety_report.stop_reason else None,
+                        safety_report.current_turn,
+                        safety_report.max_turns,
+                        safety_report.tokens_used,
+                        safety_report.tokens_total,
+                        safety_report.warnings,
+                    ))
+                # Break out of the loop — safety mechanism activated
+                break
+
             await on_event(assistant_delta(session.id, f"[Turn {turn + 1}]"))
+            turn += 1
 
             try:
                 # Build payload

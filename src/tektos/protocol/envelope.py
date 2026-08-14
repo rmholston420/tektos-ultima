@@ -65,6 +65,7 @@ class EventType(str, Enum):
 
     SELF_IMPROVEMENT_TICK = "self_improvement.tick"
     RESOURCE_WARNING = "resource.warning"
+    LOOP_SAFETY_WARNING = "loop_safety.warning"
 
 
 # ---------------------------------------------------------------------------
@@ -296,5 +297,21 @@ def resource_warning(
             "current": current,
             "threshold": threshold,
             "message": message,
+        },
+    )
+
+
+def loop_safety_warning(
+    session_id: str,
+    state: str,
+    details: dict[str, Any] | None = None,
+) -> WSEnvelope:
+    """Emitted when loop safety thresholds are triggered."""
+    return WSEnvelope(
+        session_id=session_id,
+        event_type=EventType.LOOP_SAFETY_WARNING,
+        payload={
+            "state": state,
+            "details": details or {},
         },
     )
