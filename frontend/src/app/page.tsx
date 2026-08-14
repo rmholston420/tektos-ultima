@@ -32,13 +32,14 @@ const DynamicMcpPanel = dynamic(() => import("@/components/panels/McpPanel").the
 const DynamicHooksPanel = dynamic(() => import("@/components/panels/HooksPanel").then((m) => m.HooksPanel), { ssr: false });
 const DynamicLogsPanel = dynamic(() => import("@/components/panels/LogsPanel").then((m) => m.LogsPanel), { ssr: false });
 const DynamicSchedulingPanel = dynamic(() => import("@/components/panels/SchedulingPanel").then((m) => m.SchedulingPanel), { ssr: false });
+const DynamicSettingsPanel = dynamic(() => import("@/components/panels/SettingsPanel").then((m) => m.SettingsPanel), { ssr: false });
 
 // ---------------------------------------------------------------------------
 // Page types
 // ---------------------------------------------------------------------------
 
 type PageType = "chat" | "dashboard";
-type DashboardTab = "overview" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling";
+type DashboardTab = "overview" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings";
 
 const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "overview", label: "Overview", icon: "◈" },
@@ -54,6 +55,7 @@ const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "hooks", label: "Hooks", icon: "⚓" },
   { id: "logs", label: "Logs", icon: "▤" },
   { id: "scheduling", label: "Schedule", icon: "⏱" },
+  { id: "settings", label: "Settings", icon: "⚙" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -237,6 +239,7 @@ export default function App() {
       hooks: () => <DynamicHooksPanel />,
       logs: () => <DynamicLogsPanel />,
       scheduling: () => <DynamicSchedulingPanel />,
+      settings: () => <DynamicSettingsPanel />,
     };
     return tabMap[activeTab];
   }, [activeTab]);
