@@ -297,117 +297,163 @@ class RuntimeSDK:
         - assistant.completed emitted ONLY at end_turn (not from partial deltas)
         - tool.completed emitted exactly once per tool_id
         - seq assigned by event store, not passed through
+        - Full agent loop: LLM → tools → LLM → ... until no tool_calls
         """
         _completed_tools: set[str] = set()  # guard against double-emit (bug #3)
 
+        # Build conversation history
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        try:
-            payload = {
-                "model": self._llm_model,
-                "messages": messages,
-                "stream": True,
-                "temperature": 0.7,
-                "max_tokens": 4096,
-            }
-            # Enable function calling with available tools
-            if TOOLS_SCHEMA:
-                payload["tools"] = TOOLS_SCHEMA
-            resp = await self._client.post(
-                "/chat/completions",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
+        max_turns = 10  # Safety limit to prevent infinite loops
 
-            # Parse SSE stream
-            current_text = ""
-            current_tool_name = ""
-            current_tool_id = ""
-            current_tool_json = ""
-            saw_text = False
+        for turn in range(max_turns):
+            await on_event(assistant_delta(session.id, f"[Turn {turn + 1}]"))
 
-            async for line in resp.aiter_lines():
-                if not line or line == "data: [DONE]":
-                    continue
-                if not line.startswith("data: "):
-                    continue
+            try:
+                # Build payload
+                payload = {
+                    "model": self._llm_model,
+                    "messages": messages,
+                    "stream": True,
+                    "temperature": 0.7,
+                    "max_tokens": 4096,
+                }
 
-                data_str = line[6:]  # strip "data: "
-                try:
-                    chunk = _json.loads(data_str)
-                except _json.JSONDecodeError:
-                    continue
+                # Enable function calling with available tools
+                if TOOLS_SCHEMA:
+                    payload["tools"] = TOOLS_SCHEMA
 
-                choices = chunk.get("choices", [])
-                if not choices:
-                    continue
+                resp = await self._client.post(
+                    "/chat/completions",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                resp.raise_for_status()
 
-                delta = choices[0].get("delta", {})
-                content = delta.get("content")
-                tool_calls = delta.get("tool_calls", [])
+                # Parse SSE stream
+                current_text = ""
+                current_tool_name = ""
+                current_tool_id = ""
+                current_tool_json = ""
+                saw_text = False
+                tool_calls_this_turn: list[dict] = []
 
-                # Handle text content
-                if content:
-                    saw_text = True
-                    current_text += content
-                    await on_event(assistant_delta(session.id, content))
+                async for line in resp.aiter_lines():
+                    if not line or line == "data: [DONE]":
+                        continue
+                    if not line.startswith("data: "):
+                        continue
 
-                # Handle tool calls
-                for tc in tool_calls:
-                    _tc_idx = tc.get("index", 0)
-                    # llama.cpp only sends ID on first chunk; reuse current_tool_id if empty
-                    tc_id = tc.get("id") or current_tool_id or str(_uuid.uuid4())
-                    _tc_type = tc.get("type", "function")
-                    tc_func = tc.get("function", {})
-                    tc_func_name = tc_func.get("name", "")
-                    tc_func_args = tc_func.get("arguments", "")
+                    data_str = line[6:]  # strip "data: "
+                    try:
+                        chunk = _json.loads(data_str)
+                    except _json.JSONDecodeError:
+                        continue
 
-                    if tc_func_name and not current_tool_name:
-                        # Start of new tool call
-                        current_tool_name = tc_func_name
-                        current_tool_id = tc_id
-                        current_tool_json = ""  # Start fresh; all fragments accumulate from here
-                        log.info(f"[TOOL CALL] Start: name={tc_func_name} id={tc_id[:8]}")
-                        await on_event(tool_started(session.id, tc_id, tc_func_name, {}))
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
 
-                    if tc_func_args:
-                        # llama.cpp streams JSON arguments as fragments - accumulate
-                        current_tool_json += tc_func_args
+                    delta = choices[0].get("delta", {})
+                    content = delta.get("content")
+                    tool_calls = delta.get("tool_calls", [])
 
-                # Check if this is the last chunk
-                # llama.cpp puts finish_reason at choices[0], delta may have stop_reason
-                finish_reason = choices[0].get("finish_reason") or delta.get("finish_reason")
-                stop_reason = delta.get("stop_reason")
-                is_last = finish_reason in ("stop", "tool_calls") or stop_reason == "end_turn"
+                    # Handle text content
+                    if content:
+                        saw_text = True
+                        current_text += content
+                        await on_event(assistant_delta(session.id, content))
 
-                if is_last:
-                    # Parse and execute tool if present
-                    if current_tool_name and current_tool_id:
-                        await self._handle_tool_completion(
-                            session, on_event, current_tool_id, current_tool_name,
-                            current_tool_json, _completed_tools, on_tool_approval,
-                        )
-                    elif saw_text or current_text:
-                        # Emit assistant.completed ONLY from end_turn (PlexClaw bug #2 fix)
-                        await on_event(assistant_completed(session.id, stop_reason or "end_turn"))
+                    # Handle tool calls
+                    for tc in tool_calls:
+                        _tc_idx = tc.get("index", 0)
+                        # llama.cpp only sends ID on first chunk; reuse current_tool_id if empty
+                        tc_id = tc.get("id") or current_tool_id or str(_uuid.uuid4())
+                        _tc_type = tc.get("type", "function")
+                        tc_func = tc.get("function", {})
+                        tc_func_name = tc_func.get("name", "")
+                        tc_func_args = tc_func.get("arguments", "")
 
-                    # Reset state
-                    current_text = ""
-                    current_tool_name = ""
-                    current_tool_id = ""
-                    current_tool_json = ""
-                    saw_text = False
+                        if tc_func_name and not current_tool_name:
+                            # Start of new tool call
+                            current_tool_name = tc_func_name
+                            current_tool_id = tc_id
+                            current_tool_json = ""  # Start fresh; all fragments accumulate from here
+                            log.info(f"[TOOL CALL] Start: name={tc_func_name} id={tc_id[:8]}")
+                            await on_event(tool_started(session.id, tc_id, tc_func_name, {}))
+                            # Track this tool call for later result injection
+                            tool_calls_this_turn.append({
+                                "id": tc_id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc_func_name,
+                                    "arguments": "",
+                                },
+                            })
 
-        except httpx.ConnectError as exc:
-            raise RuntimeError(f"Cannot connect to LLM at {self._llm_base_url}: {exc}")
-        except httpx.TimeoutException as exc:
-            raise RuntimeError(f"LLM request timed out: {exc}")
-        except Exception as exc:
-            raise RuntimeError(f"LLM streaming error: {exc}")
+                        if tc_func_args:
+                            # llama.cpp streams JSON arguments as fragments - accumulate
+                            current_tool_json += tc_func_args
+                            # Update the tracked tool call's arguments
+                            if tool_calls_this_turn:
+                                tool_calls_this_turn[-1]["function"]["arguments"] += tc_func_args
+
+                    # Check if this is the last chunk
+                    # llama.cpp puts finish_reason at choices[0], delta may have stop_reason
+                    finish_reason = choices[0].get("finish_reason") or delta.get("finish_reason")
+                    stop_reason = delta.get("stop_reason")
+                    is_last = finish_reason in ("stop", "tool_calls") or stop_reason == "end_turn"
+
+                    if is_last:
+                        # Parse and execute tool if present
+                        if current_tool_name and current_tool_id:
+                            result_text = await self._handle_tool_completion(
+                                session, on_event, current_tool_id, current_tool_name,
+                                current_tool_json, _completed_tools, on_tool_approval,
+                            )
+                            # Always add assistant message for valid conversation history
+                            # (LLM may respond with tool calls only, no text)
+                            messages.append({
+                                "role": "assistant",
+                                "tool_calls": tool_calls_this_turn,
+                            })
+                            if current_text:
+                                messages.append({"role": "assistant", "content": current_text})
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": current_tool_id,
+                                "content": result_text,
+                            })
+                            # Reset state for next tool or end of turn
+                            current_text = ""
+                            current_tool_name = ""
+                            current_tool_id = ""
+                            current_tool_json = ""
+                            saw_text = False
+                        elif saw_text or current_text:
+                            # Emit assistant.completed ONLY from end_turn (PlexClaw bug #2 fix)
+                            await on_event(assistant_completed(session.id, stop_reason or "end_turn"))
+                            # Add assistant text to conversation
+                            messages.append({"role": "assistant", "content": current_text})
+                            # No more tool calls — agent loop complete, return from function
+                            return
+
+                        # Reset state
+                        current_text = ""
+                        current_tool_name = ""
+                        current_tool_id = ""
+                        current_tool_json = ""
+                        saw_text = False
+
+            except httpx.ConnectError as exc:
+                raise RuntimeError(f"Cannot connect to LLM at {self._llm_base_url}: {exc}")
+            except httpx.TimeoutException as exc:
+                raise RuntimeError(f"LLM request timed out: {exc}")
+            except Exception as exc:
+                raise RuntimeError(f"LLM streaming error: {exc}")
 
     async def _handle_tool_completion(
         self,
@@ -418,11 +464,14 @@ class RuntimeSDK:
         tool_input_str: str,
         completed_tools: set[str],
         on_tool_approval: Any,
-    ) -> None:
-        """Handle tool completion. Emits tool.completed exactly once per tool_id."""
+    ) -> str:
+        """Handle tool completion. Emits tool.completed exactly once per tool_id.
+
+        Returns the tool output string to inject into the conversation.
+        """
         # Guard against double-emit (PlexClaw bug #3 fix)
         if tool_id in completed_tools:
-            return
+            return ""
 
         # Parse tool input
         try:
@@ -441,14 +490,17 @@ class RuntimeSDK:
                 if not approved:
                     completed_tools.add(tool_id)
                     await on_event(tool_completed(session.id, tool_id, "rejected", "Tool rejected by user"))
-                    return
+                    return "Tool rejected by user"
 
-        # Execute tool (stub for now — actual execution via SandboxProvider)
+        # Execute tool (actual execution via SandboxProvider)
         try:
             result = await self._execute_tool(tool_name, tool_input)
             await on_event(tool_completed(session.id, tool_id, "success", str(result)))
+            return str(result)
         except Exception as exc:
-            await on_event(tool_completed(session.id, tool_id, "error", str(exc)))
+            error_msg = str(exc)
+            await on_event(tool_completed(session.id, tool_id, "error", error_msg))
+            return f"Error: {error_msg}"
 
         completed_tools.add(tool_id)
 
