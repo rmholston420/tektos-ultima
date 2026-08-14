@@ -43,6 +43,7 @@ export function Composer({
   const [isFocused, setIsFocused] = useState(false);
   const [lineCount, setLineCount] = useState(1);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [showMetrics, setShowMetrics] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -53,6 +54,7 @@ export function Composer({
     onSendMessage(trimmed);
     setValue("");
     setLineCount(1);
+    setShowMetrics(false);
     textareaRef.current?.focus();
   }, [value, isActive, isStreaming, onSendMessage]);
 
@@ -111,6 +113,7 @@ export function Composer({
     setValue(e.target.value);
     const lines = e.target.value.split("\n").length;
     setLineCount(lines);
+    setShowMetrics(true);
   };
 
   const handleFileClick = () => {
@@ -150,6 +153,9 @@ export function Composer({
   const estTokenCount = wordCount ? Math.ceil(wordCount * 1.3) : 0;
   const estContextPct = estTokenCount > 0 ? Math.min((estTokenCount / 128000) * 100, 100) : 0;
 
+  // Show metrics when focused and has content, or when streaming
+  const showMetricsUI = isActive && (showMetrics || isStreaming) && (wordCount > 0 || isStreaming);
+
   return (
     <div className="composer">
       <div className="max-w-4xl mx-auto">
@@ -161,80 +167,78 @@ export function Composer({
           </div>
         )}
 
-          {/* Input wrapper */}
-          <div className={`composer-input-wrapper ${isFocused ? "shadow-glow" : ""}`}>
-            {/* File attachment preview */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleFileChange}
-            />
+        {/* Input wrapper */}
+        <div className={`composer-input-wrapper ${isFocused ? "shadow-glow" : ""}`}>
+          {/* File attachment */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleFileChange}
+          />
 
-            {/* Placeholder overlay (shown when empty and not focused) */}
-            {!value && !isFocused && (
-              <div className="absolute inset-x-4 top-3 pointer-events-none">
-                <p className="text-xs text-text-muted">
-                  Paste/Upload a{" "}
-                  <span className="text-accent font-medium">Spec</span>
-                  {" , "}Describe what you want to{" "}
-                  <span className="text-accent font-medium">Build</span>
-                  {", or Select a "}
-                  <span className="text-accent font-medium">Session</span>
-                  {" to begin..."}
-                </p>
-              </div>
-            )}
+          {/* Placeholder overlay (shown when empty and not focused) */}
+          {!value && !isFocused && (
+            <div className="absolute inset-x-4 top-3 pointer-events-none">
+              <p className="text-xs text-text-muted leading-relaxed">
+                Paste or upload a{" "}
+                <span className="text-accent font-medium">spec</span>, describe
+                what you want to{" "}
+                <span className="text-accent font-semibold">build</span>, or
+                select a session to begin
+              </p>
+            </div>
+          )}
 
-            <textarea
-              ref={textareaRef}
-              value={value}
-              onChange={handleTextareaChange}
-              onKeyDown={handleKeyDown}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
-              placeholder={
-                isStreaming
-                  ? "AI is responding... press Ctrl+Shift+M to interrupt"
-                  : "Describe what you want to build..."
-              }
-              disabled={!isActive || (isStreaming && false)}
-              rows={Math.min(lineCount, 8)}
-              className={`w-full bg-transparent border-none text-text-primary text-sm
-                         resize-none focus:ring-0 placeholder-text-muted
-                         px-4 py-3 min-h-[2.75rem]
-                         ${!value && !isFocused ? "pt-6" : ""}`}
-            />
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleTextareaChange}
+            onKeyDown={handleKeyDown}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            placeholder={
+              isStreaming
+                ? "AI is responding... press Ctrl+Shift+M to interrupt"
+                : "Describe what you want to build..."
+            }
+            disabled={!isActive || (isStreaming && false)}
+            rows={Math.min(lineCount, 8)}
+            className={`w-full bg-transparent border-none text-text-primary text-sm
+                       resize-none focus:ring-0 placeholder-text-muted
+                       px-4 py-3 min-h-[2.75rem]
+                       ${!value && !isFocused ? "pt-6" : ""}`}
+          />
 
           {/* Bottom bar */}
-          <div className="flex items-center justify-between px-3 py-2 border-t border-transparent">
-            <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between px-3 py-2 border-t border-text-muted/10">
+            <div className="flex items-center gap-2">
               {/* Attachment button */}
               {onAttach && (
                 <button
                   onClick={handleFileClick}
                   disabled={!isActive || isStreaming}
-                  className="w-8 h-8 rounded-md flex items-center justify-center
-                             text-text-muted hover:text-text-primary hover:bg-surface-hover
+                  className="w-7 h-7 rounded-md flex items-center justify-center
+                             text-text-muted hover:text-text-primary hover:bg-surface-hover/50
                              transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                   title="Attach file"
                 >
-                  <ArrowUpOnSquareIcon className="w-5 h-5" />
+                  <ArrowUpOnSquareIcon className="w-4 h-4" />
                 </button>
               )}
 
-              {/* Model selector */}
-              {model && (
-                <span className="text-xs text-text-muted px-2 py-1 rounded-md bg-bg-3">
+              {/* Model selector (only when text entered) */}
+              {model && wordCount > 0 && (
+                <span className="text-[10px] text-text-muted/60 px-1.5 py-0.5 rounded bg-bg-3/50">
                   {model}
                 </span>
               )}
 
               {/* Context usage bar (only when text entered) */}
-              {isActive && !isFocused && estTokenCount > 0 && (
-                <div className="flex items-center gap-2 ml-2">
-                  <div className="w-16 h-1 rounded-full bg-bg-3 overflow-hidden">
+              {isActive && estTokenCount > 0 && (
+                <div className="flex items-center gap-2 ml-1">
+                  <div className="w-12 h-0.5 rounded-full bg-bg-3 overflow-hidden">
                     <div
                       className={`h-full ${getUsageBarColor(estContextPct)} transition-all duration-200`}
                       style={{ width: `${estContextPct}%` }}
@@ -247,20 +251,29 @@ export function Composer({
               )}
             </div>
 
-            <div className="flex items-center gap-2">
-              {/* Keyboard hints & metrics */}
-              {!isFocused && isActive && (
-                <div className="flex items-center gap-2 text-xs text-text-muted">
-                  <span className="hidden sm:inline">
-                    {wordCount > 0 && `${wordCount}w`}
-                    {wordCount > 0 && estTokenCount > 0 && `·`}
-                    {estTokenCount > 0 && `${formatTokens(estTokenCount)}tok`}
-                    {wordCount > 0 && `·`}
-                    {charCount > 0 && `${charCount}c`}
-                    {isStreaming && `·`}
-                    {isStreaming && formatElapsed(elapsedSec)}
-                  </span>
-                  <span className="hidden sm:inline">Enter to send · Shift+Enter for newline</span>
+            <div className="flex items-center gap-3">
+              {/* Metrics display */}
+              {showMetricsUI && (
+                <div className="flex items-center gap-2 text-xs text-text-muted/70">
+                  {wordCount > 0 && (
+                    <>
+                      <span>{wordCount} words</span>
+                      <span className="text-text-muted/30">·</span>
+                    </>
+                  )}
+                  {estTokenCount > 0 && (
+                    <>
+                      <span>{formatTokens(estTokenCount)} tokens</span>
+                      <span className="text-text-muted/30">·</span>
+                    </>
+                  )}
+                  {charCount > 0 && <span>{charCount} chars</span>}
+                  {isStreaming && (
+                    <>
+                      <span className="text-text-muted/30">·</span>
+                      <span className="text-accent">{formatElapsed(elapsedSec)}</span>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -268,33 +281,43 @@ export function Composer({
               {isStreaming ? (
                 <button
                   onClick={onInterrupt}
-                  className="w-8 h-8 rounded-md flex items-center justify-center
+                  className="w-7 h-7 rounded-md flex items-center justify-center
                              bg-status-error/20 text-status-error hover:bg-status-error/30
                              transition-colors"
                   title="Stop generation"
                 >
-                  <StopIcon className="w-5 h-5" />
+                  <StopIcon className="w-4 h-4" />
                 </button>
               ) : (
                 <button
                   onClick={handleSubmit}
                   disabled={!isActive || !value.trim()}
-                  className="w-8 h-8 rounded-md flex items-center justify-center
+                  className="w-7 h-7 rounded-md flex items-center justify-center
                              bg-accent text-white hover:bg-accent-hover
-                             transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                             transition-colors disabled:opacity-30 disabled:cursor-not-allowed
+                             disabled:hover:bg-accent"
                   title="Send message"
                 >
-                  <PaperAirplaneIcon className="w-5 h-5 rotate-90" />
+                  <PaperAirplaneIcon className="w-4 h-4 rotate-90" />
                 </button>
               )}
             </div>
           </div>
         </div>
 
-        {/* Footer hint */}
-        <div className="text-center mt-2">
-          <p className="text-xs text-text-muted">
-            Tektos-Ultima v1 · Local LLM · Self-Improving Autonomous Coding Agent
+        {/* Keyboard hints (only when active, no metrics) */}
+        {!showMetricsUI && isActive && (
+          <div className="text-center mt-2">
+            <p className="text-[11px] text-text-muted/50">
+              Enter to send · Shift+Enter for newline · Ctrl+D to send
+            </p>
+          </div>
+        )}
+
+        {/* Footer version (always visible) */}
+        <div className="text-center mt-1">
+          <p className="text-[10px] text-text-muted/30">
+            Tektos-Ultima v1
           </p>
         </div>
       </div>
