@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from ..plugin import Plugin, PluginRegistry
+from tektos.plugin import Plugin, PluginRegistry
 
 logger = logging.getLogger(__name__)
 

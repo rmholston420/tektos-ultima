@@ -119,7 +119,10 @@ def migrate_v1_to_v2(engine: object) -> None:
 
         log.info("Migration v1→v2: self-improvement schema added")
 
+    except Exception as e:
+        log.error("Migration v1→v2 failed: %s", e)
     finally:
+        conn.commit()
         conn.close()
 
 
@@ -191,7 +194,10 @@ def migrate_v2_to_v3(engine: object) -> None:
 
         log.info("Migration v2→v3: dynamic learning schema added")
 
+    except Exception as e:
+        log.error("Migration v2→v3 failed: %s", e)
     finally:
+        conn.commit()
         conn.close()
 
 
