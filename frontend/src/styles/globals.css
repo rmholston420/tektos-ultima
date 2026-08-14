@@ -1,0 +1,230 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Tektos-Ultima v1 — Dark-First Global Styles
+   ============================================================ */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    @apply bg-bg-1 text-text-primary;
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-bg-1 text-text-primary;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  /* Scrollbar styling — thin, dark */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #2a3855;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3b4d6b;
+  }
+
+  /* Selection color */
+  ::selection {
+    background: rgba(59, 130, 246, 0.3);
+    color: #e2e8f0;
+  }
+
+  /* Focus ring */
+  :focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+
+  /* Code blocks */
+  code {
+    @apply font-mono text-sm bg-surface px-1.5 py-0.5 rounded;
+    color: #60a5fa;
+  }
+
+  pre code {
+    @apply bg-bg-3 p-3 rounded-lg block overflow-x-auto;
+    color: inherit;
+  }
+
+  /* Links */
+  a {
+    @apply text-text-accent hover:text-accent-hover underline-offset-4;
+    text-decoration: underline;
+  }
+
+  /* Buttons */
+  button {
+    @apply transition-colors duration-150 rounded-md;
+  }
+
+  /* Inputs */
+  input,
+  textarea,
+  select {
+    @apply bg-bg-3 border border-border text-text-primary rounded-md px-3 py-2
+           focus:border-accent focus:ring-1 focus:ring-accent/20
+           transition-colors duration-150;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    @apply text-text-muted;
+  }
+
+  /* Animations */
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.2s ease-out;
+  }
+
+  @keyframes pulse-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 10px rgba(59, 130, 246, 0.1);
+    }
+    50% {
+      box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+    }
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  /* Tibetan theme overrides (applied via [data-theme="tibet"]) */
+  [data-theme="tibet"] {
+    --bg-1: #1a0f2e;
+    --surface: #2d1b4e;
+    --accent: #d4a843;
+  }
+}
+
+@layer components {
+  /* Panel — standard card with subtle border */
+  .panel {
+    @apply bg-surface border border-border rounded-lg p-4;
+  }
+
+  /* Shell — main app layout */
+  .shell {
+    @apply flex h-screen w-screen overflow-hidden bg-bg-1;
+  }
+
+  .shell-sidebar {
+    @apply w-72 min-w-[18rem] bg-bg-2 border-r border-border flex flex-col;
+  }
+
+  .shell-main {
+    @apply flex-1 flex flex-col min-w-0;
+  }
+
+  .shell-header {
+    @apply h-12 min-h-[3rem] border-b border-border bg-bg-2 px-4 flex items-center justify-between;
+  }
+
+  /* Transcript — message list */
+  .transcript {
+    @apply flex-1 overflow-y-auto px-4 py-4;
+  }
+
+  .transcript-message {
+    @apply mb-4 animate-fade-in;
+  }
+
+  .transcript-message-user {
+    @apply flex justify-end;
+  }
+
+  .transcript-message-assistant {
+    @apply flex justify-start;
+  }
+
+  .message-bubble {
+    @apply max-w-[80%] rounded-lg p-3 text-sm leading-relaxed;
+  }
+
+  .message-bubble-user {
+    @apply bg-accent text-white;
+  }
+
+  .message-bubble-assistant {
+    @apply bg-surface border border-border;
+  }
+
+  /* Composer — input area */
+  .composer {
+    @apply border-t border-border bg-bg-2 p-4;
+  }
+
+  .composer-input-wrapper {
+    @apply relative bg-bg-3 border border-border rounded-lg focus-within:border-accent
+           focus-within:ring-1 focus-within:ring-accent/20 transition-colors duration-150;
+  }
+
+  /* Sidebar items */
+  .sidebar-item {
+    @apply px-3 py-2 rounded-md text-sm text-text-secondary hover:text-text-primary
+           hover:bg-surface-hover cursor-pointer transition-colors duration-100;
+  }
+
+  .sidebar-item-active {
+    @apply bg-surface-active text-text-primary;
+  }
+
+  .sidebar-item:hover {
+    @apply bg-surface-hover;
+  }
+
+  /* Tags and badges */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-emerald-500/20 text-emerald-400;
+  }
+
+  .badge-warning {
+    @apply bg-amber-500/20 text-amber-400;
+  }
+
+  .badge-error {
+    @apply bg-red-500/20 text-red-400;
+  }
+
+  .badge-info {
+    @apply bg-indigo-500/20 text-indigo-400;
+  }
+}

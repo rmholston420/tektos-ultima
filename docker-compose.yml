@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  tektos-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8020:8020"
+    environment:
+      - BACKEND_URL=http://localhost:8020
+      - DB_PATH=/data/events.db
+    volumes:
+      - tektos-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8020/api/sessions"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  tektos-data:
