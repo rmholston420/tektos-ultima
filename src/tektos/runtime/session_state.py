@@ -12,9 +12,8 @@ Design:
 
 from __future__ import annotations
 
-import json
-import uuid
-from dataclasses import dataclass, field, asdict
+import contextlib
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -72,17 +71,17 @@ class SessionState:
     def to_markdown(self) -> str:
         """Convert to LAST_KNOWN_STATE.md format."""
         lines = [
-            f"# LAST_KNOWN_STATE.md",
-            f"",
+            "# LAST_KNOWN_STATE.md",
+            "",
             f"**Session:** {self.session_id}",
             f"**Project:** {self.project}",
             f"**Timestamp:** {self.timestamp}",
             f"**Version:** {self.version}",
-            f"",
-            f"## Objective",
-            f"",
+            "",
+            "## Objective",
+            "",
             f"{self.objective}",
-            f"",
+            "",
             f"**Progress:** {self.progress}",
         ]
         
@@ -135,9 +134,9 @@ class SessionState:
             lines.append("## Exact Commands")
             lines.append("")
             for cmd in self.exact_commands:
-                lines.append(f"```bash")
+                lines.append("```bash")
                 lines.append(f"{cmd}")
-                lines.append(f"```")
+                lines.append("```")
             lines.append("")
         
         # Task List
@@ -184,7 +183,7 @@ class SessionState:
         return "\n".join(lines)
     
     @classmethod
-    def from_markdown(cls, md: str, session_id: str, project: str) -> "SessionState":
+    def from_markdown(cls, md: str, session_id: str, project: str) -> SessionState:
         """Parse LAST_KNOWN_STATE.md (simplified reconstruction)."""
         state = cls(
             session_id=session_id,
@@ -211,10 +210,8 @@ class SessionState:
         if "**Completion:**" in md:
             comp_section = md.split("**Completion:**")[1]
             comp_line = comp_section.split("\n")[0]
-            try:
+            with contextlib.suppress(ValueError):
                 state.completion_pct = float(comp_line.split("%")[0].strip())
-            except ValueError:
-                pass
         
         # Extract current file
         if "- **Current File:**" in md:
@@ -276,7 +273,7 @@ class SessionState:
         return asdict(self)
     
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SessionState":
+    def from_dict(cls, data: dict[str, Any]) -> SessionState:
         """Reconstruct from dict."""
         return cls(**data)
 

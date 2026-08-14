@@ -7,10 +7,9 @@ Patches RuntimeSDK.start() and replaces the app lifespan with a no-op
 so tests run without an LLM server or live database.
 """
 
-import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,14 +31,17 @@ mock_sdk_instance.interrupt = AsyncMock(return_value=None)
 mock_sdk_class.return_value = mock_sdk_instance
 
 import tektos.runtime.sdk as sdk_module
+
 sdk_module.RuntimeSDK = mock_sdk_class
 
 # ---------------------------------------------------------------------------
 # 2. Patch class constructors so lifespan creates mock instances
 # ---------------------------------------------------------------------------
 
+
 class MockSessionManager:
     """Mock session manager with proper side effects."""
+
     def __init__(self):
         self.active_sessions = {"test-123", "test-456"}
         self._sessions = self.active_sessions  # For health_check access
@@ -51,34 +53,60 @@ class MockSessionManager:
         if sid == "nonexistent":
             return None
         return MagicMock(
-            id=sid, model="test-model", status="created",
-            title="Test", tag=None, root_session_id=None,
-            created_at="2026-01-01T00:00:00Z", updated_at="2026-01-01T00:00:00Z",
+            id=sid,
+            model="test-model",
+            status="created",
+            title="Test",
+            tag=None,
+            root_session_id=None,
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
             is_archived=False,
         )
 
     async def create_session(self, **kwargs):
         return MagicMock(
-            id="test-123", model="test-model", status="created",
-            title="Test", tag=None, root_session_id=None,
-            created_at="2026-01-01T00:00:00Z", updated_at="2026-01-01T00:00:00Z",
-            is_active=True, is_failed=False, is_archived=False,
+            id="test-123",
+            model="test-model",
+            status="created",
+            title="Test",
+            tag=None,
+            root_session_id=None,
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+            is_active=True,
+            is_failed=False,
+            is_archived=False,
         )
 
     async def fork_session(self, **kwargs):
         return MagicMock(
-            id="test-456", model="test", status="created",
-            title="Test Fork", tag=None, root_session_id=None,
-            created_at="2026-01-01T00:00:00Z", updated_at="2026-01-01T00:00:00Z",
-            is_active=True, is_failed=False, is_archived=False,
+            id="test-456",
+            model="test",
+            status="created",
+            title="Test Fork",
+            tag=None,
+            root_session_id=None,
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+            is_active=True,
+            is_failed=False,
+            is_archived=False,
         )
 
     async def resume_session(self, **kwargs):
         return MagicMock(
-            id="test-789", model="test", status="resumed",
-            title="Resume", tag=None, root_session_id=None,
-            created_at="2026-01-01T00:00:00Z", updated_at="2026-01-01T00:00:00Z",
-            is_active=True, is_failed=False, is_archived=False,
+            id="test-789",
+            model="test",
+            status="resumed",
+            title="Resume",
+            tag=None,
+            root_session_id=None,
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+            is_active=True,
+            is_failed=False,
+            is_archived=False,
         )
 
     async def rename_session(self, sid, title):
@@ -105,14 +133,19 @@ class MockSessionManager:
 class MockSchemaEngine:
     def __init__(self, *a, **k):
         pass
+
     def get_current_version(self):
         return 1
+
     def apply_migrations(self):
         return []
+
     def get_schema(self):
         return {"tables": {}}
+
     def get_evolution_history(self):
         return []
+
     def introspect(self):
         return {}
 
@@ -120,14 +153,17 @@ class MockSchemaEngine:
 class MockSelfImprovementAdapter:
     def __init__(self, *a, **k):
         pass
+
     def get_experience(self):
         return []
+
     def get_learning_metrics(self):
         return {}
 
 
 # Patch the constructors in main.py's module namespace
 from tektos import main
+
 main.SessionManager = MockSessionManager
 main.SchemaEvolutionEngine = MockSchemaEngine
 main.SelfImprovementAdapter = MockSelfImprovementAdapter
@@ -139,16 +175,20 @@ main.RuntimeSDK = mock_sdk_class
 # 3. Patch event_store functions in main's namespace
 # ---------------------------------------------------------------------------
 
+
 async def _get_events(sid, since_seq=0, limit=1000, event_type=None):
     return []
 
+
 async def _get_replay(sid, limit=50000):
     return []
+
 
 async def _search_events(query, limit=100):
     if not query or query.strip() == "":
         return []
     return []
+
 
 main.get_events = _get_events
 main.get_replay = _get_replay
@@ -158,13 +198,15 @@ main.search_events = _search_events
 # 4. Create test client (lifespan now creates mock instances)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def client():
     """Create test client with mocked globals."""
     with TestClient(main.app, raise_server_exceptions=False) as c:
         # After lifespan runs, main.session_manager should be our MockSessionManager
-        assert isinstance(main.session_manager, MockSessionManager), \
+        assert isinstance(main.session_manager, MockSessionManager), (
             f"session_manager is {type(main.session_manager)}, expected MockSessionManager"
+        )
         yield c
 
 
@@ -172,8 +214,10 @@ def client():
 # State endpoint helpers
 # ---------------------------------------------------------------------------
 
+
 class MockState:
     """Mock state object with to_dict() and to_markdown() methods."""
+
     def __init__(self, data):
         self._data = data
 
@@ -191,6 +235,7 @@ class MockState:
 # ---------------------------------------------------------------------------
 # Health Endpoint
 # ---------------------------------------------------------------------------
+
 
 class TestHealthEndpoint:
     """Test /health endpoint contract."""
@@ -215,6 +260,7 @@ class TestHealthEndpoint:
 # Session CRUD Endpoints
 # ---------------------------------------------------------------------------
 
+
 class TestSessionEndpoints:
     """Test session CRUD endpoints contract."""
 
@@ -224,10 +270,7 @@ class TestSessionEndpoints:
         assert isinstance(response.json(), list)
 
     def test_create_session_returns_200(self, client):
-        response = client.post(
-            "/api/sessions",
-            json={"model": "test-model", "cwd": "/tmp"}
-        )
+        response = client.post("/api/sessions", json={"model": "test-model", "cwd": "/tmp"})
         assert response.status_code == 200
         data = response.json()
         assert "id" in data
@@ -239,10 +282,7 @@ class TestSessionEndpoints:
         assert response.status_code == 404
 
     def test_get_session_returns_200(self, client):
-        create_resp = client.post(
-            "/api/sessions",
-            json={"model": "test-model", "cwd": "/tmp"}
-        )
+        create_resp = client.post("/api/sessions", json={"model": "test-model", "cwd": "/tmp"})
         session_id = create_resp.json()["id"]
         response = client.get(f"/api/sessions/{session_id}")
         assert response.status_code == 200
@@ -250,18 +290,12 @@ class TestSessionEndpoints:
         assert data["id"] == session_id
 
     def test_rename_session_returns_ok(self, client):
-        response = client.post(
-            "/api/sessions/test-123/rename",
-            json={"title": "New Title"}
-        )
+        response = client.post("/api/sessions/test-123/rename", json={"title": "New Title"})
         assert response.status_code == 200
         assert response.json()["ok"] is True
 
     def test_tag_session_returns_ok(self, client):
-        response = client.post(
-            "/api/sessions/test-123/tag",
-            json={"tag": "important"}
-        )
+        response = client.post("/api/sessions/test-123/tag", json={"tag": "important"})
         assert response.status_code == 200
         assert response.json()["ok"] is True
 
@@ -271,10 +305,7 @@ class TestSessionEndpoints:
 
     def test_delete_existing_session_returns_ok(self, client):
         # First create a session to delete
-        create_resp = client.post(
-            "/api/sessions",
-            json={"model": "test-model", "cwd": "/tmp"}
-        )
+        create_resp = client.post("/api/sessions", json={"model": "test-model", "cwd": "/tmp"})
         session_id = create_resp.json()["id"]
         response = client.delete(f"/api/sessions/{session_id}")
         assert response.status_code == 200
@@ -283,6 +314,7 @@ class TestSessionEndpoints:
 # ---------------------------------------------------------------------------
 # Event/Replay Endpoints
 # ---------------------------------------------------------------------------
+
 
 class TestEventEndpoints:
     """Test event-related endpoints contract."""
@@ -301,6 +333,7 @@ class TestEventEndpoints:
 # ---------------------------------------------------------------------------
 # Archive Endpoints
 # ---------------------------------------------------------------------------
+
 
 class TestArchiveEndpoints:
     """Test archive-related endpoints contract."""
@@ -322,22 +355,19 @@ class TestArchiveEndpoints:
 
     def test_rename_archive_session(self, client):
         response = client.post(
-            "/api/archive/sessions/nonexistent/rename",
-            json={"title": "New Title"}
+            "/api/archive/sessions/nonexistent/rename", json={"title": "New Title"}
         )
         assert response.status_code == 404
 
     def test_tag_archive_session(self, client):
-        response = client.post(
-            "/api/archive/sessions/nonexistent/tag",
-            json={"tag": "important"}
-        )
+        response = client.post("/api/archive/sessions/nonexistent/tag", json={"tag": "important"})
         assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
 # Search Endpoint
 # ---------------------------------------------------------------------------
+
 
 class TestSearchEndpoint:
     """Test search endpoint contract."""
@@ -362,6 +392,7 @@ class TestSearchEndpoint:
 # Schema Endpoint
 # ---------------------------------------------------------------------------
 
+
 class TestSchemaEndpoint:
     """Test schema introspection endpoint contract."""
 
@@ -385,6 +416,7 @@ class TestSchemaEndpoint:
 # State Endpoints
 # ---------------------------------------------------------------------------
 
+
 class TestStateEndpoints:
     """Test LAST_KNOWN_STATE.md state endpoints contract."""
 
@@ -403,8 +435,8 @@ class TestStateEndpoints:
                 "current_file": "test.py",
                 "next_steps": ["Step 1", "Step 2"],
                 "key_decisions": ["Decision 1"],
-                "blockers": []
-            }
+                "blockers": [],
+            },
         )
         assert response.status_code == 200
         data = response.json()
@@ -457,23 +489,19 @@ class TestStateEndpoints:
 # Edge Cases
 # ---------------------------------------------------------------------------
 
+
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
     def test_session_with_special_chars(self, client):
-        response = client.post(
-            "/api/sessions",
-            json={"model": "test", "cwd": "/tmp"}
-        )
+        response = client.post("/api/sessions", json={"model": "test", "cwd": "/tmp"})
         session_id = response.json()["id"]
         assert session_id is not None
         assert len(session_id) > 0
 
     def test_invalid_json_in_request(self, client):
         response = client.post(
-            "/api/sessions",
-            content="invalid json",
-            headers={"Content-Type": "application/json"}
+            "/api/sessions", content="invalid json", headers={"Content-Type": "application/json"}
         )
         assert response.status_code == 422
 

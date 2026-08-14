@@ -25,11 +25,10 @@ from __future__ import annotations
 
 import json as _json
 import logging as _log
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-
 
 log = _log.getLogger("tektos.protocol")
 
@@ -44,6 +43,7 @@ PROTOCOL_VERSION = "1.0.0"
 # ---------------------------------------------------------------------------
 # Event types
 # ---------------------------------------------------------------------------
+
 
 class EventType(str, Enum):
     SESSION_CREATED = "session.created"
@@ -71,6 +71,7 @@ class EventType(str, Enum):
 # WSEnvelope — the canonical WebSocket message shape
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class WSEnvelope:
     """Normalized WebSocket envelope.
@@ -78,6 +79,7 @@ class WSEnvelope:
     seq is assigned by the event store's push() function, NOT passed as
     a parameter, to prevent duplicate sequence numbers (PlexClaw bug #6).
     """
+
     session_id: str
     event_type: str
     payload: dict[str, Any]
@@ -108,6 +110,7 @@ class WSEnvelope:
 # ---------------------------------------------------------------------------
 # Envelope helpers — standardized construction (no dual-key pattern)
 # ---------------------------------------------------------------------------
+
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()

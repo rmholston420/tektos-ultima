@@ -8,10 +8,8 @@ Adapted from PlexClaw with bug fixes:
 from __future__ import annotations
 
 import logging as _log
-from typing import Any
 
 import websockets
-
 
 log = _log.getLogger("tektos.ws_manager")
 

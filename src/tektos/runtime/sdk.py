@@ -19,25 +19,21 @@ import logging as _log
 import time as _time
 import uuid as _uuid
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator
+from typing import Any
 
 import httpx
 
 from tektos.protocol.envelope import (
-    assistant_delta,
     assistant_completed,
-    tool_started,
-    tool_delta,
-    tool_completed,
-    tool_permission_required,
-    system_message,
+    assistant_delta,
     session_failed,
-    resource_warning,
-    PROTOCOL_VERSION,
+    tool_completed,
+    tool_delta,
+    tool_permission_required,
+    tool_started,
 )
 from tektos.runtime.session import LiveSession
 from tektos.store.event_store import append_event
-
 
 log = _log.getLogger("tektos.runtime")
 
@@ -79,7 +75,7 @@ class HookRegistry:
         """Run all hooks for an event. Errors are caught per-hook (PlexClaw bug #23 fix)."""
         for fn in self._hooks.get(event_type, []):
             try:
-                if asyncio.iscoroutinefunction(fn):
+                if _asyncio.iscoroutinefunction(fn):
                     await fn(ctx)
                 else:
                     fn(ctx)
@@ -250,9 +246,9 @@ class RuntimeSDK:
 
                 # Handle tool calls
                 for tc in tool_calls:
-                    tc_idx = tc.get("index", 0)
+                    _tc_idx = tc.get("index", 0)
                     tc_id = tc.get("id", str(_uuid.uuid4()))
-                    tc_type = tc.get("type", "function")
+                    _tc_type = tc.get("type", "function")
                     tc_func = tc.get("function", {})
                     tc_func_name = tc_func.get("name", "")
                     tc_func_args = tc_func.get("arguments", "")

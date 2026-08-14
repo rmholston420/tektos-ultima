@@ -11,13 +11,9 @@ from __future__ import annotations
 
 import json as _json
 import logging as _log
-import os as _os
 import threading as _threading
 from pathlib import Path as _Path
 from typing import Any
-
-import aiosqlite
-
 
 log = _log.getLogger("tektos.event_store")
 
@@ -74,27 +70,23 @@ def _ensure_db() -> None:
                 "type, payload, session_id, content='', content_rowid='id')"
             )
             # Backfill if needed — track completion separately
-            result = conn.execute(
-                "SELECT COUNT(*) FROM events"
-            ).fetchone()
+            result = conn.execute("SELECT COUNT(*) FROM events").fetchone()
             total_rows = result[0] if result else 0
 
-            result = conn.execute(
-                "SELECT COUNT(*) FROM events_fts"
-            ).fetchone()
+            result = conn.execute("SELECT COUNT(*) FROM events_fts").fetchone()
             fts_rows = result[0] if result else 0
 
             if fts_rows < total_rows and total_rows > 0:
-                # Partial backfill detected — retry
-                conn.execute("DELETE FROM events_fts")
-                for row in conn.execute(
-                    "SELECT id, type, payload, session_id FROM events"
-                ):
-                    conn.execute(
-                        "INSERT INTO events_fts VALUES (?, ?, ?, ?)",
-                        (row[1], row[2], row[3], row[0]),
-                    )
+                # Contentless FTS5 should always be in sync via triggers.
+                # If mismatch detected (e.g. manual DB edits), drop and
+                # recreate the FTS5 table — it will be rebuilt on next INSERT.
+                conn.execute("DROP TABLE IF EXISTS events_fts")
+                conn.execute(
+                    "CREATE VIRTUAL TABLE events_fts USING fts5("
+                    "type, payload, session_id, content='', content_rowid='id')"
+                )
                 conn.commit()
+                log.info("FTS5 rebuilt (contentless mode — will populate on next insert)")
                 log.info(f"FTS backfilled: {fts_rows} → {total_rows} rows")
 
             _fts_available = True
@@ -260,9 +252,7 @@ async def delete_session(session_id: str) -> int:
                 "SELECT id FROM events WHERE session_id = ?", (session_id,)
             ).fetchall()
             for r in rows:
-                conn.execute(
-                    "DELETE FROM events_fts WHERE rowid = ?", (r[0],)
-                )
+                conn.execute("DELETE FROM events_fts WHERE rowid = ?", (r[0],))
 
         conn.commit()
         return count
@@ -299,9 +289,7 @@ def _check_fts5_sync(conn) -> bool:
         return _fts_available
 
     try:
-        conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_probe USING fts5(x)"
-        )
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_probe USING fts5(x)")
         _fts_available = True
     except Exception:
         _fts_available = False

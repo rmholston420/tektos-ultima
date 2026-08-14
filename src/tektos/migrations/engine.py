@@ -25,12 +25,13 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
+import sqlite3
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 log = logging.getLogger(__name__)
 

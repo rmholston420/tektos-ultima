@@ -19,17 +19,19 @@ import asyncio as _asyncio
 import json as _json
 import logging as _log
 import os as _os
-import sys as _sys
 from contextlib import asynccontextmanager as _asynccontextmanager
-from datetime import datetime as _datetime, timezone as _timezone
+from datetime import datetime as _datetime
+from datetime import timezone as _timezone
 from pathlib import Path as _Path
 from typing import Any
 
-from fastapi import FastAPI as _FastAPI, HTTPException as _HTTPException, WebSocket as _WebSocket, WebSocketDisconnect as _WebSocketDisconnect
+from fastapi import FastAPI as _FastAPI
+from fastapi import HTTPException as _HTTPException
+from fastapi import WebSocket as _WebSocket
+from fastapi import WebSocketDisconnect as _WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware as _CORSMiddleware
-from fastapi.responses import JSONResponse as _JSONResponse
-from pydantic import BaseModel as _BaseModel, Field as _Field
-
+from pydantic import BaseModel as _BaseModel
+from pydantic import Field as _Field
 
 log = _log.getLogger("tektos.main")
 
@@ -38,26 +40,25 @@ log = _log.getLogger("tektos.main")
 # Globals — initialized in lifespan
 # ---------------------------------------------------------------------------
 
-from tektos.runtime.session import SessionManager, LiveSession
-from tektos.runtime.sdk import RuntimeSDK, HookContext
-from tektos.runtime.ws_manager import WebSocketManager
-from tektos.runtime.session_state import SessionStateManager, SessionState
-from tektos.store.event_store import append_event, get_events, get_replay, search_events, close as store_close, get_db_path
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
-from tektos.self_improvement.engine import SelfImprovementAdapter
 from tektos.protocol.envelope import (
-    session_created,
-    session_ready,
-    session_updated,
-    assistant_delta,
-    assistant_completed,
-    tool_started,
-    tool_completed,
-    session_failed,
-    session_interrupted,
-    system_message,
     PROTOCOL_VERSION,
+    session_interrupted,
+    session_ready,
+    system_message,
 )
+from tektos.runtime.sdk import RuntimeSDK
+from tektos.runtime.session import LiveSession, SessionManager
+from tektos.runtime.session_state import SessionState, SessionStateManager
+from tektos.runtime.ws_manager import WebSocketManager
+from tektos.self_improvement.engine import SelfImprovementAdapter
+from tektos.store.event_store import (
+    append_event,
+    get_events,
+    get_replay,
+    search_events,
+)
+from tektos.store.event_store import close as store_close
 
 session_manager: SessionManager
 runtime_sdk: RuntimeSDK
@@ -604,9 +605,9 @@ async def _handle_prompt(
     async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
         """Wait for user approval on a tool call."""
         try:
-            await asyncio.wait_for(approval_event.wait(), timeout=30.0)
+            await _asyncio.wait_for(approval_event.wait(), timeout=30.0)
             return approved_tools.get(tool_id, False)
-        except asyncio.TimeoutError:
+        except _asyncio.TimeoutError:
             log.warning(f"Tool approval timeout for {tool_id}")
             return False
 
@@ -630,7 +631,7 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
     Protocol versioned via query param: ?protocol_version=1.0.0
     """
     # Check protocol version
-    protocol_version = websocket.query_params.get("protocol_version", PROTOCOL_VERSION)
+    _ = websocket.query_params.get("protocol_version", PROTOCOL_VERSION)
 
     # Check if session exists
     session = await session_manager.get_session(session_id)
@@ -685,7 +686,7 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                     continue
 
                 # Run prompt in background task
-                asyncio.create_task(
+                _asyncio.create_task(
                     _handle_prompt(websocket, session, prompt_text, system_prompt)
                 )
 

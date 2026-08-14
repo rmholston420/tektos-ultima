@@ -10,44 +10,41 @@ Covers:
 
 import asyncio
 import json
-import os
 import sys
-import tempfile
-import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from tektos.protocol.envelope import (
     PROTOCOL_VERSION,
-    WSEnvelope,
     EventType,
-    session_created,
-    session_ready,
-    session_updated,
+    WSEnvelope,
     assistant_delta,
-    assistant_completed,
-    tool_started,
-    tool_delta,
-    tool_completed,
-    tool_permission_required,
-    system_message,
-    session_interrupted,
-    session_failed,
-    self_improvement_tick,
     resource_warning,
+    session_created,
+    session_failed,
+    session_ready,
+    system_message,
+    tool_completed,
+    tool_started,
 )
-from tektos.store.event_store import init, append_event, get_events, get_replay, search_events, delete_session, set_path
-
+from tektos.store.event_store import (
+    append_event,
+    delete_session,
+    get_events,
+    get_replay,
+    init,
+    search_events,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def event_db(tmp_path):
@@ -64,6 +61,7 @@ def event_db(tmp_path):
 def session_manager(event_db):
     """Create a session manager with initialized event store."""
     from tektos.runtime.session import SessionManager
+
     return SessionManager()
 
 
@@ -73,32 +71,60 @@ async def sample_session(event_db):
     session_id = "test-session-123"
 
     # Append sample events
-    await append_event(session_id, "session.created", {
-        "message": "Session created",
-    })
-    await append_event(session_id, "session.ready", {
-        "since_seq": 0,
-    })
-    await append_event(session_id, "assistant.delta", {
-        "text": "Hello",
-    })
-    await append_event(session_id, "tool.started", {
-        "tool_id": "tool-1",
-        "tool_name": "bash",
-        "tool_input": {"command": "ls -la"},
-    })
-    await append_event(session_id, "tool.delta", {
-        "tool_id": "tool-1",
-        "delta": "ls -la",
-    })
-    await append_event(session_id, "tool.completed", {
-        "tool_id": "tool-1",
-        "status": "success",
-        "output": "file1.txt file2.txt",
-    })
-    await append_event(session_id, "assistant.completed", {
-        "stop_reason": "end_turn",
-    })
+    await append_event(
+        session_id,
+        "session.created",
+        {
+            "message": "Session created",
+        },
+    )
+    await append_event(
+        session_id,
+        "session.ready",
+        {
+            "since_seq": 0,
+        },
+    )
+    await append_event(
+        session_id,
+        "assistant.delta",
+        {
+            "text": "Hello",
+        },
+    )
+    await append_event(
+        session_id,
+        "tool.started",
+        {
+            "tool_id": "tool-1",
+            "tool_name": "bash",
+            "tool_input": {"command": "ls -la"},
+        },
+    )
+    await append_event(
+        session_id,
+        "tool.delta",
+        {
+            "tool_id": "tool-1",
+            "delta": "ls -la",
+        },
+    )
+    await append_event(
+        session_id,
+        "tool.completed",
+        {
+            "tool_id": "tool-1",
+            "status": "success",
+            "output": "file1.txt file2.txt",
+        },
+    )
+    await append_event(
+        session_id,
+        "assistant.completed",
+        {
+            "stop_reason": "end_turn",
+        },
+    )
 
     return session_id
 
@@ -106,6 +132,7 @@ async def sample_session(event_db):
 # ---------------------------------------------------------------------------
 # Protocol Envelope Tests
 # ---------------------------------------------------------------------------
+
 
 class TestProtocolEnvelope:
     """Test protocol envelope versioning, types, and JSON serialization."""
@@ -135,14 +162,16 @@ class TestProtocolEnvelope:
         assert data["protocol_version"] == "1.0.0"
 
     def test_wsenvelope_deserialization(self):
-        json_str = json.dumps({
-            "session_id": "test-123",
-            "type": "assistant.delta",
-            "payload": {"text": "hello"},
-            "seq": 1,
-            "protocol_version": "1.0.0",
-            "timestamp": "2026-08-13T00:00:00Z",
-        })
+        json_str = json.dumps(
+            {
+                "session_id": "test-123",
+                "type": "assistant.delta",
+                "payload": {"text": "hello"},
+                "seq": 1,
+                "protocol_version": "1.0.0",
+                "timestamp": "2026-08-13T00:00:00Z",
+            }
+        )
         env = WSEnvelope.from_json(json_str)
         assert env.session_id == "test-123"
         assert env.event_type == "assistant.delta"
@@ -208,6 +237,7 @@ class TestProtocolEnvelope:
 # Event Store Tests
 # ---------------------------------------------------------------------------
 
+
 class TestEventStore:
     """Test SQLite event store with all PlexClaw bug fixes applied."""
 
@@ -215,9 +245,7 @@ class TestEventStore:
         """Test basic append and query."""
         loop = asyncio.new_event_loop()
         try:
-            events = loop.run_until_complete(
-                get_events(sample_session, since_seq=0)
-            )
+            events = loop.run_until_complete(get_events(sample_session, since_seq=0))
         finally:
             loop.close()
         assert len(events) == 7
@@ -238,9 +266,7 @@ class TestEventStore:
                 assert seq == i + 1  # seq should be 1, 2, 3, ... 10
 
             # Verify all events have correct seq
-            events = loop.run_until_complete(
-                get_events(session_id, since_seq=0)
-            )
+            events = loop.run_until_complete(get_events(session_id, since_seq=0))
             for i, event in enumerate(events):
                 assert event["seq"] == i + 1, f"Event {i} has wrong seq: {event['seq']}"
         finally:
@@ -250,9 +276,7 @@ class TestEventStore:
         """Test querying events since a specific seq."""
         loop = asyncio.new_event_loop()
         try:
-            events = loop.run_until_complete(
-                get_events(sample_session, since_seq=3)
-            )
+            events = loop.run_until_complete(get_events(sample_session, since_seq=3))
         finally:
             loop.close()
         assert len(events) == 4  # Only events with seq > 3
@@ -269,15 +293,11 @@ class TestEventStore:
                 )
 
             # Default limit should work
-            events = loop.run_until_complete(
-                get_events(session_id, since_seq=0)
-            )
+            events = loop.run_until_complete(get_events(session_id, since_seq=0))
             assert len(events) == 20
 
             # Explicit limit
-            events_limited = loop.run_until_complete(
-                get_events(session_id, since_seq=0, limit=5)
-            )
+            events_limited = loop.run_until_complete(get_events(session_id, since_seq=0, limit=5))
             assert len(events_limited) == 5
         finally:
             loop.close()
@@ -303,9 +323,7 @@ class TestEventStore:
         """Test full replay of events."""
         loop = asyncio.new_event_loop()
         try:
-            replay = loop.run_until_complete(
-                get_replay(sample_session)
-            )
+            replay = loop.run_until_complete(get_replay(sample_session))
         finally:
             loop.close()
         assert len(replay) == 7
@@ -318,21 +336,15 @@ class TestEventStore:
         loop = asyncio.new_event_loop()
         try:
             # Verify events exist
-            events_before = loop.run_until_complete(
-                get_events(sample_session, since_seq=0)
-            )
+            events_before = loop.run_until_complete(get_events(sample_session, since_seq=0))
             assert len(events_before) == 7
 
             # Delete session
-            count = loop.run_until_complete(
-                delete_session(sample_session)
-            )
+            count = loop.run_until_complete(delete_session(sample_session))
             assert count == 7
 
             # Verify events are gone
-            events_after = loop.run_until_complete(
-                get_events(sample_session, since_seq=0)
-            )
+            events_after = loop.run_until_complete(get_events(sample_session, since_seq=0))
             assert len(events_after) == 0
         finally:
             loop.close()
@@ -346,9 +358,7 @@ class TestEventStore:
                 append_event(session_id, "assistant.delta", {"text": "hello world test"})
             )
 
-            results = loop.run_until_complete(
-                search_events("hello", limit=10)
-            )
+            results = loop.run_until_complete(search_events("hello", limit=10))
             assert len(results) >= 1
             assert any("hello" in r.get("payload", {}).get("text", "").lower() for r in results)
         finally:
@@ -364,9 +374,7 @@ class TestEventStore:
                     append_event(session_id, "assistant.delta", {"text": f"item {i}"})
                 )
 
-            results = loop.run_until_complete(
-                search_events("item", limit=10)
-            )
+            results = loop.run_until_complete(search_events("item", limit=10))
             assert len(results) <= 10  # Should not exceed limit
         finally:
             loop.close()
@@ -375,15 +383,14 @@ class TestEventStore:
         """Test that using store without init raises RuntimeError."""
         # Reset global state
         import tektos.store.event_store as es
+
         original_path = es._db_path
         es._db_path = ""
 
         loop = asyncio.new_event_loop()
         try:
             with pytest.raises(RuntimeError, match="not initialized"):
-                loop.run_until_complete(
-                    append_event("test", "test", {})
-                )
+                loop.run_until_complete(append_event("test", "test", {}))
         finally:
             loop.close()
 
@@ -394,6 +401,7 @@ class TestEventStore:
 # Session Manager Tests
 # ---------------------------------------------------------------------------
 
+
 class TestSessionManager:
     """Test session lifecycle management."""
 
@@ -401,6 +409,7 @@ class TestSessionManager:
     def session_manager(self, event_db):
         """Create a session manager with initialized event store."""
         from tektos.runtime.session import SessionManager
+
         return SessionManager()
 
     @pytest.mark.asyncio
@@ -524,6 +533,7 @@ class TestSessionManager:
 # Runtime SDK Tests
 # ---------------------------------------------------------------------------
 
+
 class TestRuntimeSDK:
     """Test runtime SDK with PlexClaw bug fixes applied."""
 
@@ -577,6 +587,7 @@ class TestRuntimeSDK:
 # WebSocket Protocol Tests
 # ---------------------------------------------------------------------------
 
+
 class TestWebSocketProtocol:
     """Test WebSocket protocol message handling."""
 
@@ -611,6 +622,7 @@ class TestWebSocketProtocol:
 # ---------------------------------------------------------------------------
 # Integration Tests
 # ---------------------------------------------------------------------------
+
 
 class TestIntegration:
     """Integration tests for full flow."""

@@ -19,16 +19,7 @@ import uuid as _uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from tektos.protocol.envelope import (
-    session_created,
-    session_ready,
-    session_updated,
-    session_interrupted,
-    session_failed,
-    system_message,
-)
 from tektos.store.event_store import append_event
-
 
 log = _log.getLogger("tektos.session")
 
@@ -37,9 +28,11 @@ log = _log.getLogger("tektos.session")
 # LiveSession
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class LiveSession:
     """Represents a single active or archived session."""
+
     id: str
     model: str
     cwd: str
@@ -73,6 +66,7 @@ class LiveSession:
 # ---------------------------------------------------------------------------
 # SessionManager
 # ---------------------------------------------------------------------------
+
 
 class SessionManager:
     """Manages session lifecycle with thread-safe state transitions.
@@ -117,13 +111,17 @@ class SessionManager:
             self._sessions[session_id] = session
 
         # Emit to event store (store-only, no WS client yet)
-        await append_event(session_id, "session.created", {
-            "subtype": "session.created",
-            "message": "Session created",
-            "since_seq": 0,
-            "model": model,
-            "provider": provider,
-        })
+        await append_event(
+            session_id,
+            "session.created",
+            {
+                "subtype": "session.created",
+                "message": "Session created",
+                "since_seq": 0,
+                "model": model,
+                "provider": provider,
+            },
+        )
 
         log.info(f"Session {session_id[:8]} created (model={model})")
         return session
@@ -158,12 +156,18 @@ class SessionManager:
         session.updated_at = _time.monotonic()
 
         # Emit session.ready with since_seq
-        await append_event(session_id, "session.ready", {
-            "message": "Session ready",
-            "since_seq": 0,
-        })
+        await append_event(
+            session_id,
+            "session.ready",
+            {
+                "message": "Session ready",
+                "since_seq": 0,
+            },
+        )
 
-        log.debug(f"WS connected to {session_id[:8]}, now {len(session.ws_connections)} connections")
+        log.debug(
+            f"WS connected to {session_id[:8]}, now {len(session.ws_connections)} connections"
+        )
         return True
 
     async def remove_ws_connection(self, session_id: str, ws: Any) -> None:
@@ -173,7 +177,9 @@ class SessionManager:
             return
 
         session.ws_connections.discard(ws)
-        log.debug(f"WS disconnected from {session_id[:8]}, now {len(session.ws_connections)} connections")
+        log.debug(
+            f"WS disconnected from {session_id[:8]}, now {len(session.ws_connections)} connections"
+        )
 
         # If no connections and not running, mark as idle
         if not session.ws_connections and session.status == "ready":
@@ -192,9 +198,13 @@ class SessionManager:
         session.status = "interrupted"
         session.updated_at = _time.monotonic()
 
-        await append_event(session_id, "session.interrupted", {
-            "message": "Session interrupted",
-        })
+        await append_event(
+            session_id,
+            "session.interrupted",
+            {
+                "message": "Session interrupted",
+            },
+        )
 
     async def complete_session(self, session_id: str, status: str = "ready") -> None:
         """Mark session as complete. Status is 'ready' (can accept new prompts) or 'failed'."""
@@ -207,20 +217,28 @@ class SessionManager:
             session.status = "failed"
             session.updated_at = _time.monotonic()
 
-            await append_event(session_id, "session.failed", {
-                "error": "Session failed",
-                "message": "Session failed",
-            })
+            await append_event(
+                session_id,
+                "session.failed",
+                {
+                    "error": "Session failed",
+                    "message": "Session failed",
+                },
+            )
 
             log.warning(f"Session {session_id[:8]} failed — will be reaped")
         else:
             session.status = "ready"
             session.updated_at = _time.monotonic()
 
-            await append_event(session_id, "session.ready", {
-                "message": "Session ready",
-                "since_seq": 0,
-            })
+            await append_event(
+                session_id,
+                "session.ready",
+                {
+                    "message": "Session ready",
+                    "since_seq": 0,
+                },
+            )
 
     async def archive_session(self, session_id: str) -> None:
         """Archive a session (move to archived list)."""
@@ -234,9 +252,13 @@ class SessionManager:
         # Remove all WS connections
         session.ws_connections.clear()
 
-        await append_event(session_id, "session.updated", {
-            "changes": {"status": "archived"},
-        })
+        await append_event(
+            session_id,
+            "session.updated",
+            {
+                "changes": {"status": "archived"},
+            },
+        )
 
     async def fork_session(
         self,
@@ -259,12 +281,16 @@ class SessionManager:
         new_session.title = f"fork of {source.title or source_session_id[:8]}"
         new_session.tag = source.tag
 
-        await append_event(new_session.id, "session.updated", {
-            "changes": {
-                "title": new_session.title,
-                "tag": new_session.tag,
+        await append_event(
+            new_session.id,
+            "session.updated",
+            {
+                "changes": {
+                    "title": new_session.title,
+                    "tag": new_session.tag,
+                },
             },
-        })
+        )
 
         return new_session
 
@@ -286,9 +312,13 @@ class SessionManager:
 
         new_session.title = f"resume of {session.title or session_id[:8]}"
 
-        await append_event(new_session.id, "session.updated", {
-            "changes": {"title": new_session.title},
-        })
+        await append_event(
+            new_session.id,
+            "session.updated",
+            {
+                "changes": {"title": new_session.title},
+            },
+        )
 
         return new_session
 
@@ -298,13 +328,17 @@ class SessionManager:
         if not session:
             raise KeyError(f"Session {session_id} not found")
 
-        old_title = session.title
+        _old_title = session.title
         session.title = new_title
         session.updated_at = _time.monotonic()
 
-        await append_event(session_id, "session.updated", {
-            "changes": {"title": new_title},
-        })
+        await append_event(
+            session_id,
+            "session.updated",
+            {
+                "changes": {"title": new_title},
+            },
+        )
 
     async def tag_session(self, session_id: str, tag: str) -> None:
         """Tag a session."""
@@ -312,13 +346,17 @@ class SessionManager:
         if not session:
             raise KeyError(f"Session {session_id} not found")
 
-        old_tag = session.tag
+        _old_tag = session.tag
         session.tag = tag
         session.updated_at = _time.monotonic()
 
-        await append_event(session_id, "session.updated", {
-            "changes": {"tag": tag},
-        })
+        await append_event(
+            session_id,
+            "session.updated",
+            {
+                "changes": {"tag": tag},
+            },
+        )
 
     async def delete_session(self, session_id: str) -> int:
         """Delete a session and its events. Returns count of events deleted."""
@@ -338,6 +376,7 @@ class SessionManager:
     async def _delete_events(self, session_id: str) -> int:
         """Delete all events for a session from event store."""
         from tektos.store.event_store import delete_session as store_delete
+
         return await store_delete(session_id)
 
     async def reap_failed_sessions(self, timeout: float = 300.0) -> int:
@@ -374,7 +413,8 @@ class SessionManager:
         if query:
             query_lower = query.lower()
             sessions = [
-                s for s in sessions
+                s
+                for s in sessions
                 if query_lower in (s.title or "").lower()
                 or query_lower in (s.tag or "").lower()
                 or query_lower in s.id.lower()
@@ -386,10 +426,10 @@ class SessionManager:
         if sort == "updated_at":
             sessions.sort(key=lambda s: s.updated_at, reverse=reverse)
         elif sort == "title":
-            sessions.sort(key=lambda s: (s.title or ""), reverse=reverse)
+            sessions.sort(key=lambda s: s.title or "", reverse=reverse)
         elif sort == "tag":
-            sessions.sort(key=lambda s: (s.tag or ""), reverse=reverse)
+            sessions.sort(key=lambda s: s.tag or "", reverse=reverse)
         elif sort == "root":
-            sessions.sort(key=lambda s: (s.root_session_id or ""), reverse=reverse)
+            sessions.sort(key=lambda s: s.root_session_id or "", reverse=reverse)
 
         return sessions

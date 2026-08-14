@@ -20,24 +20,25 @@ Hook categories:
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
 
 # ── Types ──────────────────────────────────────────────────────────────────
 
+
 class HookPriority(int, Enum):
     """Execution priority for hooks (lower = earlier)."""
-    CRITICAL = 0      # Must run before anything else
+
+    CRITICAL = 0  # Must run before anything else
     HIGH = 10
-    NORMAL = 50       # Default
+    NORMAL = 50  # Default
     LOW = 90
 
 
@@ -59,6 +60,7 @@ class HookResult:
 @dataclass
 class HookContext:
     """Shared context passed to all hooks for a given event."""
+
     event_type: str
     session_id: str | None = None
     tool_name: str | None = None
@@ -76,11 +78,13 @@ class HookContext:
 
 # ── Hook Protocol ──────────────────────────────────────────────────────────
 
+
 class HookFn(Protocol):
     async def __call__(self, ctx: HookContext) -> HookResult: ...
 
 
 # ── Hook Registry ──────────────────────────────────────────────────────────
+
 
 class HookRegistry:
     """
@@ -174,18 +178,16 @@ class HookRegistry:
 
     def list_hooks(self) -> dict[str, list[str]]:
         """Return {event_type: [fn_name, ...]} for all registered hooks."""
-        return {
-            et: [fn.__name__ for _, fn in handlers]
-            for et, handlers in self._handlers.items()
-        }
+        return {et: [fn.__name__ for _, fn in handlers] for et, handlers in self._handlers.items()}
 
 
 # ── Built-in Hooks ─────────────────────────────────────────────────────────
 
+
 class BuiltinHooks:
     """
     Standard hooks that ship with Tektos.
-    
+
     These can be overridden by registering custom hooks for the same event.
     Custom hooks registered with lower priority (higher number) run after
     builtins.
@@ -236,6 +238,7 @@ class BuiltinHooks:
             return HookResult()
 
         if self._resource_monitor:
+
             @self._registry.register("tool.before")
             async def _check_thermal_limit(ctx: HookContext) -> HookResult:
                 """Block inference if GPU is above operational ceiling."""
@@ -260,10 +263,11 @@ class BuiltinHooks:
 
 # ── Hook Manager (convenience) ─────────────────────────────────────────────
 
+
 class HookManager:
     """
     High-level manager for hook lifecycle.
-    
+
     Usage:
         manager = HookManager(resource_monitor)
         manager.fire("session.completed", session_id="abc", ...)

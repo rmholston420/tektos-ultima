@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 def migrate_v1_to_v2(engine: object) -> None:
     """
     Add self-improvement fields to sessions, create experiences and meta_learning tables.
-    
+
     This migration adds the fields the self-improvement engine needs to:
     - Track which task types succeed/fail per model
     - Store lessons learned per session
@@ -34,29 +34,28 @@ def migrate_v1_to_v2(engine: object) -> None:
     - Track meta-learning data (prompt patterns, model performance)
     """
     import sqlite3
-    from pathlib import Path
-    
+
     # Ensure we can connect to the event store DB
     from tektos.store.event_store import get_db_path
-    
+
     db_path = get_db_path()
-    
+
     if not db_path:
         log.warning("Event store DB path not set — skipping v1→v2 migration")
         return
-    
+
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    
+
     try:
         # Add self-improvement fields to sessions (SQLite requires ALTER COLUMN for defaults)
         # SQLite doesn't support ALTER COLUMN ADD IF NOT EXISTS, so check first
-        
+
         # Check if complexity column exists
         columns = conn.execute("PRAGMA table_info(sessions)").fetchall()
         column_names = {col[1] for col in columns}
-        
+
         if "complexity" not in column_names:
             conn.execute("ALTER TABLE sessions ADD COLUMN complexity TEXT DEFAULT 'standard'")
         if "novelty_score" not in column_names:
@@ -67,7 +66,7 @@ def migrate_v1_to_v2(engine: object) -> None:
             conn.execute("ALTER TABLE sessions ADD COLUMN lessons TEXT DEFAULT '[]'")
         if "skills_created" not in column_names:
             conn.execute("ALTER TABLE sessions ADD COLUMN skills_created TEXT DEFAULT '[]'")
-        
+
         # Create experiences table for self-improvement records
         conn.execute("""
             CREATE TABLE IF NOT EXISTS experiences (
@@ -89,7 +88,7 @@ def migrate_v1_to_v2(engine: object) -> None:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
-        
+
         # Create meta_learning table for prompt patterns & model performance
         conn.execute("""
             CREATE TABLE IF NOT EXISTS meta_learning (
@@ -107,15 +106,19 @@ def migrate_v1_to_v2(engine: object) -> None:
                 FOREIGN KEY (model) REFERENCES models(name)
             )
         """)
-        
+
         # Create indexes for performance
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_experiences_session ON experiences(session_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_experiences_session ON experiences(session_id)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_experiences_success ON experiences(success)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_learning_model ON meta_learning(model)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_learning_task ON meta_learning(task_type)")
-        
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meta_learning_task ON meta_learning(task_type)"
+        )
+
         log.info("Migration v1→v2: self-improvement schema added")
-        
+
     finally:
         conn.close()
 
@@ -123,7 +126,7 @@ def migrate_v1_to_v2(engine: object) -> None:
 def migrate_v2_to_v3(engine: object) -> None:
     """
     Add dynamic learning fields — schema_version, evolution_log, skill_registry.
-    
+
     This migration enables the agent to:
     - Track which schema version each session was created under
     - Log schema changes as they happen (evolution trail)
@@ -131,30 +134,29 @@ def migrate_v2_to_v3(engine: object) -> None:
     - Support schema introspection for self-modification
     """
     import sqlite3
-    from pathlib import Path
-    
+
     from tektos.store.event_store import get_db_path
-    
+
     db_path = get_db_path()
-    
+
     if not db_path:
         log.warning("Event store DB path not set — skipping v2→v3 migration")
         return
-    
+
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    
+
     try:
         # Check if schema_version column exists
         columns = conn.execute("PRAGMA table_info(sessions)").fetchall()
         column_names = {col[1] for col in columns}
-        
+
         if "schema_version" not in column_names:
             conn.execute("ALTER TABLE sessions ADD COLUMN schema_version INTEGER DEFAULT 1")
         if "evolution_log" not in column_names:
             conn.execute("ALTER TABLE sessions ADD COLUMN evolution_log TEXT DEFAULT '[]'")
-        
+
         # Create skill_registry table for discovered/created skills
         conn.execute("""
             CREATE TABLE IF NOT EXISTS skill_registry (
@@ -172,17 +174,23 @@ def migrate_v2_to_v3(engine: object) -> None:
                 metadata TEXT DEFAULT '{}'
             )
         """)
-        
+
         # Create indexes for skill_registry
         conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_name ON skill_registry(name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_category ON skill_registry(category)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_active ON skill_registry(is_active)")
-        
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_registry_category ON skill_registry(category)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_registry_active ON skill_registry(is_active)"
+        )
+
         # Update existing sessions to reflect new schema version
-        conn.execute("UPDATE sessions SET schema_version = 3 WHERE schema_version IS NULL OR schema_version < 3")
-        
+        conn.execute(
+            "UPDATE sessions SET schema_version = 3 WHERE schema_version IS NULL OR schema_version < 3"
+        )
+
         log.info("Migration v2→v3: dynamic learning schema added")
-        
+
     finally:
         conn.close()
 
@@ -190,27 +198,27 @@ def migrate_v2_to_v3(engine: object) -> None:
 def apply_all_migrations(engine) -> list[int]:
     """
     Apply all initial migrations to the event store database.
-    
+
     This is called once at app startup.
-    
+
     Returns:
         list of applied version numbers
     """
     from tektos.migrations.engine import SchemaMigrationEngine
-    
+
     if not isinstance(engine, SchemaMigrationEngine):
         raise TypeError(f"Expected SchemaMigrationEngine, got {type(engine)}")
-    
+
     # Register migrations
     @engine.register_migration(2, "self_improvement_schema", reversible=True)
     def _migration_2(engine_obj):
         migrate_v1_to_v2(engine_obj)
-    
+
     @engine.register_migration(3, "dynamic_learning_schema", reversible=True)
     def _migration_3(engine_obj):
         migrate_v2_to_v3(engine_obj)
-    
+
     # Apply pending migrations
     applied = engine.apply_migrations()
-    
+
     return applied

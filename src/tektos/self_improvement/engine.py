@@ -10,15 +10,13 @@ This is the System 4 (VSM intelligence) layer of Tektos.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
-
-from tektos.runtime.hooks import HookManager, HookResult, HookResultCode, HookContext
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +51,7 @@ class ExperienceRecord:
         return json.dumps(self.to_dict())
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ExperienceRecord":
+    def from_dict(cls, data: dict[str, Any]) -> ExperienceRecord:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
@@ -74,10 +72,10 @@ class SelfImprovementAdapter:
 
     def __init__(
         self,
-        experience_db: Optional[str] = None,
-        meta_learning_db: Optional[str] = None,
-        benchmark_dir: Optional[str] = None,
-        skill_dir: Optional[str] = None,
+        experience_db: str | None = None,
+        meta_learning_db: str | None = None,
+        benchmark_dir: str | None = None,
+        skill_dir: str | None = None,
         ws_event_emitter=None,  # Callable to emit events to WebSocket clients
     ) -> None:
         self.experience_db = Path(experience_db or str(Path.home() / ".tektos/experience.jsonl"))
@@ -292,15 +290,13 @@ class SelfImprovementAdapter:
             return []
 
         records: list[ExperienceRecord] = []
-        with open(self.experience_db, "r") as f:
+        with open(self.experience_db) as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-                try:
+                with contextlib.suppress(json.JSONDecodeError, KeyError):
                     records.append(ExperienceRecord.from_dict(json.loads(line)))
-                except (json.JSONDecodeError, KeyError):
-                    continue
         return records[:top_k]
 
     def query_experience(
@@ -382,7 +378,8 @@ class SelfImprovementAdapter:
     ) -> None:
         """Record model performance for meta-learning."""
         import json as _json
-        from datetime import datetime, timezone as _tz
+        from datetime import datetime
+        from datetime import timezone as _tz
 
         meta = {
             "version": "1.0",
@@ -394,10 +391,8 @@ class SelfImprovementAdapter:
         }
 
         if self.meta_learning_db.exists():
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 meta = _json.loads(self.meta_learning_db.read_text())
-            except (json.JSONDecodeError, _json.JSONDecodeError):
-                pass
 
         # Update model performance
         if model not in meta["model_performance"]:

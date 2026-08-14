@@ -55,9 +55,11 @@ log = logging.getLogger(__name__)
 
 # ── Schema Introspection ───────────────────────────────────────────────────
 
+
 @dataclass
 class ColumnInfo:
     """Information about a single column."""
+
     cid: int
     name: str
     col_type: str
@@ -69,6 +71,7 @@ class ColumnInfo:
 @dataclass
 class TableInfo:
     """Information about a single table."""
+
     name: str
     columns: list[ColumnInfo] = field(default_factory=list)
     indexes: list[str] = field(default_factory=list)
@@ -78,6 +81,7 @@ class TableInfo:
 @dataclass
 class SchemaSnapshot:
     """Complete schema snapshot at a point in time."""
+
     version: int
     tables: dict[str, TableInfo] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -85,9 +89,11 @@ class SchemaSnapshot:
 
 # ── Pattern Detection ──────────────────────────────────────────────────────
 
+
 @dataclass
 class FieldPattern:
     """A pattern detected in the data that might warrant schema evolution."""
+
     table: str
     field_name: str
     pattern_type: str  # "missing_column", "repeated_metadata", "enum_growth", etc.
@@ -102,9 +108,11 @@ class FieldPattern:
 
 # ── Schema Proposal ────────────────────────────────────────────────────────
 
+
 @dataclass
 class SchemaProposal:
     """A proposed schema change with metadata for validation."""
+
     reason: str
     action: str  # "add_column", "create_table", "rename_column", etc.
     table: str
@@ -119,7 +127,7 @@ class SchemaProposal:
     rollback_sql: str = ""
     created_at: float = field(default_factory=time.time)
 
-    def validate(self, engine: "SchemaEvolutionEngine") -> bool:
+    def validate(self, engine: SchemaEvolutionEngine) -> bool:
         """Validate the proposal against the current schema."""
         schema = engine.introspect()
 
@@ -128,7 +136,9 @@ class SchemaProposal:
                 self.validation_errors.append(f"Table {self.table} does not exist")
                 return False
             if self.column in [c.name for c in schema.tables[self.table].columns]:
-                self.validation_errors.append(f"Column {self.column} already exists in {self.table}")
+                self.validation_errors.append(
+                    f"Column {self.column} already exists in {self.table}"
+                )
                 return False
 
         elif self.action == "create_table":
@@ -144,6 +154,7 @@ class SchemaProposal:
 
 
 # ── Schema Evolution Engine ────────────────────────────────────────────────
+
 
 class SchemaEvolutionEngine:
     """
@@ -211,9 +222,7 @@ class SchemaEvolutionEngine:
     def _get_schema_version(self, conn: sqlite3.Connection) -> int:
         """Get current schema version."""
         self._ensure_evolution_log(conn)
-        row = conn.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM _schema_evolution_log"
-        ).fetchone()
+        row = conn.execute("SELECT COALESCE(MAX(version), 0) FROM _schema_evolution_log").fetchone()
         return row[0] or 0
 
     def _increment_version(self, conn: sqlite3.Connection) -> int:
@@ -242,7 +251,8 @@ class SchemaEvolutionEngine:
 
             # Get all tables
             table_names = [
-                row[0] for row in conn.execute(
+                row[0]
+                for row in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
                 ).fetchall()
             ]
@@ -251,20 +261,20 @@ class SchemaEvolutionEngine:
                 # Get columns
                 columns = []
                 for col_data in conn.execute(f"PRAGMA table_info({table_name})").fetchall():
-                    columns.append(ColumnInfo(
-                        cid=col_data[0],
-                        name=col_data[1],
-                        col_type=col_data[2] or "",
-                        notnull=bool(col_data[3]),
-                        default_value=col_data[4],
-                        pk=bool(col_data[5]),
-                    ))
+                    columns.append(
+                        ColumnInfo(
+                            cid=col_data[0],
+                            name=col_data[1],
+                            col_type=col_data[2] or "",
+                            notnull=bool(col_data[3]),
+                            default_value=col_data[4],
+                            pk=bool(col_data[5]),
+                        )
+                    )
 
                 # Get indexes
                 indexes = [
-                    row[1] for row in conn.execute(
-                        f"PRAGMA index_list({table_name})"
-                    ).fetchall()
+                    row[1] for row in conn.execute(f"PRAGMA index_list({table_name})").fetchall()
                 ]
 
                 # Get row count
@@ -296,7 +306,13 @@ class SchemaEvolutionEngine:
             "tables": {
                 name: {
                     "columns": [
-                        {"cid": c.cid, "name": c.name, "type": c.col_type, "notnull": c.notnull, "pk": c.pk}
+                        {
+                            "cid": c.cid,
+                            "name": c.name,
+                            "type": c.col_type,
+                            "notnull": c.notnull,
+                            "pk": c.pk,
+                        }
                         for c in info.columns
                     ],
                     "indexes": info.indexes,
@@ -311,12 +327,11 @@ class SchemaEvolutionEngine:
         conn = self._get_conn()
         try:
             rows = conn.execute(f"SELECT * FROM {table_name} LIMIT {limit}").fetchall()
-            columns = [col[1] for col in conn.execute(f"PRAGMA table_info({table_name})").fetchall()]
-
-            return [
-                {col: val for col, val in zip(columns, row)}
-                for row in rows
+            columns = [
+                col[1] for col in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
             ]
+
+            return [{col: val for col, val in zip(columns, row)} for row in rows]
         finally:
             conn.close()
 
@@ -373,7 +388,10 @@ class SchemaEvolutionEngine:
 
             # Current table columns
             current_columns = {
-                col.name for col in self.introspect().tables.get(table_name, TableInfo(name=table_name)).columns
+                col.name
+                for col in self.introspect()
+                .tables.get(table_name, TableInfo(name=table_name))
+                .columns
             }
 
             # Build patterns
@@ -406,18 +424,20 @@ class SchemaEvolutionEngine:
                 else:
                     confidence = 0.3
 
-                patterns.append(FieldPattern(
-                    table=table_name,
-                    field_name=field_name,
-                    pattern_type="repeated_metadata",
-                    evidence_count=stats["count"],
-                    total_records=total,
-                    percentage=percentage,
-                    suggested_column=field_name,
-                    suggested_type=suggested_type,
-                    example_values=stats["values"],
-                    confidence=confidence,
-                ))
+                patterns.append(
+                    FieldPattern(
+                        table=table_name,
+                        field_name=field_name,
+                        pattern_type="repeated_metadata",
+                        evidence_count=stats["count"],
+                        total_records=total,
+                        percentage=percentage,
+                        suggested_column=field_name,
+                        suggested_type=suggested_type,
+                        example_values=stats["values"],
+                        confidence=confidence,
+                    )
+                )
 
             # Sort by confidence (highest first)
             patterns.sort(key=lambda p: p.confidence, reverse=True)
@@ -473,14 +493,18 @@ class SchemaEvolutionEngine:
 
         # Generate SQL based on action
         if action == "add_column":
-            default = f"DEFAULT {kwargs.get('column_default')}" if kwargs.get('column_default') else ""
-            notnull = "NOT NULL" if kwargs.get('column_notnull') else ""
+            default = (
+                f"DEFAULT {kwargs.get('column_default')}" if kwargs.get("column_default") else ""
+            )
+            notnull = "NOT NULL" if kwargs.get("column_notnull") else ""
             proposal.proposed_sql = f"ALTER TABLE {kwargs['table']} ADD COLUMN {kwargs['column']} {kwargs['column_type']} {default} {notnull}".strip()
-            proposal.rollback_sql = f"CREATE TABLE {kwargs['table']}_backup AS SELECT * FROM {kwargs['table']}"
+            proposal.rollback_sql = (
+                f"CREATE TABLE {kwargs['table']}_backup AS SELECT * FROM {kwargs['table']}"
+            )
 
         elif action == "create_table":
             cols = ", ".join(
-                f"{c['name']} {c['type']}" + (f" DEFAULT {c['default']}" if 'default' in c else "")
+                f"{c['name']} {c['type']}" + (f" DEFAULT {c['default']}" if "default" in c else "")
                 for c in kwargs.get("new_table_columns", [])
             )
             proposal.new_table_name = kwargs.get("table")
@@ -512,7 +536,7 @@ class SchemaEvolutionEngine:
 
             # Log migration
             conn.execute(
-                "INSERT INTO _schema_evolution_log (version, action, \"table\", column, proposed_sql, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                'INSERT INTO _schema_evolution_log (version, action, "table", column, proposed_sql, created_at) VALUES (?, ?, ?, ?, ?, ?)',
                 (
                     self._get_schema_version(conn),
                     proposal.action,
@@ -523,7 +547,9 @@ class SchemaEvolutionEngine:
                 ),
             )
 
-            log.info("Schema proposal applied: %s → v%d", proposal.reason, self._get_schema_version(conn))
+            log.info(
+                "Schema proposal applied: %s → v%d", proposal.reason, self._get_schema_version(conn)
+            )
             return True
 
     def apply_migration(self, sql: str, description: str = "") -> bool:
@@ -573,7 +599,7 @@ class SchemaEvolutionEngine:
         try:
             self._ensure_evolution_log(conn)
             rows = conn.execute(
-                "SELECT version, action, \"table\", column, proposed_sql, created_at FROM _schema_evolution_log ORDER BY version ASC"
+                'SELECT version, action, "table", column, proposed_sql, created_at FROM _schema_evolution_log ORDER BY version ASC'
             ).fetchall()
 
             return [
@@ -599,7 +625,7 @@ class SchemaEvolutionEngine:
         if not self._migration_versions:
             return []
 
-        target = max(self._migration_versions.keys())
+        _target = max(self._migration_versions.keys())
         applied: list[int] = []
 
         with self._connect() as conn:
@@ -643,11 +669,13 @@ class SchemaEvolutionEngine:
         self._migration_versions[version] = name
         if fn is not None:
             self._migration_functions[version] = fn
+
         # When used as decorator, fn is the decorated function
         # Return a wrapper so the decorator chain works
         def decorator(f):
             self._migration_functions[version] = f
             return f
+
         return decorator
 
     def get_migration_functions(self) -> dict[int, Any]:

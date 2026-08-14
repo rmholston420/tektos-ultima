@@ -6,9 +6,6 @@ Validates round-trip fidelity, incremental updates, and default templates.
 
 import json
 import tempfile
-from pathlib import Path
-
-import pytest
 
 # Import the actual state manager classes
 from tektos.runtime.state_manager import (
@@ -17,10 +14,10 @@ from tektos.runtime.state_manager import (
     create_default_state,
 )
 
-
 # ---------------------------------------------------------------------------
 # LastKnownState dataclass tests
 # ---------------------------------------------------------------------------
+
 
 class TestLastKnownStateRoundTrip:
     """Test LastKnownState serialization/deserialization round-trips."""
@@ -52,11 +49,11 @@ class TestLastKnownStateRoundTrip:
             memory_context="Session handoff via SESSION_HANDOFF.md",
             referenced_files=["src/tektos/main.py", "tests/test_rest_contract.py"],
         )
-        
+
         # Round-trip through dict
         data = original.to_dict()
         restored = LastKnownState.from_dict(data)
-        
+
         # All fields should match
         assert restored.project == original.project
         assert restored.session_id == original.session_id
@@ -91,10 +88,10 @@ class TestLastKnownStateRoundTrip:
             next_steps=["Run tests", "Commit changes"],
             blockers=["Waiting for API key"],
         )
-        
+
         # Serialize to markdown
         md = original.to_markdown()
-        
+
         # Verify markdown structure
         assert "# LAST_KNOWN_STATE.md" in md
         assert "**Project:** tektos" in md
@@ -117,7 +114,7 @@ class TestLastKnownStateRoundTrip:
             project="minimal",
             timestamp="2026-01-01T00:00:00Z",
         )
-        
+
         md = state.to_markdown()
         assert "# LAST_KNOWN_STATE.md" in md
         assert "**Project:** minimal" in md
@@ -150,7 +147,7 @@ class TestLastKnownStateRoundTrip:
             memory_context="M",
             referenced_files=["f1"],
         )
-        
+
         data = state.to_dict()
         json_str = json.dumps(data)
         parsed = json.loads(json_str)
@@ -161,6 +158,7 @@ class TestLastKnownStateRoundTrip:
 # ---------------------------------------------------------------------------
 # StateManager persistence tests
 # ---------------------------------------------------------------------------
+
 
 class TestStateManagerPersistence:
     """Test StateManager save/load with real file I/O."""
@@ -186,22 +184,22 @@ class TestStateManagerPersistence:
             next_steps=["Run tests", "Commit"],
             blockers=["Waiting for key"],
         )
-        
+
         # Save
         self.state_manager.save_state(state)
-        
+
         # Verify file was written
         assert self.state_manager.state_file.exists()
         md = self.state_manager.state_file.read_text()
         assert "Build feature X" in md
-        
+
         # Load (new StateManager instance simulates fresh session)
         fresh_sm = StateManager(
             project="tektos-test",
             workspace=self.tmpdir,
         )
         loaded = fresh_sm.load_state()
-        
+
         # Verify round-trip
         assert loaded.project == "tektos-test"
         assert loaded.objective == "Build feature X"
@@ -218,7 +216,7 @@ class TestStateManagerPersistence:
             workspace=self.tmpdir,
         )
         loaded = fresh_sm.load_state()
-        
+
         assert loaded.project == "tektos-test"
         assert loaded.objective == ""
         assert loaded.progress == ""
@@ -235,14 +233,14 @@ class TestStateManagerPersistence:
             next_steps=["Step 1"],
         )
         self.state_manager.save_state(state)
-        
+
         # Incrementally update
         updated = self.state_manager.update_state(
             objective="Updated objective",
             progress="50% done",
             next_steps=["Step 2", "Step 3"],
         )
-        
+
         # Verify update
         assert updated.objective == "Updated objective"
         assert updated.progress == "50% done"
@@ -250,7 +248,7 @@ class TestStateManagerPersistence:
         assert "Step 1" in updated.next_steps
         assert "Step 2" in updated.next_steps
         assert "Step 3" in updated.next_steps
-        
+
         # Verify persistence
         fresh_sm = StateManager(
             project="tektos-test",
@@ -265,13 +263,14 @@ class TestStateManagerPersistence:
 # Default state template tests
 # ---------------------------------------------------------------------------
 
+
 class TestCreateDefaultState:
     """Test create_default_state() template generation."""
 
     def test_default_state_has_required_fields(self):
         """Template should include all required fields."""
         state = create_default_state("my-project")
-        
+
         assert state.project == "my-project"
         assert state.timestamp is not None
         assert state.objective == "Initialize project"
@@ -280,7 +279,7 @@ class TestCreateDefaultState:
     def test_default_state_has_next_steps(self):
         """Template should include default next steps."""
         state = create_default_state("my-project")
-        
+
         assert len(state.next_steps) == 3
         assert "Initialize git repository" in state.next_steps
         assert "Create project structure" in state.next_steps
@@ -289,7 +288,7 @@ class TestCreateDefaultState:
     def test_default_state_has_empty_lists(self):
         """Template should have empty collections for optional fields."""
         state = create_default_state("my-project")
-        
+
         assert state.key_decisions == []
         assert state.constraints == []
         assert state.exact_commands == []
@@ -305,6 +304,7 @@ class TestCreateDefaultState:
 # Integration: full workflow
 # ---------------------------------------------------------------------------
 
+
 class TestFullWorkflow:
     """Test complete state workflow: create → save → load → update → re-load."""
 
@@ -312,18 +312,18 @@ class TestFullWorkflow:
         """End-to-end: simulate a session's state lifecycle."""
         with tempfile.TemporaryDirectory() as tmpdir:
             sm = StateManager(project="workflow-test", workspace=tmpdir)
-            
+
             # 1. Session starts: create default state
             state = create_default_state("workflow-test")
             state.session_id = "sess-001"
             sm.save_state(state)
-            
+
             # 2. Verify initial state persisted
             loaded = sm.load_state()
             assert loaded.project == "workflow-test"
             assert loaded.session_id == "sess-001"
             assert loaded.objective == "Initialize project"
-            
+
             # 3. During work: incrementally update
             updated = sm.update_state(
                 objective="Building REST API",
@@ -334,12 +334,12 @@ class TestFullWorkflow:
                 key_decisions=["Use FastAPI TestClient for testing"],
                 blockers=[],
             )
-            
+
             # 4. Verify updates persisted
             sm.save_state(updated)
             fresh_sm = StateManager(project="workflow-test", workspace=tmpdir)
             reloaded = fresh_sm.load_state()
-            
+
             assert reloaded.objective == "Building REST API"
             assert reloaded.progress == "40% complete"
             assert reloaded.completion_pct == 40.0
@@ -347,7 +347,7 @@ class TestFullWorkflow:
             assert "Implement health check" in reloaded.next_steps
             assert "Implement session CRUD" in reloaded.next_steps
             assert reloaded.key_decisions == ["Use FastAPI TestClient for testing"]
-            
+
             # 5. Session ends: save final state
             final = sm.update_state(
                 objective="REST API complete",
@@ -356,18 +356,22 @@ class TestFullWorkflow:
                 next_steps=["Run full test suite", "Commit changes"],
             )
             sm.save_state(final)
-            
+
             # 6. New session resumes from saved state
             new_sm = StateManager(project="workflow-test", workspace=tmpdir)
             resumed = new_sm.load_state()
-            
+
             assert resumed.objective == "REST API complete"
             assert resumed.completion_pct == 100.0
             assert "Run full test suite" in resumed.next_steps
             assert "Commit changes" in resumed.next_steps
-            
+
             # 7. Verify markdown file is human-readable
-            md = fresh_sm.state_manager.state_file.read_text() if hasattr(fresh_sm, 'state_manager') else sm.state_file.read_text()
+            md = (
+                fresh_sm.state_manager.state_file.read_text()
+                if hasattr(fresh_sm, "state_manager")
+                else sm.state_file.read_text()
+            )
             assert "# LAST_KNOWN_STATE.md" in md
             assert "REST API complete" in md
 
