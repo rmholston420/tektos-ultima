@@ -3,8 +3,19 @@
 ## ADR-001: SQLite for Event Store
 - **Status**: Accepted
 - **Date**: 2026-08-13
-- **Context**: Need append-only event store for session transcript persistence
+- **Context**: Need append-only event store for session transcript persistence. Must be free, OSS, Linux-compatible, no external dependencies.
 - **Decision**: Use SQLite with FTS5 for full-text search. Local file, no external deps, ACID compliant.
+- **Rationale**:
+  - **Zero infrastructure** — no server process, no network, no config. Perfect for local-first agent.
+  - **Fully ACID compliant** — every write is atomic, crash-safe. Critical for event store integrity.
+  - **FTS5 built-in** — full-text search on session transcripts without any external search engine.
+  - **Free & OSS** — public domain, no licensing, no commercial restrictions.
+  - **Linux-compatible** — default on every Linux distro, runs on ARM/x86/PPC.
+  - **Widely battle-tested** — used by Chrome, Firefox, Android, macOS, billions of installations.
+- **Alternatives considered**:
+  - **PostgreSQL**: Overkill. Requires running server, network stack, user management. Only needed for multi-user concurrent access or distributed replication — neither applies here.
+  - **DuckDB**: Columnar analytics database. Great for data science, wrong tool for transactional event logging.
+  - **LevelDB/RocksDB**: Key-value only, no SQL, no FTS. Loses query flexibility.
 - **Consequences**: Limited concurrent writes; acceptable for single-user agent. Schema migrations needed for future upgrades.
 
 ## ADR-002: FastAPI for Backend
