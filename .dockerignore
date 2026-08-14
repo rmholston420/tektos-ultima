@@ -1,0 +1,87 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / Frontend ──
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Git ──
+.git/
+.gitignore
+
+# ── Tests ──
+tests/
+test_*.py
+
+# ── Docs ──
+docs/
+*.md
+!Dockerfile
+
+# ── Sandbox ──
+sandbox_*
+sandbox*/
+
+# ── Environment ──
+.env
+.env.*
+!.env.example
+
+# ── Data ──
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# ── Docker ──
+docker-compose.override.yml
+docker-compose.dev.yml
+*.tar
+*.tar.gz
+
+# ── Misc ──
+*.log
+*.json
+!.gitignore
+!Dockerfile
+!docker-compose.yml
+!pyproject.toml

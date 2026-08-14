@@ -1,22 +1,121 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Tektos Docker Compose — Production & Development
+# ──────────────────────────────────────────────────────────────────────────────
+
 version: '3.8'
 
 services:
+  # ── Tektos Backend ────────────────────────────────────────────────────────
   tektos-backend:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - BUILD_DATE=${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+        - VCS_REF=${BUILD_VCS:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")}
+    container_name: tektos-backend
+    restart: unless-stopped
     ports:
-      - "8020:8020"
+      - "${TEKTOS_PORT:-8020}:8020"
+      - "${DEBUGGER_PORT:-5555}:5555"
     environment:
-      - BACKEND_URL=http://localhost:8020
+      - BACKEND_URL=${TEKTOS_URL:-http://localhost:8020}
       - DB_PATH=/data/events.db
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - EMAIL_ENABLED=${EMAIL_ENABLED:-false}
+      - GOOGLE_APPLICATION_CREDENTIALS_JSON=${GOOGLE_APPLICATION_CREDENTIALS_JSON:-}
     volumes:
       - tektos-data:/data
+      - tektos-logs:/app/logs
+    depends_on:
+      - tektos-db
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8020/api/sessions"]
       interval: 30s
       timeout: 10s
+      start_period: 15s
       retries: 3
+    networks:
+      - tektos-network
+    deploy:
+      resources:
+        limits:
+          cpus: '${TEKTOS_CPU_LIMIT:-4.0}'
+          memory: '${TEKTOS_MEMORY_LIMIT:-8G}'
+        reservations:
+          cpus: '${TEKTOS_CPU_RESERVE:-0.5}'
+          memory: '${TEKTOS_MEMORY_RESERVE:-1G}'
+
+  # ── PostgreSQL (Event Store) ──────────────────────────────────────────────
+  tektos-db:
+    image: postgres:16-alpine
+    container_name: tektos-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-tektos}
+      - POSTGRES_USER=${POSTGRES_USER:-tektos}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tektos_secure_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tektos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tektos-network
+
+  # ── Redis (Sensory/Working Memory) ────────────────────────────────────────
+  tektos-redis:
+    image: redis:7-alpine
+    container_name: tektos-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tektos-network
+
+  # ── Development: Auto-save Cron ───────────────────────────────────────────
+  tektos-cron:
+    image: curlimages/curl:latest
+    container_name: tektos-cron
+    restart: unless-stopped
+    command: >
+      /bin/sh -c '
+        while true; do
+          curl -s -X POST "${TEKTOS_URL:-http://tektos-backend:8020}/api/state/cron/save" \
+            -H "Content-Type: application/json" \
+            -d "{\"session_id\": "cron-auto-save", "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}"
+          sleep 900
+        done
+      '
+    environment:
+      - TEKTOS_URL=http://tektos-backend:8020
+    depends_on:
+      - tektos-backend
+    networks:
+      - tektos-network
 
 volumes:
   tektos-data:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  tektos-logs:
+    driver: local
+
+networks:
+  tektos-network:
+    driver: bridge
