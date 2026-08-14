@@ -19,6 +19,7 @@ import asyncio as _asyncio
 import json as _json
 import logging as _log
 import os as _os
+import time as _time
 from contextlib import asynccontextmanager as _asynccontextmanager
 from datetime import datetime as _datetime
 from datetime import timezone as _timezone
@@ -640,12 +641,12 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
         return
 
     # Add WS connection
-    connected = await session_manager.add_ws_connection(session_id, websocket)
-    if not connected:
-        await websocket.close(code=4003, reason="Session unavailable")
-        return
+    await session_manager.add_ws_connection(session_id, websocket)
 
     try:
+        # Accept the WebSocket connection FIRST
+        await websocket.accept()
+
         # Send session.ready (first message after connect)
         await websocket.send_text(session_ready(session_id, since_seq=0).to_json())
 
@@ -733,7 +734,7 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
             elif msg_type == "ping":
                 await websocket.send_text(_json.dumps({
                     "type": "pong",
-                    "timestamp": _os.get_clock(),
+                    "timestamp": _time.time(),
                     "protocol_version": PROTOCOL_VERSION,
                 }))
 

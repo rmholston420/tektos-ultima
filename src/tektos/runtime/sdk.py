@@ -28,10 +28,10 @@ from tektos.protocol.envelope import (
     assistant_delta,
     session_failed,
     tool_completed,
-    tool_delta,
     tool_permission_required,
     tool_started,
 )
+from tektos.providers.sandbox_provider import SandboxProvider
 from tektos.runtime.session import LiveSession
 from tektos.store.event_store import append_event
 
@@ -40,6 +40,113 @@ log = _log.getLogger("tektos.runtime")
 # LLM endpoint configuration — configurable via environment
 LLM_BASE_URL = "http://127.0.0.1:8081/v1"
 LLM_MODEL = "qwen3.6-35b-a3b-ud-q4_k_xl"
+
+# Tool definitions for function calling
+TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute a shell command",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The shell command to execute"}
+                },
+                "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_read",
+            "description": "Read file content",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to read"}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_write",
+            "description": "Write content to a file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to write"},
+                    "content": {"type": "string", "description": "Content to write"},
+                    "mode": {"type": "string", "description": "Write mode: 'write' or 'append'", "enum": ["write", "append"]}
+                },
+                "required": ["path", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_delete",
+            "description": "Delete a file or directory",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File or directory path to delete"}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "directory_list",
+            "description": "List directory contents",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path to list"}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "directory_create",
+            "description": "Create directory (and parents)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path to create"}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "description": "Search file contents (grep-like)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "path": {"type": "string", "description": "Path to search"},
+                    "case_sensitive": {"type": "boolean", "description": "Case sensitive search", "default": False},
+                    "max_results": {"type": "integer", "description": "Max results", "default": 50}
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +209,7 @@ class RuntimeSDK:
         self._llm_model = llm_model
         self._client: httpx.AsyncClient | None = None
         self._lock = _asyncio.Lock()
+        self._sandbox = SandboxProvider()
 
     async def start(self) -> None:
         """Create the httpx client."""
@@ -198,15 +306,19 @@ class RuntimeSDK:
         messages.append({"role": "user", "content": prompt})
 
         try:
+            payload = {
+                "model": self._llm_model,
+                "messages": messages,
+                "stream": True,
+                "temperature": 0.7,
+                "max_tokens": 4096,
+            }
+            # Enable function calling with available tools
+            if TOOLS_SCHEMA:
+                payload["tools"] = TOOLS_SCHEMA
             resp = await self._client.post(
                 "/chat/completions",
-                json={
-                    "model": self._llm_model,
-                    "messages": messages,
-                    "stream": True,
-                    "temperature": 0.7,
-                    "max_tokens": 4096,
-                },
+                json=payload,
                 headers={"Content-Type": "application/json"},
             )
             resp.raise_for_status()
@@ -247,7 +359,8 @@ class RuntimeSDK:
                 # Handle tool calls
                 for tc in tool_calls:
                     _tc_idx = tc.get("index", 0)
-                    tc_id = tc.get("id", str(_uuid.uuid4()))
+                    # llama.cpp only sends ID on first chunk; reuse current_tool_id if empty
+                    tc_id = tc.get("id") or current_tool_id or str(_uuid.uuid4())
                     _tc_type = tc.get("type", "function")
                     tc_func = tc.get("function", {})
                     tc_func_name = tc_func.get("name", "")
@@ -257,17 +370,19 @@ class RuntimeSDK:
                         # Start of new tool call
                         current_tool_name = tc_func_name
                         current_tool_id = tc_id
-                        current_tool_json = tc_func_args
+                        current_tool_json = ""  # Start fresh; all fragments accumulate from here
+                        log.info(f"[TOOL CALL] Start: name={tc_func_name} id={tc_id[:8]}")
                         await on_event(tool_started(session.id, tc_id, tc_func_name, {}))
 
                     if tc_func_args:
+                        # llama.cpp streams JSON arguments as fragments - accumulate
                         current_tool_json += tc_func_args
-                        await on_event(tool_delta(session.id, tc_id, tc_func_args))
 
-                # Check if this is the last chunk (stop_reason present)
-                finish_reason = choices[0].get("finish_reason")
+                # Check if this is the last chunk
+                # llama.cpp puts finish_reason at choices[0], delta may have stop_reason
+                finish_reason = choices[0].get("finish_reason") or delta.get("finish_reason")
                 stop_reason = delta.get("stop_reason")
-                is_last = finish_reason == "stop" or stop_reason == "end_turn"
+                is_last = finish_reason in ("stop", "tool_calls") or stop_reason == "end_turn"
 
                 if is_last:
                     # Parse and execute tool if present
@@ -338,27 +453,14 @@ class RuntimeSDK:
         completed_tools.add(tool_id)
 
     async def _execute_tool(self, tool_name: str, tool_input: dict[str, Any]) -> str:
-        """Execute a tool. Currently a stub — will be replaced by SandboxProvider."""
-        if tool_name == "bash":
-            command = tool_input.get("command", "")
-            log.info(f"[TOOL: bash] {command[:100]}")
-            return f"Executed: {command}"
-        elif tool_name == "file_edit":
-            path = tool_input.get("path", "")
-            content = tool_input.get("content", "")
-            log.info(f"[TOOL: file_edit] {path}: {len(content)} bytes")
-            return f"Edited: {path}"
-        elif tool_name == "file_read":
-            path = tool_input.get("path", "")
-            log.info(f"[TOOL: file_read] {path}")
-            return f"Read: {path}"
-        elif tool_name == "search":
-            query = tool_input.get("query", "")
-            log.info(f"[TOOL: search] {query}")
-            return f"Searched: {query}"
-        else:
-            log.warning(f"[UNKNOWN TOOL] {tool_name}")
-            return f"Unknown tool: {tool_name}"
+        """Execute a tool via the SandboxProvider."""
+        try:
+            result = self._sandbox.execute(tool_name, tool_input)
+            log.info(f"[TOOK] {tool_name} → {len(str(result))} chars")
+            return result
+        except Exception as exc:
+            log.error(f"[TOOL ERROR] {tool_name}: {exc}", exc_info=True)
+            raise RuntimeError(f"Tool execution failed: {exc}")
 
     async def _check_resources(self, session: LiveSession) -> None:
         """Check GPU temp, disk, VRAM and emit warnings if needed."""
