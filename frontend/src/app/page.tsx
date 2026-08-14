@@ -84,7 +84,20 @@ export default function App() {
 
   useEffect(() => {
     protocolClient.onStateChange((state) => setConnectionState(state.state));
-    return () => { protocolClient.disconnect(); };
+    
+    // Check REST API health on mount — WS can't connect until a session exists,
+    // but the REST API being up means the backend is alive and ready.
+    // Use absolute URL since Next.js doesn't proxy /health to the backend.
+    let cancelled = false;
+    fetch('http://localhost:8020/health', { cache: 'no-store' })
+      .then((r) => {
+        if (cancelled) return;
+        if (r.ok) setConnectionState('connected');
+        else setConnectionState('disconnected');
+      })
+      .catch(() => setConnectionState('disconnected'));
+    
+    return () => { cancelled = true; protocolClient.disconnect(); };
   }, [protocolClient]);
 
   // -------------------------------------------------------------------
