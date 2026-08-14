@@ -192,21 +192,64 @@ class LastKnownState:
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         
-        # Extract objective
+        # Extract session_id from header
+        import re
+        session_match = re.search(r"\*\*Session:\*\*\s+(\S+)", md)
+        if session_match:
+            state.session_id = session_match.group(1)
+        
+        # Extract objective (only the first line, not progress/completion)
         if "## Objective" in md:
-            obj_section = md.split("## Objective")[1].split("##")[0]
-            state.objective = obj_section.strip()
+            obj_section = md.split("## Objective")[1]
+            obj_lines = obj_section.split("##")[0].strip().split("\n")
+            # First non-empty line is the objective
+            for line in obj_lines:
+                if line.strip() and not line.strip().startswith("**"):
+                    state.objective = line.strip()
+                    break
+        
+        # Extract progress
+        progress_match = re.search(r"\*\*Progress:\*\*\s+(.*)", md)
+        if progress_match:
+            state.progress = progress_match.group(1).strip()
+        
+        # Extract completion_pct
+        pct_match = re.search(r"\*\*Completion:\*\*\s+(\d+\.?\d*)%", md)
+        if pct_match:
+            state.completion_pct = float(pct_match.group(1))
         
         # Extract current file
         if "Current File:" in md:
-            state.current_file = md.split("Current File:")[1].split("`")[1]
+            file_match = re.search(r"\*\*Current File:\*\*\s+\`(.+?)\`", md)
+            if file_match:
+                state.current_file = file_match.group(1)
+        
+        # Extract blockers
+        if "## Blockers" in md:
+            blocker_section = md.split("## Blockers")[1].split("##")[0]
+            for line in blocker_section.strip().split("\n"):
+                line = line.strip().lstrip("- \U0001f6ab ").strip()
+                if line:
+                    state.blockers.append(line)
+        
+        # Extract key decisions
+        if "## Key Decisions" in md:
+            decisions_section = md.split("## Key Decisions")[1].split("##")[0]
+            for line in decisions_section.strip().split("\n"):
+                # Lines like "1. Decision text"
+                match = re.match(r"\d+\.\s+(.+)", line.strip())
+                if match:
+                    state.key_decisions.append(match.group(1))
         
         # Extract next steps
         if "## Next Steps" in md:
             steps_section = md.split("## Next Steps")[1].split("##")[0]
             for line in steps_section.strip().split("\n"):
-                if line.strip().startswith(("-", "*")):
-                    state.next_steps.append(line.strip("- *").strip())
+                line = line.strip()
+                # Lines like "1. Step text" or "- Step text"
+                match = re.match(r"(?:\d+\.|-|\*)\s+(.+)", line)
+                if match:
+                    state.next_steps.append(match.group(1))
         
         return state
     
@@ -263,7 +306,11 @@ class StateManager:
         self._save_to_hindsight(state)
     
     def update_state(self, **kwargs) -> LastKnownState:
-        """Incrementally update state fields."""
+        """Incrementally update state fields.
+        
+        For list fields, appends new items (duplicates are not filtered).
+        For scalar fields, replaces the value.
+        """
         state = self.load_state()
         
         for key, value in kwargs.items():
@@ -271,6 +318,8 @@ class StateManager:
                 current = getattr(state, key)
                 if isinstance(current, list) and isinstance(value, list):
                     current.extend(value)
+                elif isinstance(current, dict) and isinstance(value, dict):
+                    current.update(value)
                 else:
                     setattr(state, key, value)
         
