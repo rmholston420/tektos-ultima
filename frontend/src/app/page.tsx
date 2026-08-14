@@ -1,10 +1,11 @@
 /**
  * Tektos-Ultima v1 — Main Layout Shell
  *
- * Full app layout: Sidebar + content area with theme management.
- * Three themes: Abyss (dark), Temple (Tibetan), Clarity (minimalist).
- * Organic, biological design with flowing gradients and breathing animations.
- * Dashboard with biological system graph, telemetry, and all management panels.
+ * Redesigned for workflow-centered UX:
+ * 1. Think → Type → Agent Works → Review → Iterate
+ * 2. Context is king — session management stays out of the way
+ * 3. Dashboard is secondary — chat is primary
+ * 4. Fluid, responsive, and accessible
  */
 
 "use client";
@@ -73,6 +74,7 @@ export default function App() {
   const [connectionState, setConnectionState] = useState<"disconnected" | "connecting" | "connected" | "reconnecting">("disconnected");
   const [activePage, setActivePage] = useState<PageType>("chat");
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+  const [showWelcome, setShowWelcome] = useState(true);
 
   const streamBuffer = useRef("");
 
@@ -133,6 +135,7 @@ export default function App() {
       if (event.type === "created") {
         setActiveSession(event.session);
         protocolClient.setSessionId(event.session.id);
+        setShowWelcome(false);
       }
     });
 
@@ -150,6 +153,7 @@ export default function App() {
         setActiveSession(null);
         setTranscriptEvents([]);
         protocolClient.setSessionId("");
+        setShowWelcome(true);
       }
     });
   }, [sessionStore, protocolClient, activeSession]);
@@ -189,6 +193,7 @@ export default function App() {
         if (session) {
           setActiveSession(session);
           protocolClient.setSessionId(sessionId);
+          setShowWelcome(false);
           fetch(`/api/sessions/${sessionId}/events`)
             .then((res) => res.json())
             .then((data) => {
@@ -217,6 +222,7 @@ export default function App() {
       setActiveSession(session);
       protocolClient.setSessionId(session.id);
       protocolClient.connect();
+      setShowWelcome(false);
     });
   }, [sessionStore, protocolClient]);
 
@@ -290,7 +296,7 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-1 bg-bg-3 rounded-lg p-0.5">
-              <button onClick={() => { setActivePage("chat"); }}
+              <button onClick={() => { setActivePage("chat"); setShowWelcome(false); }}
                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
                   activePage === "chat" ? "bg-accent text-white shadow-sm" : "text-text-muted hover:text-text-primary"
                 }`}>Chat</button>
@@ -304,23 +310,64 @@ export default function App() {
 
         {activePage === "chat" ? (
           <>
-            <Transcript
-              activeSession={activeSession}
-              events={transcriptEvents}
-              streamingContent={streamingContent}
-              isStreaming={isStreaming}
-              onSendMessage={handleSendMessage}
-              onInterrupt={handleInterrupt}
-            />
-            <Composer
-              isActive={!!activeSession}
-              isStreaming={isStreaming}
-              sessionId={activeSession?.id}
-              model={activeSession?.model}
-              onSendMessage={handleSendMessage}
-              onInterrupt={handleInterrupt}
-              onAttach={handleAttachFiles}
-            />
+            {showWelcome || !activeSession ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center max-w-lg px-6">
+                  <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-surface border border-border flex items-center justify-center animate-float">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                    </svg>
+                  </div>
+                  <h2 className="text-2xl font-semibold text-text-primary mb-3">Welcome to Tektos</h2>
+                  <p className="text-sm text-text-muted leading-relaxed mb-6">
+                    Your AI-powered coding agent is ready. Create a session to begin building, debugging, or exploring.
+                  </p>
+                  <button
+                    onClick={handleCreateSession}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-accent text-white rounded-xl font-medium hover:bg-accent-hover shadow-lg shadow-accent/20 transition-all hover:scale-105"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                    New Session
+                  </button>
+                  <div className="mt-8 grid grid-cols-3 gap-4 text-center">
+                    <div className="p-4 rounded-xl bg-surface border border-border">
+                      <div className="text-2xl mb-2">⚡</div>
+                      <div className="text-xs font-medium text-text-primary">Local LLM</div>
+                    </div>
+                    <div className="p-4 rounded-xl bg-surface border border-border">
+                      <div className="text-2xl mb-2">🔒</div>
+                      <div className="text-xs font-medium text-text-primary">100% Private</div>
+                    </div>
+                    <div className="p-4 rounded-xl bg-surface border border-border">
+                      <div className="text-2xl mb-2">🧠</div>
+                      <div className="text-xs font-medium text-text-primary">Self-Improving</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                <Transcript
+                  activeSession={activeSession}
+                  events={transcriptEvents}
+                  streamingContent={streamingContent}
+                  isStreaming={isStreaming}
+                  onSendMessage={handleSendMessage}
+                  onInterrupt={handleInterrupt}
+                />
+                <Composer
+                  isActive={!!activeSession}
+                  isStreaming={isStreaming}
+                  sessionId={activeSession?.id}
+                  model={activeSession?.model}
+                  onSendMessage={handleSendMessage}
+                  onInterrupt={handleInterrupt}
+                  onAttach={handleAttachFiles}
+                />
+              </>
+            )}
           </>
         ) : (
           /* ───────── Dashboard ───────── */

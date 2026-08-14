@@ -1,7 +1,6 @@
 /* ============================================================
    Tektos-Ultima v1 — Global Styles & Theme System
-   Organic, biological design language with flowing gradients.
-   Three themes: Abyss (dark), Temple (Tibetan), Clarity (Perplexity).
+   Redesigned: Workflow-centered, information-rich, organic.
    ============================================================ */
 
 @import "tailwindcss";
@@ -9,7 +8,6 @@
 /* ─── Design Tokens ─────────────────────────────────────────── */
 
 @theme {
-  /* Font families */
   --font-family-mono: "JetBrains Mono", "Fira Code", monospace;
   --font-family-sans: "Inter", system-ui, -apple-system, sans-serif;
 
@@ -19,6 +17,10 @@
   --animate-pulse-glow: pulseGlow 3s ease-in-out infinite;
   --animate-float: float 6s ease-in-out infinite;
   --animate-ripple: ripple 3s ease-out infinite;
+  --animate-slide-up: slideUp 0.3s ease-out;
+  --animate-fade-in: fadeIn 0.3s ease-out;
+  --animate-pulse-slow: pulse 3s ease-in-out infinite;
+  --animate-spin-slow: spin 3s linear infinite;
 }
 
 @keyframes breathe {
@@ -46,10 +48,19 @@
   100% { transform: scale(2.5); opacity: 0; }
 }
 
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* ─── Abyss Theme (Default Dark) ───────────────────────────── */
 
 :root {
-  /* Deep space palette — living darkness, not flat black */
   --bg-1: #06080d;
   --bg-2: #0b0f18;
   --bg-3: #111620;
@@ -84,13 +95,11 @@
   --status-info: #8b5cf6;
   --status-info-bg: rgba(139, 92, 246, 0.12);
 
-  /* Gradients */
   --gradient-bg: linear-gradient(135deg, #06080d 0%, #0b1020 50%, #0a0e17 100%);
   --gradient-surface: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, transparent 100%);
   --gradient-accent: linear-gradient(135deg, #3d7aff 0%, #6366f1 100%);
   --gradient-flow: linear-gradient(90deg, #3d7aff, #6366f1, #8b5cf6, #3d7aff);
 
-  /* Shadows — soft, layered, atmospheric */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
@@ -145,7 +154,7 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.7);
 }
 
-/* ─── Clarity Theme (Perplexity-like Minimalist) ───────────── */
+/* ─── Clarity Theme (Minimalist) ───────────────────────────── */
 
 [data-theme="clarity"] {
   --bg-1: #fafafa;
@@ -216,7 +225,6 @@
     overflow: hidden;
   }
 
-  /* Organic background texture */
   body::before {
     content: '';
     position: fixed;
@@ -229,7 +237,6 @@
     animation: breathe 8s ease-in-out infinite;
   }
 
-  /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
@@ -238,19 +245,16 @@
   }
   ::-webkit-scrollbar-thumb:hover { background: var(--border-active); }
 
-  /* Selection */
   ::selection {
     background: var(--accent-glow);
     color: var(--text-primary);
   }
 
-  /* Focus */
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
-  /* Code */
   code, pre code {
     font-family: var(--font-family-mono);
     background: var(--surface);
@@ -266,7 +270,6 @@
     border-radius: 0.75rem;
   }
 
-  /* Links */
   a {
     color: var(--text-accent);
     text-decoration-thickness: 1px;
@@ -275,13 +278,11 @@
   }
   a:hover { color: var(--accent-hover); }
 
-  /* Buttons */
   button {
     transition: all 0.2s ease;
     border-radius: 0.5rem;
   }
 
-  /* Inputs */
   input, textarea, select {
     background: var(--bg-3);
     border: 1px solid var(--border);
@@ -301,7 +302,7 @@
 /* ─── Component Styles ──────────────────────────────────────── */
 
 @layer components {
-  /* ── Glass Panel — living, breathing card ── */
+  /* ── Glass Panel ── */
   .panel {
     background: var(--surface-glass);
     backdrop-filter: blur(20px);
@@ -400,27 +401,147 @@
     border-radius: 1rem 1rem 1rem 0.25rem;
   }
 
-  /* ── Composer ── */
-  .composer {
-    border-top: 1px solid var(--border);
-    background: var(--surface-glass);
-    backdrop-filter: blur(16px);
-    padding: 1rem 1.25rem;
+  /* ── Workflow Indicator ── */
+  .workflow-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+  .workflow-step {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    transition: all 0.3s ease;
+  }
+  .workflow-step.active {
+    background: var(--accent-glow);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .workflow-step.done {
+    color: var(--status-success);
   }
 
-  .composer-input-wrapper {
-    position: relative;
+  /* ── Message Cards ── */
+  .message-card {
+    animation: slideUp 0.3s ease-out;
+  }
+  .message-card-user {
+    background: var(--gradient-accent);
+    color: white;
+    border-radius: 1rem 1rem 0.25rem 1rem;
+  }
+  .message-card-assistant {
+    background: var(--surface-glass);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    border-radius: 1rem 1rem 1rem 0.25rem;
+  }
+  .message-card-system {
+    background: transparent;
+    border: none;
+    padding: 0.5rem 0;
+  }
+
+  /* ── Code Blocks ── */
+  .code-block {
     background: var(--bg-3);
     border: 1px solid var(--border);
-    border-radius: 1rem;
-    transition: all 0.25s ease;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    margin: 0.75rem 0;
   }
-  .composer-input-wrapper:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-glow);
+  .code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-4);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .code-block-content {
+    padding: 1rem;
+    overflow-x: auto;
+    font-family: var(--font-family-mono);
+    font-size: 0.875rem;
+    line-height: 1.5;
   }
 
-  /* ── Sidebar Items ── */
+  /* ── File Changes ── */
+  .file-change {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    margin: 0.25rem 0;
+    font-size: 0.8125rem;
+  }
+  .file-change-added {
+    border-left: 3px solid var(--status-success);
+  }
+  .file-change-modified {
+    border-left: 3px solid var(--accent);
+  }
+  .file-change-removed {
+    border-left: 3px solid var(--status-error);
+  }
+
+  /* ── Progress Bar ── */
+  .progress-bar {
+    height: 0.25rem;
+    background: var(--bg-4);
+    border-radius: 9999px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--gradient-accent);
+    border-radius: 9999px;
+    transition: width 0.5s ease;
+  }
+
+  /* ── Status Badges ── */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+  .badge-success { background: var(--status-success-bg); color: var(--status-success); }
+  .badge-warning { background: var(--status-warning-bg); color: var(--status-warning); }
+  .badge-error { background: var(--status-error-bg); color: var(--status-error); }
+  .badge-info { background: var(--status-info-bg); color: var(--status-info); }
+
+  /* ── Welcome Screen ── */
+  .welcome-hero {
+    width: 5rem;
+    height: 5rem;
+    border-radius: 1.5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: float 6s ease-in-out infinite;
+  }
+
+  /* ── Sidebar ── */
   .sidebar-item {
     padding: 0.625rem 0.75rem;
     border-radius: 0.625rem;
@@ -438,21 +559,6 @@
     color: var(--text-primary);
     box-shadow: var(--shadow-sm);
   }
-
-  /* ── Status Badges ── */
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.25rem 0.625rem;
-    border-radius: 9999px;
-    font-size: 0.75rem;
-    font-weight: 500;
-  }
-  .badge-success { background: var(--status-success-bg); color: var(--status-success); }
-  .badge-warning { background: var(--status-warning-bg); color: var(--status-warning); }
-  .badge-error { background: var(--status-error-bg); color: var(--status-error); }
-  .badge-info { background: var(--status-info-bg); color: var(--status-info); }
 
   /* ── Theme Selector ── */
   .theme-selector {
@@ -480,23 +586,48 @@
     color: white;
     box-shadow: var(--shadow-sm);
   }
+
+  /* ── Dashboard ── */
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+    gap: 1rem;
+    padding: 1rem;
+  }
+  .dashboard-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    padding: 1.25rem;
+    transition: all 0.3s ease;
+  }
+  .dashboard-card:hover {
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+  }
+
+  /* ── Composer ── */
+  .composer {
+    border-top: 1px solid var(--border);
+    background: var(--surface-glass);
+    backdrop-filter: blur(16px);
+    padding: 1rem 1.25rem;
+  }
+  .composer-input-wrapper {
+    position: relative;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    transition: all 0.25s ease;
+  }
+  .composer-input-wrapper:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+/* ─── Clarity Theme Overrides ───────────────────────────────── */
 
-.animate-fade-in { animation: fadeIn 0.3s ease-out; }
-
-@keyframes pulseGlow {
-  0%, 100% { filter: drop-shadow(0 0 8px var(--accent-glow)); }
-  50% { filter: drop-shadow(0 0 24px var(--accent-glow-lg)); }
-}
-
-.animate-pulse-glow { animation: pulseGlow 3s ease-in-out infinite; }
-
-/* Clarity theme overrides for light mode */
 [data-theme="clarity"] body::before {
   background:
     radial-gradient(ellipse 80% 60% at 20% 30%, rgba(37, 99, 235, 0.04) 0%, transparent 60%),

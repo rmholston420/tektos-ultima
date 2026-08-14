@@ -1,10 +1,13 @@
 /**
- * Tektos-Ultima v1 — Composer
+ * Tektos-Ultima v1 — Composer (Redesigned)
  *
- * Rich input area for sending prompts to the active session.
- * Supports multi-line input, keyboard shortcuts, and streaming state.
- *
- * Exemplar pattern: Controlled input with keyboard shortcuts and state feedback.
+ * Workflow-centered input with:
+ * - Context-aware placeholder text
+ * - Smart keyboard shortcuts display
+ * - Live token/context usage visualization
+ * - File attachment support
+ * - Streaming state feedback
+ * - Minimal, focused design
  */
 
 "use client";
@@ -14,6 +17,7 @@ import {
   PaperAirplaneIcon,
   StopIcon,
   ArrowUpOnSquareIcon,
+  SparklesIcon,
 } from "@heroicons/react/24/outline";
 
 // ---------------------------------------------------------------------------
@@ -60,17 +64,14 @@ export function Composer({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Enter to send (unless Shift+Enter for new line)
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();
       }
-      // Ctrl+D to send
       if ((e.ctrlKey || e.metaKey) && e.key === "d") {
         e.preventDefault();
         handleSubmit();
       }
-      // Ctrl+Shift+M to interrupt
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "M") {
         e.preventDefault();
         onInterrupt();
@@ -90,7 +91,7 @@ export function Composer({
     }
   }, [value]);
 
-  // Elapsed time counter during streaming
+  // Elapsed time counter
   useEffect(() => {
     if (!isStreaming) {
       setElapsedSec(0);
@@ -102,7 +103,6 @@ export function Composer({
     return () => clearInterval(interval);
   }, [isStreaming]);
 
-  // Format elapsed seconds to mm:ss
   const formatElapsed = (sec: number): string => {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
@@ -125,11 +125,15 @@ export function Composer({
     if (files.length > 0 && onAttach) {
       onAttach(files);
     }
-    // Reset input
     e.target.value = "";
   };
 
-  // Metrics display helpers
+  // Metrics
+  const charCount = value.length;
+  const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
+  const estTokenCount = wordCount ? Math.ceil(wordCount * 1.3) : 0;
+  const estContextPct = estTokenCount > 0 ? Math.min((estTokenCount / 128000) * 100, 100) : 0;
+
   const formatTokens = (count: number): string => {
     if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
     return `${count}`;
@@ -147,29 +151,30 @@ export function Composer({
     return "bg-status-error";
   };
 
-  // Calculate live metrics from textarea content
-  const charCount = value.length;
-  const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
-  const estTokenCount = wordCount ? Math.ceil(wordCount * 1.3) : 0;
-  const estContextPct = estTokenCount > 0 ? Math.min((estTokenCount / 128000) * 100, 100) : 0;
-
-  // Show metrics when focused and has content, or when streaming
   const showMetricsUI = isActive && (showMetrics || isStreaming) && (wordCount > 0 || isStreaming);
+
+  // Context-aware placeholder
+  const getPlaceholder = () => {
+    if (!isActive) return "Create a session to start";
+    if (isStreaming) return "AI is responding... Ctrl+Shift+M to interrupt";
+    return "Describe what you want to build...";
+  };
 
   return (
     <div className="composer">
       <div className="max-w-4xl mx-auto">
-        {/* Status indicator */}
+        {/* Streaming indicator */}
         {isStreaming && (
           <div className="flex items-center gap-2 mb-2 px-1">
-            <div className="w-2 h-2 rounded-full bg-status-success animate-pulse" />
-            <span className="text-xs text-text-muted">AI is thinking...</span>
+            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+            <span className="text-xs text-accent font-medium">AI is thinking</span>
+            <span className="text-xs text-text-muted/50">·</span>
+            <span className="text-xs text-text-muted/70">{formatElapsed(elapsedSec)}</span>
           </div>
         )}
 
         {/* Input wrapper */}
         <div className={`composer-input-wrapper ${isFocused ? "shadow-glow" : ""}`}>
-          {/* File attachment */}
           <input
             ref={fileInputRef}
             type="file"
@@ -178,16 +183,15 @@ export function Composer({
             onChange={handleFileChange}
           />
 
-          {/* Placeholder overlay (shown when empty and not focused) */}
+          {/* Placeholder overlay */}
           {!value && !isFocused && (
             <div className="absolute inset-x-4 top-3 pointer-events-none">
-              <p className="text-xs text-text-muted leading-relaxed">
-                Paste or upload a{" "}
-                <span className="text-accent font-medium">spec</span>, describe
-                what you want to{" "}
-                <span className="text-accent font-semibold">build</span>, or
-                select a session to begin
-              </p>
+              <div className="flex items-center gap-3">
+                <SparklesIcon className="w-4 h-4 text-accent/50 flex-shrink-0" />
+                <p className="text-xs text-text-muted/60 leading-relaxed">
+                  {getPlaceholder()}
+                </p>
+              </div>
             </div>
           )}
 
@@ -198,11 +202,7 @@ export function Composer({
             onKeyDown={handleKeyDown}
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
-            placeholder={
-              isStreaming
-                ? "AI is responding... press Ctrl+Shift+M to interrupt"
-                : "Describe what you want to build..."
-            }
+            placeholder={getPlaceholder()}
             disabled={!isActive || (isStreaming && false)}
             rows={Math.min(lineCount, 8)}
             className={`w-full bg-transparent border-none text-text-primary text-sm
@@ -214,7 +214,7 @@ export function Composer({
           {/* Bottom bar */}
           <div className="flex items-center justify-between px-3 py-2 border-t border-text-muted/10">
             <div className="flex items-center gap-2">
-              {/* Attachment button */}
+              {/* File attachment */}
               {onAttach && (
                 <button
                   onClick={handleFileClick}
@@ -228,17 +228,17 @@ export function Composer({
                 </button>
               )}
 
-              {/* Model selector (only when text entered) */}
+              {/* Model selector */}
               {model && wordCount > 0 && (
                 <span className="text-[10px] text-text-muted/60 px-1.5 py-0.5 rounded bg-bg-3/50">
                   {model}
                 </span>
               )}
 
-              {/* Context usage bar (only when text entered) */}
+              {/* Context usage */}
               {isActive && estTokenCount > 0 && (
                 <div className="flex items-center gap-2 ml-1">
-                  <div className="w-12 h-0.5 rounded-full bg-bg-3 overflow-hidden">
+                  <div className="w-16 h-1 rounded-full bg-bg-3 overflow-hidden">
                     <div
                       className={`h-full ${getUsageBarColor(estContextPct)} transition-all duration-200`}
                       style={{ width: `${estContextPct}%` }}
@@ -277,7 +277,7 @@ export function Composer({
                 </div>
               )}
 
-              {/* Send/Interrupt button */}
+              {/* Send/Interrupt */}
               {isStreaming ? (
                 <button
                   onClick={onInterrupt}
@@ -305,16 +305,39 @@ export function Composer({
           </div>
         </div>
 
-        {/* Keyboard hints (only when active, no metrics) */}
+        {/* Keyboard hints */}
         {!showMetricsUI && isActive && (
           <div className="text-center mt-2">
-            <p className="text-[11px] text-text-muted/50">
-              Enter to send · Shift+Enter for newline · Ctrl+D to send
-            </p>
+            <div className="flex items-center justify-center gap-3 text-[11px] text-text-muted/50">
+              <span className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
+                  Enter
+                </kbd>
+                <span>send</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
+                  Shift+Enter
+                </kbd>
+                <span>newline</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
+                  Ctrl+D
+                </kbd>
+                <span>send</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
+                  Ctrl+Shift+M
+                </kbd>
+                <span>stop</span>
+              </span>
+            </div>
           </div>
         )}
 
-        {/* Footer version (always visible) */}
+        {/* Footer */}
         <div className="text-center mt-1">
           <p className="text-[10px] text-text-muted/30">
             Tektos-Ultima v1
