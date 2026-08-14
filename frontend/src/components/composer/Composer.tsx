@@ -19,6 +19,7 @@ import {
   ArrowUpOnSquareIcon,
   SparklesIcon,
 } from "@heroicons/react/24/outline";
+import { ModelPicker } from "./ModelPicker";
 
 // ---------------------------------------------------------------------------
 // Composer component
@@ -33,6 +34,7 @@ interface ComposerProps {
   onSendMessage: (message: string) => void;
   onInterrupt: () => void;
   onAttach?: (files: File[]) => void;
+  onModelChange?: (modelId: string) => void;
 }
 
 export function Composer({
@@ -44,6 +46,7 @@ export function Composer({
   onSendMessage,
   onInterrupt,
   onAttach,
+  onModelChange,
 }: ComposerProps) {
   const [value, setValue] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -271,11 +274,12 @@ export function Composer({
                 </button>
               )}
 
-              {/* Model selector */}
-              {model && (
-                <span className="text-[10px] text-text-muted/60 px-1.5 py-0.5 rounded bg-bg-3/50">
-                  {model}
-                </span>
+              {/* Model picker */}
+              {isActive && onModelChange && model && (
+                <ModelPicker
+                  currentModel={model}
+                  onModelChange={onModelChange}
+                />
               )}
 
               {/* Context usage */}

@@ -226,6 +226,95 @@ async def health_check():
     }
 
 
+@app.get("/api/models")
+async def list_models():
+    """List all available models with their roles and descriptions."""
+    models = [
+        {
+            "id": "qwen3-coder:30b",
+            "name": "qwen3-coder:30b",
+            "role": "coder",
+            "description": "30.5B params. RL-trained on SWE-bench. Fast code generation, file editing, tool use. Best for implementation tasks.",
+            "params": "30.5B",
+            "capabilities": ["tools", "completion"],
+        },
+        {
+            "id": "qwen3.6:35b-a3b-mtp-coder",
+            "name": "qwen3.6:35b-a3b",
+            "role": "coder",
+            "description": "35.5B params. Multi-token prediction optimized for agentic coding. Strongest coding model available.",
+            "params": "35.5B",
+            "capabilities": ["tools", "completion"],
+            "recommended": True,
+        },
+        {
+            "id": "deepseek-r1:32b",
+            "name": "deepseek-r1:32b",
+            "role": "planner",
+            "description": "32.8B params. Deep reasoning model. Best for decomposition, planning, architecture, and chain-of-thought tasks.",
+            "params": "32.8B",
+            "capabilities": ["completion", "thinking"],
+        },
+        {
+            "id": "glm-4.7-flash",
+            "name": "glm-4.7-flash",
+            "role": "planner",
+            "description": "29.9B params. Strong reasoning with tool use. Good balance of speed and depth for planning tasks.",
+            "params": "29.9B",
+            "capabilities": ["tools", "completion", "thinking"],
+        },
+        {
+            "id": "qwen3.6:35b-a3b-mtp-q4_K_M",
+            "name": "qwen3.6:35b-a3b (Q4)",
+            "role": "general",
+            "description": "35.5B params. Balanced generalist with multi-token prediction. Good for diverse tasks.",
+            "params": "35.5B",
+            "capabilities": ["tools", "completion", "thinking"],
+        },
+        {
+            "id": "qwen3.6:35b",
+            "name": "qwen3.6:35b",
+            "role": "general",
+            "description": "36.0B params. Full Qwen 3.6. Vision-capable, tool-use, thinking. Versatile all-rounder.",
+            "params": "36.0B",
+            "capabilities": ["tools", "completion", "thinking"],
+        },
+        {
+            "id": "qwen3.6:27b-coder",
+            "name": "qwen3.6:27b-coder",
+            "role": "vision",
+            "description": "27.8B params. Code-specialized with vision. Read diagrams, screenshots, and code together.",
+            "params": "27.8B",
+            "capabilities": ["tools", "completion", "thinking"],
+        },
+        {
+            "id": "qwen3.5:9b-q8_0",
+            "name": "qwen3.5:9b",
+            "role": "fast",
+            "description": "9.7B params. Fast and responsive. Good for quick tasks, brainstorming, and iterative refinement.",
+            "params": "9.7B",
+            "capabilities": ["tools", "completion", "thinking"],
+        },
+        {
+            "id": "lfm2.5:8b",
+            "name": "lfm2.5:8b",
+            "role": "fast",
+            "description": "8.5B params. High context (256K). Fast responses with deep context retention.",
+            "params": "8.5B",
+            "capabilities": ["tools", "completion", "thinking"],
+        },
+        {
+            "id": "qwen3.5:2b-q8_0",
+            "name": "qwen3.5:2b",
+            "role": "fast",
+            "description": "2.3B params. Lightning fast. Best for simple Q&A and quick tasks.",
+            "params": "2.3B",
+            "capabilities": ["tools", "completion", "thinking"],
+        },
+    ]
+    return models
+
+
 @app.get("/api/sessions")
 async def list_sessions(archived: bool = False):
     """List all sessions (live or archived)."""
@@ -346,17 +435,31 @@ async def interrupt_session(session_id: str):
 
 @app.post("/api/sessions/{session_id}/model")
 async def switch_model(session_id: str, req: ModelRequest):
-    """Switch the model for a session."""
+    """Switch the model for a session. Also updates RuntimeSDK so future prompts use the new model."""
     try:
         session = await session_manager.get_session(session_id)
         if not session:
             raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        old_model = session.model
         session.model = req.model
-        session.updated_at = _os.get_clock()
+        session.updated_at = _time.time()
+        # Update RuntimeSDK so future prompts use the new model
+        runtime_sdk._llm_model = req.model
         await append_event(session_id, "session.updated", {
-            "changes": {"model": req.model},
+            "changes": {"model": req.model, "from": old_model},
         })
-        return {"ok": True, "model": req.model}
+        # Notify all WS clients connected to this session
+        await ws_manager.broadcast_to_session(session_id, _json.dumps({
+            "session_id": session_id,
+            "event_type": "session.model_changed",
+            "payload": {"model": req.model, "old_model": old_model},
+            "seq": 0,
+            "protocol_version": PROTOCOL_VERSION,
+            "timestamp": _datetime.now(_timezone.utc).isoformat(),
+        }))
+        return {"ok": True, "model": req.model, "old_model": old_model}
+    except _HTTPException:
+        raise
     except Exception as exc:
         raise _HTTPException(status_code=500, detail=str(exc))
 

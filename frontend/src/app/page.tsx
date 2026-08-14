@@ -75,6 +75,7 @@ export default function App() {
   const [activePage, setActivePage] = useState<PageType>("chat");
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [showWelcome, setShowWelcome] = useState(true);
+  const [activeModel, setActiveModel] = useState("qwen3.6-35b-a3b-ud-q4_k_xl");
 
   const streamBuffer = useRef("");
 
@@ -263,11 +264,30 @@ export default function App() {
   const handleCreateSession = useCallback(() => {
     sessionStore.createSession().then((session) => {
       setActiveSession(session);
+      setActiveModel(session.model);
       setShowWelcome(false);
       // Note: protocolClient.setSessionId() and connect() are handled by the
       // useEffect that watches activeSession?.id — no duplicate calls here.
     });
   }, [sessionStore]);
+
+  const handleModelChange = useCallback(async (modelId: string) => {
+    if (!activeSession?.id) return;
+    try {
+      const res = await fetch(`/api/sessions/${activeSession.id}/model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: modelId }),
+      });
+      if (!res.ok) throw new Error(`Model switch failed: ${res.status}`);
+      const data = await res.json();
+      setActiveModel(data.model);
+      // Update the active session too
+      setActiveSession(prev => prev ? { ...prev, model: data.model } : prev);
+    } catch (err) {
+      console.error('Failed to switch model:', err);
+    }
+  }, [activeSession]);
 
   // -------------------------------------------------------------------
   // Dashboard tab renderer
@@ -404,11 +424,12 @@ export default function App() {
                   isActive={!!activeSession}
                   isStreaming={isStreaming}
                   sessionId={activeSession?.id}
-                  model={activeSession?.model}
+                  model={activeModel}
                   connectionState={connectionState}
                   onSendMessage={handleSendMessage}
                   onInterrupt={handleInterrupt}
                   onAttach={handleAttachFiles}
+                  onModelChange={handleModelChange}
                 />
               </>
             )}
