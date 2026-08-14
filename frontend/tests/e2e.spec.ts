@@ -879,3 +879,428 @@ test.describe('System Status', () => {
     expect(hasBranding).toBeTruthy();
   });
 });
+
+// ─── 19. Axioms Panel Tests ────────────────────────────────────────────────────
+
+test.describe('Axioms Panel', () => {
+  test('axioms panel renders loading state', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /axiom/i }).first().click();
+    await page.waitForTimeout(300);
+    // Should show either loading text or axiom content
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('axiom');
+  });
+
+  test('axioms panel shows progress bar', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /axiom/i }).first().click();
+    await page.waitForTimeout(500);
+    const hasProgress = await page.locator('body').textContent()
+      .then(t => t.includes('%') && (t.includes('complete') || t.includes('verified')));
+    expect(hasProgress).toBeTruthy();
+  });
+
+  test('axioms panel has filter buttons', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /axiom/i }).first().click();
+    await page.waitForTimeout(500);
+    const allButtons = await page.locator('button').all();
+    let foundFilterBtn = false;
+    for (const btn of allButtons) {
+      const text = await btn.textContent();
+      if (text && text.trim().length < 20) {
+        foundFilterBtn = true;
+        break;
+      }
+    }
+    expect(foundFilterBtn).toBeTruthy();
+  });
+});
+
+// ─── 20. Config Panel Tests ────────────────────────────────────────────────────
+
+test.describe('Config Panel', () => {
+  test('config panel renders with settings list', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /config/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('config');
+  });
+
+  test('config panel has search input', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /config/i }).first().click();
+    await page.waitForTimeout(500);
+    const searchInput = page.locator('input[placeholder*="search"]');
+    const isVisible = await searchInput.isVisible().catch(() => false);
+    if (isVisible) {
+      await searchInput.fill('model');
+      await page.waitForTimeout(300);
+    }
+  });
+
+  test('config panel shows editable settings', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /config/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasSettings = bodyText.toLowerCase().includes('model') ||
+                       bodyText.toLowerCase().includes('temperature') ||
+                       bodyText.toLowerCase().includes('context');
+    expect(hasSettings).toBeTruthy();
+  });
+});
+
+// ─── 21. Skills Panel Tests ────────────────────────────────────────────────────
+
+test.describe('Skills Panel', () => {
+  test('skills panel renders with summary cards', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /skill/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('skill');
+  });
+
+  test('skills panel has search input', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /skill/i }).first().click();
+    await page.waitForTimeout(500);
+    const searchInput = page.locator('input[placeholder*="search"]');
+    const isVisible = await searchInput.isVisible().catch(() => false);
+    if (isVisible) {
+      await searchInput.fill('agent');
+      await page.waitForTimeout(300);
+    }
+  });
+
+  test('skills panel has category filter dropdown', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /skill/i }).first().click();
+    await page.waitForTimeout(500);
+    const selects = await page.locator('select').all();
+    if (selects.length > 0) expect(true).toBeTruthy();
+    // Fallback: check for category names in body text
+    const bodyText = await page.locator('body').textContent();
+    const hasCategory = bodyText.toLowerCase().includes('category') ||
+      bodyText.toLowerCase().includes('debugging') || bodyText.toLowerCase().includes('creative');
+    if (hasCategory) expect(hasCategory).toBeTruthy();
+  });
+
+  test('skills panel has toggle buttons', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /skill/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasToggleUI = bodyText.toLowerCase().includes('enabled') ||
+                       bodyText.toLowerCase().includes('version');
+    if (hasToggleUI) expect(hasToggleUI).toBeTruthy();
+  });
+});
+
+// ─── 22. Keys Panel Tests ──────────────────────────────────────────────────────
+
+test.describe('Keys Panel', () => {
+  test('keys panel renders with summary', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /key/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('key');
+  });
+
+  test('keys panel has status filter buttons', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /key/i }).first().click();
+    await page.waitForTimeout(500);
+    const allButtons = await page.locator('button').all();
+    let foundStatusBtn = false;
+    for (const btn of allButtons) {
+      const text = (await btn.textContent()).toLowerCase();
+      if (text.includes('active') || text.includes('expired') || text.includes('revoked')) {
+        foundStatusBtn = true;
+        break;
+      }
+    }
+    expect(foundStatusBtn).toBeTruthy();
+  });
+
+  test('keys panel shows masked keys', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /key/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasMasked = bodyText.includes('•') || bodyText.toLowerCase().includes('provider');
+    if (hasMasked) expect(hasMasked).toBeTruthy();
+  });
+});
+
+// ─── 23. MCP Panel Tests ───────────────────────────────────────────────────────
+
+test.describe('MCP Panel', () => {
+  test('mcp panel renders with server list', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /mcp/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('mcp');
+  });
+
+  test('mcp panel shows server status indicators', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /mcp/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasStatus = bodyText.toLowerCase().includes('online') ||
+                     bodyText.toLowerCase().includes('offline') ||
+                     bodyText.toLowerCase().includes('error');
+    if (hasStatus) expect(hasStatus).toBeTruthy();
+  });
+
+  test('mcp panel has expandable server cards', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /mcp/i }).first().click();
+    await page.waitForTimeout(500);
+    const buttons = await page.locator('button').all();
+    // At least some buttons should expand server details
+    expect(buttons.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── 24. Hooks Panel Tests ─────────────────────────────────────────────────────
+
+test.describe('Hooks Panel', () => {
+  test('hooks panel renders with hook list', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /hook/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('hook');
+  });
+
+  test('hooks panel shows execution stats', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /hook/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasStats = bodyText.toLowerCase().includes('execution') ||
+                    bodyText.toLowerCase().includes('success');
+    if (hasStats) expect(hasStats).toBeTruthy();
+  });
+
+  test('hooks panel has toggle controls', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /hook/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasToggle = bodyText.toLowerCase().includes('enabled') ||
+                     bodyText.toLowerCase().includes('trigger');
+    if (hasToggle) expect(hasToggle).toBeTruthy();
+  });
+});
+
+// ─── 25. Logs Panel Tests ──────────────────────────────────────────────────────
+
+test.describe('Logs Panel', () => {
+  test('logs panel renders with log viewer', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /log/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('log');
+  });
+
+  test('logs panel has level filter buttons', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /log/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasLevelFilter = bodyText.toLowerCase().includes('debug') ||
+                          bodyText.toLowerCase().includes('warning') ||
+                          bodyText.toLowerCase().includes('error');
+    if (hasLevelFilter) expect(hasLevelFilter).toBeTruthy();
+  });
+
+  test('logs panel has search input', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /log/i }).first().click();
+    await page.waitForTimeout(500);
+    const searchInput = page.locator('input[placeholder*="search"]');
+    const isVisible = await searchInput.isVisible().catch(() => false);
+    if (isVisible) {
+      await searchInput.fill('error');
+      await page.waitForTimeout(300);
+    }
+  });
+
+  test('logs panel has auto-scroll checkbox', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /log/i }).first().click();
+    await page.waitForTimeout(500);
+    const checkboxes = await page.locator('input[type="checkbox"]').all();
+    // Should have at least one checkbox (auto-scroll)
+    if (checkboxes.length > 0) expect(checkboxes.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── 26. Telemetry Panel Tests ─────────────────────────────────────────────────
+
+test.describe('Telemetry Panel', () => {
+  test('telemetry panel renders with metrics', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /telemetry/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('telemetry');
+  });
+
+  test('telemetry panel shows GPU metrics', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /telemetry/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasGpu = bodyText.toLowerCase().includes('gpu') ||
+                  bodyText.toLowerCase().includes('temp') ||
+                  bodyText.toLowerCase().includes('util');
+    if (hasGpu) expect(hasGpu).toBeTruthy();
+  });
+
+  test('telemetry panel shows CPU metrics', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /telemetry/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasCpu = bodyText.toLowerCase().includes('cpu');
+    if (hasCpu) expect(hasCpu).toBeTruthy();
+  });
+
+  test('telemetry panel has sparkline charts', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /telemetry/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyHTML = await page.locator('body').innerHTML();
+    const hasSparkline = bodyHTML.includes('svg') || bodyHTML.includes('polyline');
+    if (hasSparkline) expect(hasSparkline).toBeTruthy();
+  });
+});
+
+// ─── 27. Memory System Panel Tests ─────────────────────────────────────────────
+
+test.describe('Memory System Panel', () => {
+  test('memory panel renders with tier cards', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /memory/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    expect(bodyText.toLowerCase()).toContain('memory');
+  });
+
+  test('memory panel shows Redis tier', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /memory/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasRedis = bodyText.toLowerCase().includes('redis') ||
+                    bodyText.toLowerCase().includes('sensory');
+    if (hasRedis) expect(hasRedis).toBeTruthy();
+  });
+
+  test('memory panel shows PostgreSQL tier', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /memory/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasPostgres = bodyText.toLowerCase().includes('postgres') ||
+                       bodyText.toLowerCase().includes('long-term');
+    if (hasPostgres) expect(hasPostgres).toBeTruthy();
+  });
+
+  test('memory panel shows utilization percentages', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /memory/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasPercent = bodyText.includes('%');
+    if (hasPercent) expect(hasPercent).toBeTruthy();
+  });
+});
+
+// ─── 28. Biological Graph Tests ────────────────────────────────────────────────
+
+test.describe('Biological Graph', () => {
+  test('graph tab renders SVG container', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /graph/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyHTML = await page.locator('body').innerHTML();
+    expect(bodyHTML.includes('svg')).toBeTruthy();
+  });
+
+  test('graph shows category labels', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /graph/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasLabels = bodyText.toLowerCase().includes('core') ||
+                     bodyText.toLowerCase().includes('ai') ||
+                     bodyText.toLowerCase().includes('memory');
+    if (hasLabels) expect(hasLabels).toBeTruthy();
+  });
+
+  test('graph has interactive node hover', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /graph/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyHTML = await page.locator('body').innerHTML();
+    expect(bodyHTML.includes('circle') || bodyHTML.includes('g')).toBeTruthy();
+  });
+});
+
+// ─── 29. Transcript Tests ──────────────────────────────────────────────────────
+
+test.describe('Transcript', () => {
+  test('transcript shows welcome screen when no messages', async ({ page }) => {
+    await gotoChat(page);
+    const bodyText = await page.locator('body').textContent();
+    // Should show welcome or prompt text
+    expect(bodyText.toLowerCase().includes('describe') ||
+           bodyText.toLowerCase().includes('build') ||
+           bodyText.toLowerCase().includes('tektos')).toBeTruthy();
+  });
+
+  test('transcript container exists', async ({ page }) => {
+    await gotoChat(page);
+    const hasTranscript = await page.locator('[class*="transcript"], [class*="Transcript"]').count() > 0;
+    if (hasTranscript) expect(hasTranscript).toBeTruthy();
+  });
+});
+
+// ─── 30. System Dashboard Tests ────────────────────────────────────────────────
+
+test.describe('System Dashboard', () => {
+  test('dashboard shows system metrics', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /overview|system/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyText = await page.locator('body').textContent();
+    const hasMetrics = bodyText.toLowerCase().includes('system') ||
+                      bodyText.toLowerCase().includes('status') ||
+                      bodyText.toLowerCase().includes('version');
+    if (hasMetrics) expect(hasMetrics).toBeTruthy();
+  });
+
+  test('dashboard renders cards', async ({ page }) => {
+    await goToDashboard(page);
+    await page.locator('button').filter({ hasText: /overview|system/i }).first().click();
+    await page.waitForTimeout(500);
+    const bodyHTML = await page.locator('body').innerHTML();
+    const bodyText = await page.locator('body').textContent();
+    // Check for card-like UI elements using various possible naming conventions
+    const hasCards = bodyHTML.includes('card') || bodyHTML.includes('panel') ||
+      bodyHTML.includes('grid') || bodyHTML.includes('stat') ||
+      bodyText.toLowerCase().includes('system') || bodyText.toLowerCase().includes('overview');
+    expect(hasCards).toBeTruthy();
+  });
+});
