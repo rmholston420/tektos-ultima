@@ -294,14 +294,19 @@ class TestSessionEndpoints:
         assert data["id"] == session_id
 
     def test_rename_session_returns_ok(self, client):
-        response = client.post("/api/sessions/test-123/rename", json={"title": "New Title"})
+        response = client.patch("/api/sessions/test-123", json={"title": "New Title"})
+        assert response.status_code == 200
+        assert response.json()["title"] == "New Title"
+
+    def test_archive_session_returns_ok(self, client):
+        response = client.post("/api/sessions/test-123/archive")
         assert response.status_code == 200
         assert response.json()["ok"] is True
 
-    def test_tag_session_returns_ok(self, client):
-        response = client.post("/api/sessions/test-123/tag", json={"tag": "important"})
+    def test_fork_session_returns_ok(self, client):
+        response = client.post("/api/sessions/test-123/fork", json={"model": "test-model"})
         assert response.status_code == 200
-        assert response.json()["ok"] is True
+        assert response.json()["id"] is not None
 
     def test_delete_nonexistent_session_returns_404(self, client):
         response = client.delete("/api/sessions/test-999")

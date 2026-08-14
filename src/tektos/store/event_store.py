@@ -118,11 +118,14 @@ async def append_event(
             seq = row[0]
 
             payload_json = _json.dumps(payload)
+            # Get the auto-increment id BEFORE insert (for FTS5 content_rowid='id')
+            row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0] if False else 0
             conn.execute(
                 "INSERT INTO events (session_id, seq, type, payload, protocol_version) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (session_id, seq, event_type, payload_json, protocol_version),
             )
+            row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
             # FTS update
             if _fts_available is None:
@@ -132,7 +135,7 @@ async def append_event(
                 conn.execute(
                     "INSERT OR REPLACE INTO events_fts (rowid, type, payload, session_id) "
                     "VALUES (?, ?, ?, ?)",
-                    (seq, event_type, payload_json, session_id),
+                    (row_id, event_type, payload_json, session_id),
                 )
 
             conn.commit()

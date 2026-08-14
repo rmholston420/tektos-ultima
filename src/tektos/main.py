@@ -389,24 +389,75 @@ async def create_session(req: CreateSessionRequest):
     }
 
 
-@app.post("/api/sessions/{session_id}/rename")
-async def rename_session(session_id: str, req: RenameRequest):
-    """Rename a session."""
+@app.patch("/api/sessions/{session_id}")
+async def update_session(session_id: str, req: dict):
+    """Update a session (rename, archive, etc)."""
     try:
-        await session_manager.rename_session(session_id, req.title)
-        return {"ok": True}
-    except KeyError:
-        raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        session = await session_manager.get_session(session_id)
+        if not session:
+            raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        if "title" in req:
+            session.title = req["title"]
+        if "tag" in req:
+            session.tag = req["tag"]
+        if "is_archived" in req:
+            session.is_archived = req["is_archived"]
+            if req["is_archived"]:
+                session.status = "created"
+        session.updated_at = _time.time()
+        await append_event(session_id, "session.updated", {"changes": req})
+        return {
+            "id": session.id,
+            "title": session.title,
+            "model": session.model,
+            "status": session.status,
+            "is_archived": session.is_archived,
+            "tag": session.tag,
+        }
+    except _HTTPException:
+        raise
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/api/sessions/{session_id}/tag")
-async def tag_session(session_id: str, req: TagRequest):
-    """Tag a session."""
+@app.post("/api/sessions/{session_id}/archive")
+async def archive_session(session_id: str):
+    """Archive a session."""
     try:
-        await session_manager.tag_session(session_id, req.tag)
+        session = await session_manager.get_session(session_id)
+        if not session:
+            raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        session.is_archived = True
+        session.status = "created"
+        session.updated_at = _time.time()
+        await append_event(session_id, "session.updated", {"is_archived": True})
         return {"ok": True}
-    except KeyError:
-        raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    except _HTTPException:
+        raise
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/sessions/{session_id}/fork")
+async def fork_session(session_id: str, req: dict):
+    """Fork a session."""
+    try:
+        forked = await session_manager.fork_session(
+            source_session_id=session_id,
+            model=req.get("model"),
+            cwd=req.get("cwd"),
+        )
+        return {
+            "id": forked.id,
+            "title": f"Fork of {forked.title or session_id[:8]}",
+            "model": forked.model,
+            "status": forked.status,
+            "parent_title": forked.title or session_id[:8],
+        }
+    except _HTTPException:
+        raise
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
 
 
 @app.delete("/api/sessions/{session_id}")

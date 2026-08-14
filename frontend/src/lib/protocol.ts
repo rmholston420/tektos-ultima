@@ -23,6 +23,7 @@ export class ProtocolClient {
   private state: ConnectionState = "disconnected";
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private lastPong = 0;
+  private lastPingSent = 0;
   private host = "localhost";
   private port = 8020;
   private protocol = "ws";
@@ -56,9 +57,9 @@ export class ProtocolClient {
 
   disconnect(): void { if (this.ws) { this.ws.close(1000, "Disconnect"); this.ws = null; } this.stopHeartbeat(); this.setState("disconnected"); }
   reconnect(): void { this.disconnect(); this.connect(); }
-  sendPrompt(message: string, options?: { model?: string; cwd?: string }): void { this.ws?.send(JSON.stringify({ type: "prompt", session_id: this._sessionId, message, model: options?.model, cwd: options?.cwd })); }
+  sendPrompt(message: string, options?: { model?: string; cwd?: string }): void { this.ws?.send(JSON.stringify({ type: "prompt", session_id: this._sessionId, prompt: message })); }
   sendInterrupt(): void { if (this._sessionId) this.ws?.send(JSON.stringify({ type: "interrupt", session_id: this._sessionId })); }
-  sendResume(fromSeq: number): void { if (this._sessionId) this.ws?.send(JSON.stringify({ type: "resume", session_id: this._sessionId, from_seq: fromSeq })); }
+  sendResume(fromSeq: number): void { /* Not implemented on backend — no 'resume' message type */ }
   setSessionId(id: string): void { this._sessionId = id; }
   get sessionId(): string { return this._sessionId; }
 
@@ -101,7 +102,9 @@ export class ProtocolClient {
 
   private startHeartbeat(): void {
     this.lastPong = Date.now();
+    this.lastPingSent = 0;
     this.heartbeatInterval = setInterval(() => {
+      this.lastPingSent = Date.now();
       if (Date.now() - this.lastPong > 15000) this.ws?.close(4000, "Timeout");
       else this.ws?.send(JSON.stringify({ type: "ping" }));
     }, 10000);

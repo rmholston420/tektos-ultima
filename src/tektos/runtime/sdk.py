@@ -535,14 +535,14 @@ class RuntimeSDK:
         # Execute tool (actual execution via SandboxProvider)
         try:
             result = await self._execute_tool(tool_name, tool_input)
+            completed_tools.add(tool_id)  # Mark as completed BEFORE returning
             await on_event(tool_completed(session.id, tool_id, "success", str(result)))
             return str(result)
         except Exception as exc:
+            completed_tools.add(tool_id)  # Mark as completed on error too
             error_msg = str(exc)
             await on_event(tool_completed(session.id, tool_id, "error", error_msg))
             return f"Error: {error_msg}"
-
-        completed_tools.add(tool_id)
 
     async def _execute_tool(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         """Execute a tool via the SandboxProvider."""

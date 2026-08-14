@@ -37,7 +37,7 @@ class LiveSession:
     model: str
     cwd: str
     permission_mode: str = "auto"  # "auto" | "manual"
-    status: str = "created"  # created | ready | running | interrupted | failed
+    status: str = "created"  # created | ready | running | interrupted | failed | idle
     title: str = ""
     tag: str = ""
     root_session_id: str | None = None
@@ -48,7 +48,7 @@ class LiveSession:
 
     @property
     def is_active(self) -> bool:
-        return self.status in ("ready", "running")
+        return self.status in ("ready", "running", "idle")
 
     @property
     def is_failed(self) -> bool:
@@ -367,8 +367,7 @@ class SessionManager:
         # Pop from sessions FIRST (PlexClaw bug #1 corrected)
         async with self._lock:
             self._sessions.pop(session_id, None)
-
-        # Then delete events from store
+            # Delete events from store (outside lock — can be slow)
         count = await self._delete_events(session_id)
         log.info(f"Session {session_id[:8]} deleted ({count} events)")
         return count
