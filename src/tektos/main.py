@@ -448,15 +448,6 @@ async def switch_model(session_id: str, req: ModelRequest):
         await append_event(session_id, "session.updated", {
             "changes": {"model": req.model, "from": old_model},
         })
-        # Notify all WS clients connected to this session
-        await ws_manager.broadcast_to_session(session_id, _json.dumps({
-            "session_id": session_id,
-            "event_type": "session.model_changed",
-            "payload": {"model": req.model, "old_model": old_model},
-            "seq": 0,
-            "protocol_version": PROTOCOL_VERSION,
-            "timestamp": _datetime.now(_timezone.utc).isoformat(),
-        }))
         return {"ok": True, "model": req.model, "old_model": old_model}
     except _HTTPException:
         raise
