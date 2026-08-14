@@ -187,7 +187,7 @@ describe('WebSocket Protocol', () => {
         JSON.stringify({
           type: 'prompt',
           session_id: 'session-123',
-          message: 'Hello world',
+          prompt: 'Hello world',
         })
       );
     });
@@ -202,7 +202,7 @@ describe('WebSocket Protocol', () => {
         JSON.stringify({
           type: 'prompt',
           session_id: 'session-123',
-          message: 'Hello',
+          prompt: 'Hello',
           model: 'gpt-4',
         })
       );
@@ -218,7 +218,7 @@ describe('WebSocket Protocol', () => {
         JSON.stringify({
           type: 'prompt',
           session_id: 'session-123',
-          message: 'Hello',
+          prompt: 'Hello',
           cwd: '/home/user',
         })
       );
@@ -255,19 +255,11 @@ describe('WebSocket Protocol', () => {
   });
 
   describe('sendResume', () => {
-    test('sends resume message with from_seq', () => {
+    test('sendResume is stubbed — backend does not handle resume type', () => {
       const client = new ProtocolClient();
-      client.setSessionId('session-123');
-      client.connect();
-      client.sendResume(42);
-
-      expect(mockWebSocketInstance.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'resume',
-          session_id: 'session-123',
-          from_seq: 42,
-        })
-      );
+      // sendResume was stubbed out because backend has no 'resume' message handler
+      // The method exists but does nothing
+      expect(() => client.sendResume(42)).not.toThrow();
     });
   });
 

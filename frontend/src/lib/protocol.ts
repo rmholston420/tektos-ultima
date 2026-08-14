@@ -57,7 +57,12 @@ export class ProtocolClient {
 
   disconnect(): void { if (this.ws) { this.ws.close(1000, "Disconnect"); this.ws = null; } this.stopHeartbeat(); this.setState("disconnected"); }
   reconnect(): void { this.disconnect(); this.connect(); }
-  sendPrompt(message: string, options?: { model?: string; cwd?: string }): void { this.ws?.send(JSON.stringify({ type: "prompt", session_id: this._sessionId, prompt: message })); }
+  sendPrompt(message: string, options?: { model?: string; cwd?: string }): void {
+    const msg: any = { type: "prompt", session_id: this._sessionId, prompt: message };
+    if (options?.model) msg.model = options.model;
+    if (options?.cwd) msg.cwd = options.cwd;
+    this.ws?.send(JSON.stringify(msg));
+  }
   sendInterrupt(): void { if (this._sessionId) this.ws?.send(JSON.stringify({ type: "interrupt", session_id: this._sessionId })); }
   sendResume(fromSeq: number): void { /* Not implemented on backend — no 'resume' message type */ }
   setSessionId(id: string): void { this._sessionId = id; }
