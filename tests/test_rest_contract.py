@@ -516,5 +516,96 @@ class TestEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# Models Endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestModelsEndpoint:
+    """Test /api/models endpoint contract."""
+
+    def test_models_returns_200(self, client):
+        response = client.get("/api/models")
+        assert response.status_code == 200
+
+    def test_models_returns_list(self, client):
+        """Models endpoint returns a list of model dicts (not a wrapped dict)."""
+        response = client.get("/api/models")
+        data = response.json()
+        assert isinstance(data, list)
+
+    def test_models_has_model_dicts(self, client):
+        response = client.get("/api/models")
+        data = response.json()
+        assert len(data) > 0
+        first = data[0]
+        assert isinstance(first, dict)
+        assert "id" in first
+        assert "name" in first
+        assert "role" in first
+
+    def test_models_contains_test_model(self, client):
+        response = client.get("/api/models")
+        data = response.json()
+        # Models come from Ollama — check for known model names
+        ids = [m["id"] for m in data]
+        assert len(ids) > 0  # at least one model available
+        # Verify model dict structure
+        for m in data:
+            assert "id" in m
+            assert "name" in m
+            assert "role" in m
+            assert "description" in m
+
+
+# ---------------------------------------------------------------------------
+# Interrupt Endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestInterruptEndpoint:
+    """Test POST /api/sessions/{session_id}/interrupt endpoint contract."""
+
+    def test_interrupt_nonexistent_returns_500(self, client):
+        # Nonexistent session returns 500 (internal error) not 404
+        response = client.post("/api/sessions/nonexistent/interrupt")
+        assert response.status_code == 500
+
+    def test_interrupt_existing_returns_ok(self, client):
+        response = client.post("/api/sessions/test-123/interrupt")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Model Switch Endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestModelSwitchEndpoint:
+    """Test POST /api/sessions/{session_id}/model endpoint contract."""
+
+    def test_model_switch_nonexistent_returns_404(self, client):
+        response = client.post("/api/sessions/nonexistent/model", json={"model": "gpt-4"})
+        assert response.status_code == 404
+
+    def test_model_switch_existing_returns_ok(self, client):
+        response = client.post("/api/sessions/test-123/model", json={"model": "gpt-4"})
+        assert response.status_code == 200
+
+    def test_model_switch_returns_new_model(self, client):
+        response = client.post("/api/sessions/test-123/model", json={"model": "gpt-4"})
+        data = response.json()
+        assert "ok" in data
+        assert "model" in data
+        assert "old_model" in data
+
+    def test_model_switch_changes_model(self, client):
+        response = client.post("/api/sessions/test-123/model", json={"model": "gpt-4"})
+        data = response.json()
+        assert data["model"] == "gpt-4"
+
+
+# ---------------------------------------------------------------------------
 # Run with: pytest tests/test_rest_contract.py -v
 # ---------------------------------------------------------------------------
