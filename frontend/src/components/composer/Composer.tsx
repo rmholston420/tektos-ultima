@@ -42,6 +42,7 @@ export function Composer({
   const [value, setValue] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [lineCount, setLineCount] = useState(1);
+  const [elapsedSec, setElapsedSec] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -86,6 +87,25 @@ export function Composer({
       ) + "px";
     }
   }, [value]);
+
+  // Elapsed time counter during streaming
+  useEffect(() => {
+    if (!isStreaming) {
+      setElapsedSec(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setElapsedSec((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isStreaming]);
+
+  // Format elapsed seconds to mm:ss
+  const formatElapsed = (sec: number): string => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value);
@@ -237,6 +257,8 @@ export function Composer({
                     {estTokenCount > 0 && `${formatTokens(estTokenCount)}tok`}
                     {wordCount > 0 && `·`}
                     {charCount > 0 && `${charCount}c`}
+                    {isStreaming && `·`}
+                    {isStreaming && formatElapsed(elapsedSec)}
                   </span>
                   <span className="hidden sm:inline">Enter to send · Shift+Enter for newline</span>
                 </div>
