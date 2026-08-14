@@ -325,3 +325,8 @@ async def close() -> None:
 def set_path(path: str) -> None:
     global _db_path
     _db_path = path
+
+
+def get_db_path() -> str:
+    """Get the current database path. Returns empty string if not initialized."""
+    return _db_path

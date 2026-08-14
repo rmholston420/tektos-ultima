@@ -21,6 +21,7 @@ import logging as _log
 import os as _os
 import sys as _sys
 from contextlib import asynccontextmanager as _asynccontextmanager
+from pathlib import Path as _Path
 from typing import Any
 
 from fastapi import FastAPI as _FastAPI, HTTPException as _HTTPException, WebSocket as _WebSocket, WebSocketDisconnect as _WebSocketDisconnect
@@ -39,7 +40,9 @@ log = _log.getLogger("tektos.main")
 from tektos.runtime.session import SessionManager, LiveSession
 from tektos.runtime.sdk import RuntimeSDK, HookContext
 from tektos.runtime.ws_manager import WebSocketManager
-from tektos.store.event_store import append_event, get_events, get_replay, search_events, close as store_close
+from tektos.store.event_store import append_event, get_events, get_replay, search_events, close as store_close, get_db_path
+from tektos.migrations.schema_evolution import SchemaEvolutionEngine
+from tektos.self_improvement.engine import SelfImprovementAdapter
 from tektos.protocol.envelope import (
     session_created,
     session_ready,
@@ -57,6 +60,8 @@ from tektos.protocol.envelope import (
 session_manager: SessionManager
 runtime_sdk: RuntimeSDK
 ws_manager: WebSocketManager
+schema_engine: SchemaEvolutionEngine
+self_improvement: SelfImprovementAdapter
 
 
 # ---------------------------------------------------------------------------
@@ -66,24 +71,47 @@ ws_manager: WebSocketManager
 @_asynccontextmanager
 async def lifespan(app: _FastAPI):
     """Initialize and clean up resources."""
-    global session_manager, runtime_sdk, ws_manager
+    global session_manager, runtime_sdk, ws_manager, schema_engine, self_improvement
 
-    # Initialize session manager
+    # 1. Initialize event store FIRST (provides db_path)
+    from tektos.store.event_store import init as init_event_store
+    db_path = str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db")
+    init_event_store(db_path)
+
+    # 2. Initialize session manager
     session_manager = SessionManager()
 
-    # Initialize runtime SDK
+    # 3. Initialize schema evolution engine (uses event store DB)
+    schema_engine = SchemaEvolutionEngine(db_path)
+
+    # 4. Apply any pending schema migrations
+    try:
+        applied = schema_engine.apply_migrations()
+        if applied:
+            log.info("Applied %d schema migration(s): %s", len(applied), applied)
+        else:
+            log.info("Schema already at latest version (v%d)", schema_engine.get_current_version())
+    except Exception as exc:
+        log.warning("Schema migration failed (continuing): %s", exc)
+
+    # 5. Initialize runtime SDK
     runtime_sdk = RuntimeSDK(
         llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8081/v1"),
         llm_model=_os.getenv("TEKTOS_LLM_MODEL", "qwen3.6-35b-a3b-ud-q4_k_xl"),
     )
 
-    # Initialize WebSocket manager
+    # 6. Initialize WebSocket manager
     ws_manager = WebSocketManager()
 
-    # Start runtime SDK
+    # 7. Initialize self-improvement adapter with schema engine
+    self_improvement = SelfImprovementAdapter(
+        ws_event_emitter=lambda **kw: _emit_schema_event(**kw),
+    )
+
+    # 8. Start runtime SDK
     await runtime_sdk.start()
 
-    log.info("Tektos-Ultima-v1 backend started")
+    log.info("Tektos-Ultima-v1 backend started (schema v%d)", schema_engine.get_current_version())
     yield
 
     # Cleanup
@@ -387,7 +415,7 @@ async def tag_archive_session(session_id: str, req: TagRequest):
         raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
 
-@app.post("/api/search")
+@app.get("/api/search")
 async def search_sessions(query: str, limit: int = 100):
     """Search sessions and events."""
     sessions = await session_manager.search_sessions(query)
@@ -399,6 +427,85 @@ async def search_sessions(query: str, limit: int = 100):
         ],
         "events": events,
     }
+
+
+# ---------------------------------------------------------------------------
+# Schema introspection endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/api/schema")
+async def get_schema_info():
+    """Expose current schema version, history, and self-model for agent introspection."""
+    schema = schema_engine.get_schema()
+    history = schema_engine.get_evolution_history()
+    snapshot = schema_engine.introspect()
+    
+    # Get self-improvement stats
+    experiences = self_improvement.get_experience()
+    metrics = self_improvement.get_learning_metrics()
+    
+    return {
+        "version": schema_engine.get_current_version(),
+        "schema": schema,
+        "evolution_history": history,
+        "introspection": snapshot,
+        "self_improvement": {
+            "experiences_tracked": len(experiences),
+            "total_tasks": metrics.get("total_tasks", 0),
+            "total_improvements": metrics.get("total_improvements", 0),
+            "learning_velocity": metrics.get("learning_velocity", 0.0),
+            "best_model": metrics.get("best_model_for_coding"),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+async def _emit_schema_event(session_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    """Emit an event to all connected WebSocket clients."""
+    try:
+        for ws in list(ws_manager._connections.get(session_id, [])):
+            await ws.send_text(_json.dumps({
+                "type": event_type,
+                "payload": payload,
+                "protocol_version": PROTOCOL_VERSION,
+            }))
+    except Exception as exc:
+        log.error(f"Error emitting {event_type}: {exc}")
+
+
+async def _handle_prompt(
+    websocket: _WebSocket,
+    session: LiveSession,
+    prompt: str,
+    system_prompt: str | None,
+) -> None:
+    """Handle a prompt submission. Streams events to the WebSocket."""
+    approved_tools: dict[str, bool] = {}
+    approval_event: _asyncio.Event = _asyncio.Event()
+
+    async def on_event(envelope):
+        """Send envelope to WebSocket."""
+        await websocket.send_text(envelope.to_json())
+
+    async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
+        """Wait for user approval on a tool call."""
+        try:
+            await asyncio.wait_for(approval_event.wait(), timeout=30.0)
+            return approved_tools.get(tool_id, False)
+        except asyncio.TimeoutError:
+            log.warning(f"Tool approval timeout for {tool_id}")
+            return False
+
+    await runtime_sdk.submit_prompt(
+        session=session,
+        prompt=prompt,
+        system_prompt=system_prompt,
+        on_event=on_event,
+        on_tool_approval=on_tool_approval,
+    )
 
 
 # ---------------------------------------------------------------------------
