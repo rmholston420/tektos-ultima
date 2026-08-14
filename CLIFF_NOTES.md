@@ -98,7 +98,7 @@ Quick reference for ports, versions, commands, and key facts. Updated on each co
 | E2E Archive | `frontend/tests/e2e-archive.spec.ts` | 15 passing | Playwright |
 | Model Switch | `frontend/tests/e2e-model-switch.spec.ts` | 3 passing | Playwright |
 | Jest Unit/Component | `frontend/src/**/__tests__/` | 234 passing | Jest + RTL |
-| **Total** | | **1590 passing** | |
+| **Total** | | **1567 passing** | |
 
 **Run all E2E:** `cd frontend && npx playwright test tests/ --reporter=list`
 **Run integration only:** `cd frontend && npx playwright test tests/e2e-integration.spec.ts`
