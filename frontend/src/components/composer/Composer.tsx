@@ -158,8 +158,7 @@ export function Composer({
                 <p className="text-xs text-text-muted">
                   Paste/Upload a{" "}
                   <span className="text-accent font-medium">Spec</span>
-                  {" , "}
-                  <span className="text-accent font-medium">Describe what you want to </span>
+                  {" , "}Describe what you want to{" "}
                   <span className="text-accent font-medium">Build</span>
                   {", or Select a "}
                   <span className="text-accent font-medium">Session</span>
