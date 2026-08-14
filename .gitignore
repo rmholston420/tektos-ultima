@@ -1,51 +1,51 @@
 # Python
-.venv/
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
-htmlcov/
-.mypy_cache/
-.ruff_cache/
+.eggs/
+dist/
+build/
+*.whl
+.venv/
+venv/
+env/
 
-# Node
-frontend/node_modules/
-frontend/.next/
-frontend/out/
-frontend/build/
-frontend/.env.local
-frontend/.env.production
-
-# OS
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
+# Next.js
+.next/
+out/
+node_modules/
 
 # IDE
 .vscode/
 .idea/
-*.sublime-project
-*.sublime-workspace
+*.swp
+*.swo
 
-# Tektos data
-data/
-*.db
-tektos-data/
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Last known state (session-specific, not for repo)
+LAST_KNOWN_STATE.md
+SESSION_HANDOFF.md
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Playwright
+playwright-report/
+test-results/
+
+# Hermes agent
+.hermes/
