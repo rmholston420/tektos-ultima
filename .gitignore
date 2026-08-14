@@ -49,3 +49,6 @@ test-results/
 
 # Hermes agent
 .hermes/
+
+# Generated data
+data/
