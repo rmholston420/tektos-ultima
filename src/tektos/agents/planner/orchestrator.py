@@ -64,6 +64,7 @@ class Planner:
         prompt: str,
         context: dict[str, Any] | None = None,
         user_preference: str | None = None,
+        synthesis_guidance: str = "",
     ) -> PlannerOutput:
         """Run the full planning pipeline on a natural language prompt.
 
@@ -129,10 +130,12 @@ class Planner:
                 if len(translated) > self.context_budget * 0.8
                 else None
             ),
+            synthesis_guidance=synthesis_guidance,
         )
 
         return PlannerOutput(
             spec=spec,
+            synthesis_guidance=synthesis_guidance,
             language_game_detected=language_game,
             ambiguities_found=all_ambiguities,
             ambiguities_resolved=list(zip(resolved, resolutions)),

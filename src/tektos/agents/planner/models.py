@@ -188,6 +188,10 @@ class BuildSpec(BaseModel):
     phases: list[SpecPhase]
     context_budget_warning: str | None = None  # If spec is too large
     notes: list[str] = Field(default_factory=list)
+    synthesis_guidance: str = Field(
+        default="",
+        description="Lessons from prior execution cycles (self-improvement loop)",
+    )
     metadata: W5H1M = Field(
         default_factory=lambda: W5H1M(
             who="S4 Planner/Thinker",
@@ -232,6 +236,10 @@ class PlannerOutput(BaseModel):
     templates_presented: list[str] = Field(default_factory=list)
     context_budget_used: int = 0
     context_budget_total: int = 128000
+    synthesis_guidance: str = Field(
+        default="",
+        description="Lessons from prior execution cycles, fed back to planner",
+    )
 
     def summary(self) -> str:
         return f"Planner output: {self.spec.summary()}"

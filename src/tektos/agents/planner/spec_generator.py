@@ -32,6 +32,7 @@ def generate_spec(
     notes: list[str] | None = None,
     context_budget_warning: str | None = None,
     description: str | None = None,
+    synthesis_guidance: str = "",
 ) -> BuildSpec:
     """Generate a structured build spec from the pipeline output.
 
@@ -78,6 +79,10 @@ def generate_spec(
             estimated_effort=phase_data.get("estimated_effort", "unknown"),
         ))
 
+    spec_notes = list(notes) if notes else []
+    if synthesis_guidance:
+        spec_notes.append(f"[SELF-IMPROVEMENT GUIDANCE — Past execution lessons]\n{synthesis_guidance}")
+
     return BuildSpec(
         original_prompt=original_prompt,
         translated_prompt=translated_prompt,
@@ -90,7 +95,8 @@ def generate_spec(
         architecture=architecture,
         phases=spec_phases,
         context_budget_warning=context_budget_warning,
-        notes=notes or [],
+        notes=spec_notes,
+        synthesis_guidance=synthesis_guidance,
     )
 
 
