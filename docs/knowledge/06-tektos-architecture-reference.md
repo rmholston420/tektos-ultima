@@ -143,16 +143,86 @@ Tektos-Ultima is a self-improving, locally-hosted AI coding agent with a browser
 **Key behavior**: Defines the message format for all WebSocket communication between frontend and backend.
 
 ### providers/ — External Interfaces
-| File | Lines | Key Classes | Purpose |
-|------|-------|-------------|---------|
-| `sandbox_provider.py` | 320 | `SandboxProvider` | Safe tool execution |
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `sandbox_provider.py` | 320 | `SandboxProvider` | Safe tool execution |
 
 **Key behavior**: Provides safe execution of bash commands, file operations, and search within a configurable filesystem root. Has 7 tool handlers: bash, file_read, file_write, file_delete, directory_list, directory_create, search.
 
+### plugins/ — Plugin System
+|| Directory | Key Classes | Purpose |
+||-----------|-------------|---------|
+|| `searxng_plugin/` | `SearXNGPlugin`, `SearXNGClient` | Self-hosted search (primary backend) |
+|| `tavily_plugin/` | `TavilyPlugin`, `TavilyClient` | Cloud search backup |
+|| `duckduckgo_plugin/` | `DuckDuckGoPlugin`, `DuckDuckGoClient` | Free search, no key needed |
+|| `farfalle_plugin/` | `FarfallePlugin`, `FarfalleClient` | Deep research, SSE streaming |
+
+**Key behavior**: Plugins implement `Plugin` lifecycle (initialize, shutdown, search). Auto-discovered by `PluginLoader` from `plugins/` directory. Each plugin is a self-contained package with `__init__.py`, `plugin.py`, and `client.py`. ProviderPort contract ensures consistent search interface.
+
+### plugins/ — Plugin Architecture
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `plugin_loader.py` | 82 | `PluginLoader` | Auto-discovers and loads plugins |
+|| `plugin.py` | 40 | `Plugin`, `PluginConfig`, `PluginRegistry` | Base classes and registry |
+
+**Key behavior**: `PluginLoader` scans `plugins/` for `__init__.py`, imports each, checks for a class inheriting `Plugin`, registers in `PluginRegistry`. `Plugin` provides lifecycle hooks. `PluginRegistry` manages initialization/shutdown ordering.
+
+### gui/ — GUI Testing & CDP
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `debugger.py` | 322 | `ChromeDebugger`, `CDPSessionManager`, `TestRecorder` | Playwright CDP for console/network/performance capture |
+
+**Key behavior**: `ChromeDebugger` uses Playwright's Chrome DevTools Protocol to capture live console output, network waterfall, performance traces, and interactive debugging. `TestRecorder` captures screenshots and traces for GUI test verification.
+
+### recovery/ — Auto-Recovery
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `recovery.py` | 258 | `AutoRecoveryManager` | Server restart resilience |
+
+**Key behavior**: `AutoRecoveryManager` scans SQLite event store for all session IDs, loads `LAST_KNOWN_STATE.md` for persistent context, recovers interrupted sessions via `SessionManager.recover_session()`, archives sessions exceeding restart limits, and restores Telegram/Email gateways. Early `enabled=False` check prevents wasted I/O.
+
+### memory/ — 4-Tier Memory System
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `memory_system.py` | 792 | `MemorySystem` | Hemispheric memory (semantic + episodic) |
+|| `redis_memory.py` | 113 | `RedisMemory` | Tier 1: Sensory/Working memory |
+|| `postgres_memory.py` | 152 | `PostgresMemory` | Tier 2: Long-term memory |
+|| `neo4j_memory.py` | 111 | `Neo4jMemory` | Tier 3: Procedural memory (graph) |
+|| `backup_scheduler.py` | 176 | `BackupScheduler` | Backup/redundancy (SQLite) |
+|| `reflection_engine.py` | 113 | `ReflectionEngine` | Session-level reflection |
+|| `synthesis_engine.py` | 63 | `SynthesisEngine` | Cross-session synthesis |
+|| `experience_replay.py` | 69 | `ExperienceReplay` | Stores synthesis feedback |
+
+**Key behavior**: 4-tier architecture: Tier 1 (Redis) for fast sensory/working memory, Tier 2 (PostgreSQL) for long-term structured storage, Tier 3 (Neo4j/DozerDB) for procedural graph memory, Tier 4 (SQLite backup) for redundancy. BackupScheduler handles periodic backups with configurable intervals.
+
+### email_gateway/ — Email Integration
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `email_gateway.py` | 247 | `EmailGateway` | Gmail IMAP/SMTP/OAuth2 integration |
+
+**Key behavior**: Full Gmail integration via OAuth2. Handles IMAP for incoming mail parsing (thread extraction, sender identification), SMTP for outgoing replies. Supports multi-account routing. Integrates with Telegram gateway for priority filtering.
+
+### repograph/ — Codebase Knowledge Graph (NEW)
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `__init__.py` | 37 | Package exports | All repograph classes |
+|| `core.py` | ~400 | `RepographParser`, `RepographGraph`, `PageRankCalculator`, `RepographQuery`, `RepographSync` | Core repograph engine |
+
+**Key behavior**: `RepographParser` uses Python AST (or tree-sitter) to extract symbols, imports, calls, inheritance. `RepographGraph` stores nodes (files), edges (dependencies), and symbols. `PageRankCalculator` scores symbol importance. `RepographQuery` provides find_symbol, find_callers, blast_radius, call_chain, Markdown report. `RepographSync` does incremental rebuilds from git diff. Enables blast-radius analysis and architectural reasoning without reading every file.
+
+### migrations/ — Schema Evolution
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `engine.py` | 310 | `SchemaMigrationEngine` | Versioned schema migrations |
+|| `initial.py` | 224 | `migrate_v1_to_v2`, `migrate_v2_to_v3` | Initial migration scripts |
+|| `schema_evolution.py` | 691 | `SchemaSnapshot`, `SchemaProposal` | Dynamic schema evolution |
+
+**Key behavior**: Migrations are versioned, idempotent, and reversible. The engine detects patterns and proposes new schema changes. Self-improvement can propose migrations when recurring patterns demand new data structures.
+
 ### self_improvement/ — Learning
-| File | Lines | Key Classes | Purpose |
-|------|-------|-------------|---------|
-| `engine.py` | 552 | `SelfImprovementAdapter`, `ExperienceRecord` | Cybernetic feedback loop |
+|| File | Lines | Key Classes | Purpose |
+||------|-------|-------------|---------|
+|| `engine.py` | 552 | `SelfImprovementAdapter`, `ExperienceRecord` | Cybernetic feedback loop |
 
 **Key behavior**: Listens to session completion, triggers evaluation → reflection → meta-learning → benchmark cycle. Persists experience records. Falls back to pure-Tektos evaluation when openhands-ext is unavailable.
 
@@ -240,8 +310,8 @@ PORT=3003
 ## Test Suite
 
 ### Python Tests (pytest)
-- **357 tests** (as of 2026-08-14)
-- Coverage: ~61% (target: 80%+)
+- **1059 tests** (as of 2026-08-14)
+- Coverage: ~77% (target: 80%+)
 - Location: `tests/test_*.py`
 
 ### E2E Tests (Playwright, Chromium only)
