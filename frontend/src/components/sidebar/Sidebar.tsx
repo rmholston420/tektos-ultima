@@ -1,16 +1,16 @@
 /**
- * Tektos-Ultima v1 — Session Sidebar
+ * Tektos-Ultima v1 — Session Sidebar with Theme Selector
  *
- * Left panel showing session list with create, search, rename, tag,
- * fork, archive, and delete actions.
- *
- * Exemplar pattern: Derived state from SessionStore with optimistic UI.
+ * Left panel: session list, theme switcher, navigation between Chat
+ * and Dashboard. Three themes: Abyss (dark), Temple (Tibetan), Clarity
+ * (minimalist). Organic design with breathing animations.
  */
 
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { SessionStore, type SessionSnapshot } from "@/lib/session-store";
+import { themeStore, type ThemeName, THEMES } from "@/lib/theme-store";
 import {
   PlusIcon,
   MagnifyingGlassIcon,
@@ -19,31 +19,30 @@ import {
   ArchiveBoxIcon,
   TrashIcon,
   TagIcon,
-  ChatBubbleLeftRightIcon,
   DocumentDuplicateIcon,
+  ChevronDoubleLeftIcon,
+  ChevronDoubleRightIcon,
+  HomeIcon,
+  ChartBarIcon,
 } from "@heroicons/react/24/outline";
-import {
-  FolderOpenIcon,
-  ArchiveBoxIcon as ArchiveBoxIconOutline,
-  TagIcon as TagSolidIcon,
-} from "@heroicons/react/24/solid";
+import { FolderOpenIcon, ArchiveBoxIcon as ArchiveBoxOutline, TagIcon as TagSolid } from "@heroicons/react/24/solid";
 import { ArchiveBrowser } from "@/components/archive/ArchiveBrowser";
 
-// ---------------------------------------------------------------------------
-// Sidebar component
-// ---------------------------------------------------------------------------
+// ─── Props ─────────────────────────────────────────────────────
 
 interface SidebarProps {
   sessionStore: SessionStore;
   activeSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
   onCreateSession: () => void;
-  theme: "dark" | "tibet";
-  onToggleTheme: () => void;
+  theme: ThemeName;
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  onOpenModal: (session: SessionSnapshot) => void;
+  activePage: "chat" | "dashboard";
+  onNavigate: (page: "chat" | "dashboard") => void;
 }
+
+// ─── Sidebar ──────────────────────────────────────────────────
 
 export function Sidebar({
   sessionStore,
@@ -51,10 +50,10 @@ export function Sidebar({
   onSelectSession,
   onCreateSession,
   theme,
-  onToggleTheme,
   collapsed,
   onToggleCollapsed,
-  onOpenModal,
+  activePage,
+  onNavigate,
 }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showArchive, setShowArchive] = useState(false);
@@ -64,10 +63,7 @@ export function Sidebar({
   // Derived state
   const sessions = useMemo(() => {
     const all = sessionStore.getAll();
-    const visible = showArchive
-      ? all
-      : all.filter((s) => !s.is_archived);
-
+    const visible = showArchive ? all : all.filter((s) => !s.is_archived);
     if (!searchQuery) return visible;
     return sessionStore.searchSessions(searchQuery);
   }, [sessionStore, searchQuery, showArchive]);
@@ -128,72 +124,91 @@ export function Sidebar({
     }
   };
 
-  // -----------------------------------------------------------------------
-  // Render
-  // -----------------------------------------------------------------------
+  // Theme cycling
+  const cycleTheme = () => {
+    const names: ThemeName[] = ["abyss", "temple", "clarity"];
+    const currentIdx = names.indexOf(theme);
+    const nextTheme = names[(currentIdx + 1) % names.length];
+    themeStore.set(nextTheme);
+  };
+
+  // ── Collapsed state ──
 
   if (collapsed) {
     return (
-      <aside className="w-14 min-w-[3.5rem] bg-bg-2 border-r border-border flex flex-col items-center py-4 gap-3">
+      <aside className="w-14 min-w-[3.5rem] bg-surface border-r border-border flex flex-col items-center py-4 gap-3">
+        {/* New session */}
         <button
           onClick={handleCreate}
-          className="w-9 h-9 rounded-lg flex items-center justify-center
-                     bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
+          className="w-9 h-9 rounded-xl flex items-center justify-center bg-accent/10 text-accent hover:bg-accent/20 transition-all hover:scale-105"
           title="New session"
         >
           <PlusIcon className="w-5 h-5" />
         </button>
 
+        {/* Nav */}
+        <div className="flex flex-col gap-1 w-full px-1.5">
+          <button
+            onClick={() => onNavigate("chat")}
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
+              activePage === "chat"
+                ? "bg-accent/20 text-accent"
+                : "text-text-muted hover:text-text-primary hover:bg-surface-hover"
+            }`}
+            title="Chat"
+          >
+            <HomeIcon className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onNavigate("dashboard")}
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
+              activePage === "dashboard"
+                ? "bg-accent/20 text-accent"
+                : "text-text-muted hover:text-text-primary hover:bg-surface-hover"
+            }`}
+            title="Dashboard"
+          >
+            <ChartBarIcon className="w-4 h-4" />
+          </button>
+        </div>
+
         <div className="w-7 h-px bg-border" />
 
+        {/* Archive toggle */}
         <button
           onClick={() => setShowArchive(!showArchive)}
-          className={`w-9 h-9 rounded-lg flex items-center justify-center
-                     transition-colors ${
-                       showArchive
-                         ? "bg-surface-active text-text-primary"
-                         : "text-text-secondary hover:text-text-primary hover:bg-surface-hover"
-                     }`}
+          className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
+            showArchive ? "bg-surface-active text-text-primary" : "text-text-muted hover:text-text-primary hover:bg-surface-hover"
+          }`}
           title={showArchive ? "Hide archive" : "Show archive"}
         >
-          {showArchive ? (
-            <FolderOpenIconAlt className="w-5 h-5" />
-          ) : (
-            <ArchiveBoxIcon className="w-5 h-5" />
-          )}
-        </button>
-
-        <button
-          onClick={onToggleCollapsed}
-          className="w-9 h-9 rounded-lg flex items-center justify-center
-                     text-text-secondary hover:text-text-primary hover:bg-surface-hover
-                     transition-colors"
-          title={showArchive ? "Collapse archive" : "Collapse sidebar"}
-        >
-          {showArchive ? (
-            <FolderIcon className="w-5 h-5" />
-          ) : (
-            <ChatBubbleLeftRightIcon className="w-5 h-5" />
-          )}
+          {showArchive ? <FolderOpenIconAlt className="w-5 h-5" /> : <ArchiveBoxIcon className="w-5 h-5" />}
         </button>
 
         <div className="flex-1" />
 
+        {/* Theme switcher */}
         <button
-          onClick={onToggleTheme}
-          className="w-9 h-9 rounded-lg flex items-center justify-center
-                     text-text-secondary hover:text-text-primary hover:bg-surface-hover
-                     transition-colors"
-          title={`Switch to ${theme === "dark" ? "Tibet" : "Dark"} theme`}
+          onClick={cycleTheme}
+          className="w-9 h-9 rounded-lg flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-all"
+          title={`Switch theme (current: ${THEMES[theme].label})`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <circle cx="12" cy="12" r="5" />
-            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-          </svg>
+          <span className="text-sm">{THEMES[theme].icon}</span>
+        </button>
+
+        {/* Collapse */}
+        <button
+          onClick={onToggleCollapsed}
+          className="w-9 h-9 rounded-lg flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-all"
+          title="Expand sidebar"
+        >
+          <ChevronDoubleRightIcon className="w-4 h-4" />
         </button>
       </aside>
     );
   }
+
+  // ── Expanded state ──
 
   return (
     <aside className="shell-sidebar">
@@ -202,12 +217,39 @@ export function Sidebar({
         <h2 className="text-sm font-semibold text-text-primary">Sessions</h2>
         <button
           onClick={handleCreate}
-          className="w-7 h-7 rounded-md flex items-center justify-center
-                     bg-accent text-white hover:bg-accent-hover transition-colors"
+          className="w-7 h-7 rounded-lg flex items-center justify-center bg-accent text-white hover:bg-accent-hover transition-all hover:scale-105"
           title="New session"
         >
           <PlusIcon className="w-4 h-4" />
         </button>
+      </div>
+
+      {/* Nav tabs */}
+      <div className="px-3 pt-3 pb-2">
+        <div className="flex items-center gap-1 bg-bg-3 rounded-lg p-0.5">
+          <button
+            onClick={() => onNavigate("chat")}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-all ${
+              activePage === "chat"
+                ? "bg-accent text-white shadow-sm"
+                : "text-text-muted hover:text-text-primary"
+            }`}
+          >
+            <HomeIcon className="w-3.5 h-3.5" />
+            Chat
+          </button>
+          <button
+            onClick={() => onNavigate("dashboard")}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-all ${
+              activePage === "dashboard"
+                ? "bg-accent text-white shadow-sm"
+                : "text-text-muted hover:text-text-primary"
+            }`}
+          >
+            <ChartBarIcon className="w-3.5 h-3.5" />
+            Dash
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -216,13 +258,10 @@ export function Sidebar({
           <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
           <input
             type="text"
-            placeholder="Search sessions..."
+            placeholder="Search..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-bg-3 border border-border rounded-md pl-8 pr-3 py-1.5
-                       text-sm placeholder-text-muted
-                       focus:border-accent focus:ring-1 focus:ring-accent/20
-                       transition-colors"
+            className="w-full bg-bg-3 border border-border rounded-lg pl-8 pr-3 py-2 text-sm placeholder-text-muted focus:border-accent focus:ring-1 focus:ring-accent/20 transition-all"
           />
         </div>
       </div>
@@ -231,20 +270,16 @@ export function Sidebar({
       <div className="px-3 pb-2 flex items-center gap-2">
         <button
           onClick={() => setShowArchive(false)}
-          className={`flex-1 text-xs px-2 py-1 rounded-md transition-colors ${
-            !showArchive
-              ? "bg-surface-active text-text-primary"
-              : "text-text-muted hover:text-text-secondary"
+          className={`flex-1 text-xs px-2 py-1.5 rounded-lg transition-all ${
+            !showArchive ? "bg-surface-active text-text-primary" : "text-text-muted hover:text-text-secondary"
           }`}
         >
           Active
         </button>
         <button
           onClick={() => setShowArchive(true)}
-          className={`flex-1 text-xs px-2 py-1 rounded-md transition-colors ${
-            showArchive
-              ? "bg-surface-active text-text-primary"
-              : "text-text-muted hover:text-text-secondary"
+          className={`flex-1 text-xs px-2 py-1.5 rounded-lg transition-all ${
+            showArchive ? "bg-surface-active text-text-primary" : "text-text-muted hover:text-text-secondary"
           }`}
         >
           Archive
@@ -258,20 +293,18 @@ export function Sidebar({
         <div className="flex-1 overflow-y-auto px-2 py-2">
           {activeSessions.length > 0 && (
             <div className="mb-3">
-              <p className="px-2 mb-1 text-xs font-medium text-text-muted uppercase tracking-wider">
-                Active
-              </p>
+              <p className="px-2 mb-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">Active</p>
               {activeSessions.map((session) => (
                 <SessionItem
                   key={session.id}
                   session={session}
                   isActive={session.id === activeSessionId}
-                  onRename={setRenamingId}
-                  renameValue={renamingId === session.id ? renameValue : ""}
+                  renamingId={renamingId}
+                  renameValue={renameValue}
                   setRenameValue={setRenameValue}
-                  onRenameSubmit={() => handleRename(session.id)}
-                  onTag={() => handleTag(session.id)}
-                  onFork={() => handleFork(session)}
+                  onRenameSubmit={handleRename}
+                  onTag={handleTag}
+                  onFork={handleFork}
                   onArchive={() => handleArchive(session.id)}
                   onDelete={() => handleDelete(session.id)}
                   onSelect={() => onSelectSession(session.id)}
@@ -282,20 +315,18 @@ export function Sidebar({
 
           {inactiveSessions.length > 0 && (
             <div>
-              <p className="px-2 mb-1 text-xs font-medium text-text-muted uppercase tracking-wider">
-                History
-              </p>
+              <p className="px-2 mb-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">History</p>
               {inactiveSessions.map((session) => (
                 <SessionItem
                   key={session.id}
                   session={session}
                   isActive={session.id === activeSessionId}
-                  onRename={setRenamingId}
-                  renameValue={renamingId === session.id ? renameValue : ""}
+                  renamingId={renamingId}
+                  renameValue={renameValue}
                   setRenameValue={setRenameValue}
-                  onRenameSubmit={() => handleRename(session.id)}
-                  onTag={() => handleTag(session.id)}
-                  onFork={() => handleFork(session)}
+                  onRenameSubmit={handleRename}
+                  onTag={handleTag}
+                  onFork={handleFork}
                   onArchive={() => handleArchive(session.id)}
                   onDelete={() => handleDelete(session.id)}
                   onSelect={() => onSelectSession(session.id)}
@@ -306,7 +337,7 @@ export function Sidebar({
 
           {sessions.length === 0 && (
             <div className="px-4 py-8 text-center text-text-muted text-sm">
-              {searchQuery ? "No sessions match your search" : "No sessions yet"}
+              {searchQuery ? "No sessions match" : "No sessions yet"}
             </div>
           )}
         </div>
@@ -316,37 +347,54 @@ export function Sidebar({
             sessionStore={sessionStore}
             activeSessionId={activeSessionId}
             onSelectSession={onSelectSession}
-            onOpenModal={onOpenModal}
             collapsed={false}
           />
         </div>
       )}
 
       {/* Footer */}
-      <div className="h-10 min-h-[2.5rem] border-t border-border flex items-center justify-between px-3">
-        <button
-          onClick={onToggleTheme}
-          className="text-xs text-text-muted hover:text-text-secondary transition-colors"
-          title={`Switch to ${theme === "dark" ? "Tibet" : "Dark"} theme`}
-        >
-          {theme === "dark" ? "Dark Mode" : "Tibet Theme"}
-        </button>
-        <span className="text-xs text-text-muted">
-          {sessions.length} session{sessions.length !== 1 ? "s" : ""}
-        </span>
+      <div className="h-12 min-h-[3rem] border-t border-border px-3">
+        {/* Theme selector */}
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="text-xs text-text-muted">Theme:</span>
+          {(["abyss", "temple", "clarity"] as ThemeName[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => themeStore.set(t)}
+              className={`flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs rounded-md transition-all ${
+                theme === t
+                  ? "bg-accent text-white shadow-sm"
+                  : "text-text-muted hover:text-text-primary hover:bg-surface-hover"
+              }`}
+              title={THEMES[t].description}
+            >
+              <span className="text-xs">{THEMES[t].icon}</span>
+              <span className="truncate">{THEMES[t].label}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-text-muted">{sessions.length} session{sessions.length !== 1 ? "s" : ""}</span>
+          <button
+            onClick={onToggleCollapsed}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-all"
+            title="Collapse sidebar"
+          >
+            <ChevronDoubleLeftIcon className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </aside>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Session item component
-// ---------------------------------------------------------------------------
+// ─── Session Item ──────────────────────────────────────────────
 
 function SessionItem({
   session,
   isActive,
-  onRename,
+  renamingId,
   renameValue,
   setRenameValue,
   onRenameSubmit,
@@ -358,12 +406,12 @@ function SessionItem({
 }: {
   session: SessionSnapshot;
   isActive: boolean;
-  onRename: (id: string) => void;
+  renamingId: string | null;
   renameValue: string;
   setRenameValue: (v: string) => void;
-  onRenameSubmit: () => void;
-  onTag: () => void;
-  onFork: () => void;
+  onRenameSubmit: (id: string) => void;
+  onTag: (id: string) => void;
+  onFork: (session: SessionSnapshot) => void;
   onArchive: () => void;
   onDelete: () => void;
   onSelect: () => void;
@@ -396,16 +444,11 @@ function SessionItem({
     return (
       <button
         onMouseEnter={() => setIsHovering(true)}
-        onMouseLeave={() => {
-          setIsHovering(false);
-          setShowMenu(false);
-        }}
+        onMouseLeave={() => { setIsHovering(false); setShowMenu(false); }}
         onClick={onSelect}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-md
-                   bg-surface-active text-text-primary text-sm
-                   hover:bg-surface-hover transition-colors group"
+        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-surface-active text-text-primary text-sm hover:bg-surface-hover transition-all group"
       >
-        <div className={`w-1.5 h-1.5 rounded-full ${statusColor} flex-shrink-0`} />
+        <div className={`w-1.5 h-1.5 rounded-full ${statusColor} flex-shrink-0 animate-pulse`} />
         <span className="flex-1 text-left truncate">{session.title}</span>
         <span className="text-xs text-text-muted">{formatDate(session.updated_at)}</span>
       </button>
@@ -415,21 +458,16 @@ function SessionItem({
   return (
     <button
       onMouseEnter={() => setIsHovering(true)}
-      onMouseLeave={() => {
-        setIsHovering(false);
-        setShowMenu(false);
-      }}
+      onMouseLeave={() => { setIsHovering(false); setShowMenu(false); }}
       onClick={onSelect}
-      className="w-full flex items-center gap-2 px-3 py-2 rounded-md
-                 text-sm text-text-secondary
-                 hover:text-text-primary hover:bg-surface-hover transition-colors group"
+      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all group"
     >
       <div className={`w-1.5 h-1.5 rounded-full ${statusColor} flex-shrink-0`} />
 
       {isHovering || showMenu ? (
         <div className="flex-1 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           {session.is_archived ? (
-            <ArchiveBoxIcon className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
+            <ArchiveBoxOutline className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
           ) : (
             <FolderOpenIcon className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
           )}
@@ -438,13 +476,9 @@ function SessionItem({
               autoFocus
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => onRenameSubmit()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onRenameSubmit();
-                if (e.key === "Escape") onRenameSubmit();
-              }}
-              className="flex-1 bg-bg-3 border border-border rounded px-1.5 py-0.5
-                         text-sm text-text-primary text-left"
+              onBlur={() => onRenameSubmit(session.id)}
+              onKeyDown={(e) => { if (e.key === "Enter") onRenameSubmit(session.id); if (e.key === "Escape") onRenameSubmit(session.id); }}
+              className="flex-1 bg-bg-3 border border-border rounded-md px-1.5 py-0.5 text-sm text-text-primary text-left"
             />
           ) : (
             <span className="flex-1 truncate">{session.title}</span>
@@ -463,35 +497,14 @@ function SessionItem({
       )}
 
       {isHovering && (
-        <div
-          className="flex-shrink-0 flex items-center gap-0.5"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={() => onTag()}
-            className="w-5 h-5 rounded flex items-center justify-center
-                       text-text-muted hover:text-text-accent hover:bg-surface-active
-                       transition-colors"
-            title="Tag"
-          >
+        <div className="flex-shrink-0 flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => onTag(session.id)} className="w-5 h-5 rounded-md flex items-center justify-center text-text-muted hover:text-accent hover:bg-surface-active transition-all" title="Tag">
             <TagIcon className="w-3.5 h-3.5" />
           </button>
-          <button
-            onClick={() => onFork()}
-            className="w-5 h-5 rounded flex items-center justify-center
-                       text-text-muted hover:text-text-accent hover:bg-surface-active
-                       transition-colors"
-            title="Fork"
-          >
+          <button onClick={() => onFork(session)} className="w-5 h-5 rounded-md flex items-center justify-center text-text-muted hover:text-accent hover:bg-surface-active transition-all" title="Fork">
             <DocumentDuplicateIcon className="w-3.5 h-3.5" />
           </button>
-          <button
-            onClick={() => onDelete()}
-            className="w-5 h-5 rounded flex items-center justify-center
-                       text-text-muted hover:text-status-error hover:bg-surface-active
-                       transition-colors"
-            title="Delete"
-          >
+          <button onClick={() => onDelete()} className="w-5 h-5 rounded-md flex items-center justify-center text-text-muted hover:text-status-error hover:bg-surface-active transition-all" title="Delete">
             <TrashIcon className="w-3.5 h-3.5" />
           </button>
         </div>

@@ -227,7 +227,7 @@ export class SessionStore {
     this.protocolClient.on(EventType.SESSION_CREATED, (envelope: WSEnvelopeClient) => {
       const session: SessionSnapshot = {
         id: envelope.session_id,
-        title: envelope.payload.message ?? "New Session",
+        title: (envelope.payload.message as string) ?? "New Session",
         model: (envelope.payload.model as string) ?? "default",
         status: "created",
         is_active: false,
@@ -300,13 +300,9 @@ export class SessionStore {
   }
 
   private emit(event: SessionEvent): void {
-    for (const listener of this.listeners) {
-      try {
-        listener(event);
-      } catch (err) {
-        console.error("Session store listener error:", err);
-      }
-    }
+    Array.from(this.listeners).forEach((listener) => {
+      try { listener(event); } catch (err) { console.error("Session store listener error:", err); }
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -344,6 +340,7 @@ export class SessionStore {
   private storageKey = "tektos_sessions";
 
   private persist(): void {
+    if (typeof window === "undefined") return;
     try {
       localStorage.setItem(this.storageKey, JSON.stringify(Array.from(this.sessions.values())));
     } catch {
@@ -352,6 +349,7 @@ export class SessionStore {
   }
 
   private loadFromStorage(): void {
+    if (typeof window === "undefined") return;
     try {
       const data = localStorage.getItem(this.storageKey);
       if (data) {

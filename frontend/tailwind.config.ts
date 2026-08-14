@@ -1,5 +1,5 @@
 // @ts-check
-import { glob } from "tailwindcss";
+import { resolve } from "path";
 
 /** @type {import('tailwindcss').Config} */
 export default {
@@ -7,7 +7,6 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Dark-first palette — deep space blues, not pure black
         bg: {
           1: "#0a0e17",
           2: "#0d1520",
@@ -42,7 +41,6 @@ export default {
           error: "#ef4444",
           info: "#6366f1",
         },
-        // Tibetan theme override
         tibet: {
           bg: "#1a0f2e",
           gold: "#d4a843",

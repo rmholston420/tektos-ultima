@@ -1,348 +1,120 @@
-/**
- * Tektos-Ultima v1 — Protocol Client
- *
- * Connects to the FastAPI backend via normalized WebSocket protocol.
- * Handles envelope serialization, reconnection, and event dispatching.
- *
- * Exemplar pattern: Event-driven architecture with typed callbacks.
- */
+"use client";
 
-import type { WSEnvelope, EventType, WSEventData } from "../../../src/tektos/protocol/envelope";
-
-// ---------------------------------------------------------------------------
-// Type definitions (mirrors backend protocol)
-// ---------------------------------------------------------------------------
+export type EventType = "session.created" | "session.ready" | "session.updated" | "assistant.delta" | "assistant.completed" | "tool.started" | "tool.delta" | "tool.completed" | "tool.permission.required" | "system.message" | "session.interrupted" | "session.failed" | "self_improvement.tick" | "resource.warning";
 
 export interface WSEnvelopeClient {
-  session_id: string;
-  event_type: string;
-  payload: Record<string, unknown>;
-  seq?: number;
-  protocol_version: string;
-  timestamp?: string;
+  session_id: string; event_type: string; payload: Record<string, unknown>; seq?: number; protocol_version: string; timestamp?: string;
 }
-
-export interface WSPromptMessage {
-  type: "prompt";
-  session_id: string;
-  content: string;
-  model?: string;
-  cwd?: string;
-  /** Optional: continue from a specific seq for resumable prompts */
-  from_seq?: number;
-}
-
-export interface WSInterruptMessage {
-  type: "interrupt";
-  session_id: string;
-}
-
-export interface WSResumeMessage {
-  type: "resume";
-  session_id: string;
-  from_seq: number;
-}
-
-export type WSOutgoing = WSPromptMessage | WSInterruptMessage | WSResumeMessage;
-
-// ---------------------------------------------------------------------------
-// Client state
-// ---------------------------------------------------------------------------
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
-
-export interface ConnectionStateChange {
-  state: ConnectionState;
-  error?: string | null;
-}
-
-// ---------------------------------------------------------------------------
-// Event handler types
-// ---------------------------------------------------------------------------
-
+export interface ConnectionStateChange { state: ConnectionState; error?: string | null; }
 export type EventHandler = (envelope: WSEnvelopeClient) => void;
 export type ErrorHandler = (error: Error) => void;
 export type StateHandler = (state: ConnectionStateChange) => void;
 
-// ---------------------------------------------------------------------------
-// ProtocolClient — main connection manager
-// ---------------------------------------------------------------------------
-
 export class ProtocolClient {
   private ws: WebSocket | null = null;
-  private host: string;
-  private port: number;
-  private protocol: string;
-  private handlers = new Map<EventType, Set<EventHandler>>();
-  private errorHandlers = new Set<ErrorHandler>();
-  private stateHandlers = new Set<StateHandler>();
+  private _sessionId = "";
+  private handlers = new Map<string, Set<EventHandler>>();
+  private errorHandlers: ErrorHandler[] = [];
+  private stateHandlers: StateHandler[] = [];
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
   private reconnectDelay = 1000;
   private state: ConnectionState = "disconnected";
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-  private lastPong: number = 0;
-  private lastSessionId: string = "";
+  private lastPong = 0;
+  private host = "localhost";
+  private port = 8020;
+  private protocol = "ws";
 
-  constructor(options: {
-    host?: string;
-    port?: number;
-    protocol?: string;
-  } = {}) {
-    this.host = options.host ?? "localhost";
-    this.port = options.port ?? 8020;
-    this.protocol = options.protocol ?? (typeof window !== "undefined" && window.location.protocol === "https:" ? "wss" : "ws");
+  constructor(options?: { host?: string; port?: number; protocol?: string }) {
+    if (options?.host) this.host = options.host;
+    if (options?.port) this.port = options.port;
+    if (options?.protocol) this.protocol = options.protocol;
+    else if (typeof window !== "undefined" && window.location.protocol === "https:") this.protocol = "wss";
   }
 
-  private buildWsUrl(sessionId: string): string {
-    return `${this.protocol}://${this.host}:${this.port}/ws/${sessionId}`;
+  private notifyError(err: Error): void {
+    this.errorHandlers.forEach((h) => { try { h(err); } catch (_) { console.error("Handler threw", _); } });
   }
-
-  // -----------------------------------------------------------------------
-  // Connection lifecycle
-  // -----------------------------------------------------------------------
 
   connect(): void {
-    if (!this.lastSessionId) {
-      // No session ID yet — skip WebSocket connection
-      this.setState("disconnected");
+    if (!this._sessionId || (this.ws && this.ws.readyState <= WebSocket.OPEN)) {
+      if (!this._sessionId) this.setState("disconnected");
       return;
     }
-
-    if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
-      return; // Already connected or connecting
-    }
-
     this.setState("connecting");
     this.reconnectAttempts++;
-
     try {
-      const wsUrl = this.buildWsUrl(this.lastSessionId);
-      this.ws = new WebSocket(wsUrl);
-
-      this.ws.onopen = () => {
-        this.reconnectAttempts = 0;
-        this.reconnectDelay = 1000; // Reset backoff
-        this.setState("connected");
-        this.startHeartbeat();
-      };
-
-      this.ws.onmessage = (event: MessageEvent) => {
-        try {
-          const envelope: WSEnvelopeClient = JSON.parse(event.data);
-          this.dispatch(envelope);
-        } catch (err) {
-          this.onError(new Error("Failed to parse WebSocket message: " + err));
-        }
-      };
-
-      this.ws.onclose = (event: CloseEvent) => {
-        this.stopHeartbeat();
-        this.setState("disconnected", event.reason || "Connection closed");
-
-        if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
-          this.scheduleReconnect();
-        }
-      };
-
-      this.ws.onerror = () => {
-        this.setState("disconnected", "WebSocket error");
-      };
-    } catch (err) {
-      this.onError(new Error("Failed to create WebSocket connection: " + err));
-    }
+      this.ws = new WebSocket(`${this.protocol}://${this.host}:${this.port}/ws/${this._sessionId}`);
+      this.ws.onopen = () => { this.reconnectAttempts = 0; this.reconnectDelay = 1000; this.setState("connected"); this.startHeartbeat(); };
+      this.ws.onmessage = (e: MessageEvent) => { try { this.dispatch(JSON.parse(e.data)); } catch (err) { this.notifyError(new Error("Parse error: " + err)); } };
+      this.ws.onclose = (ev) => { this.stopHeartbeat(); this.setState("disconnected", ev.reason || "Closed"); if (ev.code !== 1000 && this.reconnectAttempts < 10) this.scheduleReconnect(); };
+      this.ws.onerror = () => this.setState("disconnected", "WS error");
+    } catch (err) { this.notifyError(new Error("Connect error: " + err)); }
   }
 
-  /** Called when session ID changes — reconnect with new session */
-  reconnect(): void {
-    this.disconnect();
-    this.connect();
-  }
+  disconnect(): void { if (this.ws) { this.ws.close(1000, "Disconnect"); this.ws = null; } this.stopHeartbeat(); this.setState("disconnected"); }
+  reconnect(): void { this.disconnect(); this.connect(); }
+  sendPrompt(message: string, options?: { model?: string; cwd?: string }): void { this.ws?.send(JSON.stringify({ type: "prompt", session_id: this._sessionId, message, model: options?.model, cwd: options?.cwd })); }
+  sendInterrupt(): void { if (this._sessionId) this.ws?.send(JSON.stringify({ type: "interrupt", session_id: this._sessionId })); }
+  sendResume(fromSeq: number): void { if (this._sessionId) this.ws?.send(JSON.stringify({ type: "resume", session_id: this._sessionId, from_seq: fromSeq })); }
+  setSessionId(id: string): void { this._sessionId = id; }
+  get sessionId(): string { return this._sessionId; }
 
-  disconnect(): void {
-    if (this.ws) {
-      this.ws.close(1000, "Client disconnect");
-      this.ws = null;
-    }
-    this.stopHeartbeat();
-    this.setState("disconnected");
-  }
-
-  // -----------------------------------------------------------------------
-  // Messaging
-  // -----------------------------------------------------------------------
-
-  sendPrompt(message: string, options?: { model?: string; cwd?: string }): void {
-    const envelope: WSOutgoing = {
-      type: "prompt",
-      session_id: options?.model ? `${this.lastSessionId}-${Date.now()}` : this.lastSessionId,
-      prompt: message,
-      model: options?.model,
-      cwd: options?.cwd,
-    };
-    this.ws?.send(JSON.stringify(envelope));
-  }
-
-  sendInterrupt(): void {
-    if (!this.lastSessionId) return;
-    const envelope: WSOutgoing = {
-      type: "interrupt",
-      session_id: this.lastSessionId,
-    };
-    this.ws?.send(JSON.stringify(envelope));
-  }
-
-  sendResume(fromSeq: number): void {
-    if (!this.lastSessionId) return;
-    const envelope: WSOutgoing = {
-      type: "resume",
-      session_id: this.lastSessionId,
-      from_seq: fromSeq,
-    };
-    this.ws?.send(JSON.stringify(envelope));
-  }
-
-  private lastSessionId = "";
-  setSessionId(id: string): void {
-    this.lastSessionId = id;
-  }
-
-  // -----------------------------------------------------------------------
-  // Event handling
-  // -----------------------------------------------------------------------
-
-  on(eventType: EventType | "*", handler: EventHandler): void {
+  on(eventType: string | "*", handler: EventHandler): void {
     const key = eventType === "*" ? "*" : eventType;
-    if (!this.handlers.has(key)) {
-      this.handlers.set(key, new Set());
-    }
+    if (!this.handlers.has(key)) this.handlers.set(key, new Set());
     this.handlers.get(key)!.add(handler);
   }
 
-  off(eventType: EventType | "*", handler: EventHandler): void {
+  off(eventType: string | "*", handler: EventHandler): void {
     const key = eventType === "*" ? "*" : eventType;
     this.handlers.get(key)?.delete(handler);
-    if (this.handlers.get(key)?.size === 0) {
-      this.handlers.delete(key);
-    }
   }
 
-  onError(handler: ErrorHandler): void {
-    this.errorHandlers.add(handler);
-  }
-
-  offError(handler: ErrorHandler): void {
-    this.errorHandlers.delete(handler);
-  }
-
-  onStateChange(handler: StateHandler): void {
-    this.stateHandlers.add(handler);
-  }
-
-  offStateChange(handler: StateHandler): void {
-    this.stateHandlers.delete(handler);
-  }
-
-  // -----------------------------------------------------------------------
-  // Internal helpers
-  // -----------------------------------------------------------------------
+  onError(handler: ErrorHandler): void { this.errorHandlers.push(handler); }
+  offError(handler: ErrorHandler): void { const i = this.errorHandlers.indexOf(handler); if (i >= 0) this.errorHandlers.splice(i, 1); }
+  onStateChange(handler: StateHandler): void { this.stateHandlers.push(handler); }
+  offStateChange(handler: StateHandler): void { const i = this.stateHandlers.indexOf(handler); if (i >= 0) this.stateHandlers.splice(i, 1); }
 
   private dispatch(envelope: WSEnvelopeClient): void {
-    // Update session ID if received
-    this.lastSessionId = envelope.session_id;
-
-    // Dispatch to specific event handler
-    const specificHandlers = this.handlers.get(envelope.event_type as EventType);
-    if (specificHandlers) {
-      for (const handler of specificHandlers) {
-        try {
-          handler(envelope);
-        } catch (err) {
-          this.onError(new Error("Event handler error: " + err));
-        }
-      }
-    }
-
-    // Dispatch to wildcard handler
-    const wildcardHandlers = this.handlers.get("*");
-    if (wildcardHandlers) {
-      for (const handler of wildcardHandlers) {
-        try {
-          handler(envelope);
-        } catch (err) {
-          this.onError(new Error("Wildcard handler error: " + err));
-        }
-      }
-    }
+    this._sessionId = envelope.session_id;
+    const eventKey = envelope.event_type;
+    const specific = this.handlers.get(eventKey);
+    if (specific) specific.forEach((h) => { try { h(envelope); } catch (e) { this.notifyError(new Error("Event handler error: " + e)); } });
+    const wildcard = this.handlers.get("*");
+    if (wildcard) wildcard.forEach((h) => { try { h(envelope); } catch (e) { this.notifyError(new Error("Wildcard handler error: " + e)); } });
   }
 
-  private setState(state: ConnectionState, error?: string | null): void {
-    this.state = state;
-    for (const handler of this.stateHandlers) {
-      handler({ state, error: error ?? null });
-    }
-  }
-
-  private onError(error: Error): void {
-    for (const handler of this.errorHandlers) {
-      try {
-        handler(error);
-      } catch (err) {
-        console.error("Error handler threw:", err);
-      }
-    }
+  private setState(s: ConnectionState, e?: string | null): void {
+    this.state = s;
+    this.stateHandlers.forEach((h) => h({ state: s, error: e ?? null }));
   }
 
   private scheduleReconnect(): void {
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts);
-    this.reconnectDelay = Math.min(delay, 30000); // Max 30s backoff
-    this.setState("reconnecting", `Reconnecting in ${Math.round(delay / 1000)}s...`);
-
-    setTimeout(() => {
-      this.connect();
-    }, delay);
+    const d = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts), 30000);
+    this.reconnectDelay = d;
+    this.setState("reconnecting", `Reconnecting in ${Math.round(d / 1000)}s...`);
+    setTimeout(() => this.connect(), d);
   }
 
   private startHeartbeat(): void {
     this.lastPong = Date.now();
     this.heartbeatInterval = setInterval(() => {
-      const elapsed = Date.now() - this.lastPong;
-      if (elapsed > 15000) {
-        // No pong for 15s — consider connection dead
-        this.ws?.close(4000, "Heartbeat timeout");
-      } else {
-        this.ws?.send(JSON.stringify({ type: "ping" }));
-      }
-    }, 10000); // Ping every 10s
+      if (Date.now() - this.lastPong > 15000) this.ws?.close(4000, "Timeout");
+      else this.ws?.send(JSON.stringify({ type: "ping" }));
+    }, 10000);
   }
 
-  private stopHeartbeat(): void {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
-  }
+  private stopHeartbeat(): void { if (this.heartbeatInterval) { clearInterval(this.heartbeatInterval); this.heartbeatInterval = null; } }
 }
 
-// ---------------------------------------------------------------------------
-// Event types (mirrors backend)
-// ---------------------------------------------------------------------------
-
 export const EventType = {
-  SESSION_CREATED: "session.created",
-  SESSION_READY: "session.ready",
-  SESSION_UPDATED: "session.updated",
-  ASSISTANT_DELTA: "assistant.delta",
-  ASSISTANT_COMPLETED: "assistant.completed",
-  TOOL_STARTED: "tool.started",
-  TOOL_DELTA: "tool.delta",
-  TOOL_COMPLETED: "tool.completed",
-  TOOL_PERMISSION_REQUIRED: "tool.permission.required",
-  SYSTEM_MESSAGE: "system.message",
-  SESSION_INTERRUPTED: "session.interrupted",
-  SESSION_FAILED: "session.failed",
-  SELF_IMPROVEMENT_TICK: "self_improvement.tick",
-  RESOURCE_WARNING: "resource.warning",
+  SESSION_CREATED: "session.created", SESSION_READY: "session.ready", SESSION_UPDATED: "session.updated",
+  ASSISTANT_DELTA: "assistant.delta", ASSISTANT_COMPLETED: "assistant.completed",
+  TOOL_STARTED: "tool.started", TOOL_DELTA: "tool.delta", TOOL_COMPLETED: "tool.completed",
+  TOOL_PERMISSION_REQUIRED: "tool.permission.required", SYSTEM_MESSAGE: "system.message",
+  SESSION_INTERRUPTED: "session.interrupted", SESSION_FAILED: "session.failed",
+  SELF_IMPROVEMENT_TICK: "self_improvement.tick", RESOURCE_WARNING: "resource.warning",
 } as const;
-
-export type EventType = (typeof EventType)[keyof typeof EventType];

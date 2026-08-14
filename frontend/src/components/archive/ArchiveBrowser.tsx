@@ -31,7 +31,7 @@ interface ArchiveBrowserProps {
   sessionStore: SessionStore;
   activeSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
-  onOpenModal: (session: SessionSnapshot) => void;
+  onOpenModal?: (session: SessionSnapshot) => void;
   collapsed: boolean;
 }
 
@@ -264,7 +264,7 @@ export function ArchiveBrowser({
         {viewMode === "list" ? (
           <ListMode sessions={sessions} activeSessionId={activeSessionId}
             onSelectSession={onSelectSession}
-            onOpenModal={onOpenModal}
+            onOpenModal={onOpenModal ?? (() => {})}
             onRename={handleRename}
             onTag={handleTag}
             onFork={handleFork}
@@ -273,7 +273,7 @@ export function ArchiveBrowser({
         ) : (
           <GridMode sessions={sessions} activeSessionId={activeSessionId}
             onSelectSession={onSelectSession}
-            onOpenModal={onOpenModal}
+            onOpenModal={onOpenModal ?? (() => {})}
             onRename={handleRename}
             onTag={handleTag}
             onFork={handleFork}
@@ -508,6 +508,8 @@ function GridMode({
   activeSessionId,
   onSelectSession,
   onOpenModal,
+  onRename,
+  onTag,
   onFork,
   onArchive,
 }: {
@@ -515,9 +517,15 @@ function GridMode({
   activeSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
   onOpenModal: (session: SessionSnapshot) => void;
+  onRename: (sessionId: string, title: string) => void;
+  onTag: (sessionId: string, tag: string) => void;
   onFork: (session: SessionSnapshot) => void;
   onArchive: (sessionId: string) => void;
 }) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [tagSessionId, setTagSessionId] = useState<string | null>(null);
+  const [tagValue, setTagValue] = useState("");
   return (
     <div className="grid grid-cols-1 gap-2">
       {sessions.map((session) => (
@@ -529,80 +537,59 @@ function GridMode({
               : "bg-bg-3 hover:bg-bg-2 hover:border-border/80"
           }`}
         >
-          <button
-            onClick={() => onSelectSession(session.id)}
-            className="w-full text-left"
-          >
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="text-sm font-medium text-text-primary truncate">
-                {session.title}
-              </h3>
-              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                session.is_archived
-                  ? "bg-text-muted"
-                  : session.is_failed
-                  ? "bg-status-error"
-                  : session.is_active
-                  ? "bg-status-success"
-                  : "bg-text-secondary"
-              }`} />
-            </div>
-            <div className="flex items-center gap-2 text-xs text-text-muted">
-              <ClockIcon className="w-3.5 h-3.5" />
-              <span>{formatDate(session.updated_at)}</span>
-            </div>
-            <div className="flex items-center gap-1 mt-1">
-              <span className="text-xs text-text-muted bg-bg-2 px-1.5 py-0.5 rounded">
-                {session.model}
-              </span>
-              {session.tag && (
-                <span className="text-xs text-accent/70 bg-accent/10 px-1.5 py-0.5 rounded">
-                  {session.tag}
-                </span>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-medium text-text-primary truncate">
+              {renamingId === session.id ? (
+                <input
+                  autoFocus
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onBlur={() => onRename(session.id, renameValue)}
+                  onKeyDown={(e) => { if (e.key === "Enter") onRename(session.id, renameValue); if (e.key === "Escape") { setRenamingId(null); setRenameValue(""); } }}
+                  className="w-32 bg-bg-3 border border-border rounded px-1.5 py-0.5 text-sm text-text-primary"
+                />
+              ) : (
+                <button onClick={() => onSelectSession(session.id)} className="w-full text-left">{session.title}</button>
               )}
-            </div>
-          </button>
-
-          {/* Actions */}
+            </h3>
+            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+              session.is_archived ? "bg-text-muted" : session.is_failed ? "bg-status-error" : session.is_active ? "bg-status-success" : "bg-text-secondary"
+            }`} />
+          </div>
+          <div className="flex items-center gap-2 text-xs text-text-muted">
+            <ClockIcon className="w-3.5 h-3.5" />
+            <span>{formatDate(session.updated_at)}</span>
+          </div>
+          <div className="flex items-center gap-1 mt-1">
+            <span className="text-xs text-text-muted bg-bg-2 px-1.5 py-0.5 rounded">{session.model}</span>
+            {session.tag && <span className="text-xs text-accent/70 bg-accent/10 px-1.5 py-0.5 rounded">{session.tag}</span>}
+          </div>
           <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50">
             {!session.is_archived && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onFork(session);
-                }}
-                className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded
-                           text-xs text-text-secondary hover:text-accent hover:bg-accent/10
-                           transition-colors"
-              >
-                <DocumentDuplicateIcon className="w-3.5 h-3.5" />
-                Fork
-              </button>
+              <>
+                <button onClick={() => onTag(session.id, tagValue)} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors">
+                  <TagIcon className="w-3.5 h-3.5" /> Tag
+                </button>
+                <button onClick={() => { setTagSessionId(session.id); }} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors">
+                  <PencilIcon className="w-3.5 h-3.5" /> Rename
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); onFork(session); }} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors">
+                  <DocumentDuplicateIcon className="w-3.5 h-3.5" /> Fork
+                </button>
+              </>
             )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenModal(session);
-              }}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded
-                         text-xs text-text-secondary hover:text-accent hover:bg-accent/10
-                         transition-colors"
-            >
-              <EyeIcon className="w-3.5 h-3.5" />
-              View
+            <button onClick={(e) => { e.stopPropagation(); onOpenModal(session); }} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-accent/10 transition-colors">
+              <EyeIcon className="w-3.5 h-3.5" /> View
             </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onArchive(session.id);
-              }}
-              className="flex items-center justify-center px-2 py-1 rounded
-                         text-text-muted hover:text-status-error hover:bg-status-error/10
-                         transition-colors"
-            >
+            <button onClick={(e) => { e.stopPropagation(); onArchive(session.id); }} className="flex items-center justify-center px-2 py-1 rounded text-text-muted hover:text-status-error hover:bg-status-error/10 transition-colors">
               <TrashIcon className="w-3.5 h-3.5" />
             </button>
           </div>
+          {tagSessionId === session.id && (
+            <div className="mt-2 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+              <input autoFocus value={tagValue} onChange={(e) => setTagValue(e.target.value)} onBlur={() => { if (tagValue.trim()) onTag(session.id, tagValue.trim()); setTagSessionId(null); setTagValue(""); }} onKeyDown={(e) => { if (e.key === "Enter" && tagValue.trim()) { onTag(session.id, tagValue.trim()); setTagSessionId(null); setTagValue(""); } if (e.key === "Escape") { setTagSessionId(null); setTagValue(""); } }} placeholder="Enter tag..." className="flex-1 bg-bg-3 border border-border rounded px-1.5 py-0.5 text-xs text-text-primary" />
+            </div>
+          )}
         </div>
       ))}
     </div>

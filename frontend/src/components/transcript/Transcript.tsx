@@ -27,8 +27,8 @@ interface TranscriptMessage {
   isStreaming?: boolean;
 }
 
-interface TranscriptEvent {
-  type: "message" | "tool" | "system";
+export interface TranscriptEvent {
+  type: "message" | "tool" | "system" | "assistant.delta" | "assistant.completed" | "session.updated" | "session.created" | "system.message";
   session_id: string;
   seq: number;
   payload: Record<string, unknown>;
