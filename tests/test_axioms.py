@@ -1,383 +1,360 @@
-"""Tests for Axiom System — context compression framework."""
+"""
+Tektos-Ultima v1 — Axiom System Tests
 
+Tests the axiom framework using the actual API:
+- Axiom dataclass (id, category, status, date, content, notes, metadata, prerequisites, blocking, tags)
+- AxiomSystem: load, get, has, add, create, verify, set_status
+- Querying: list_active, list_by_category, list_by_status
+- Dependency: get_blockers, get_dependents
+- Persistence to .axiom YAML files
+- to_markdown rendering
+- Convenience functions
+"""
+
+import asyncio
 from pathlib import Path
 
 import pytest
 import yaml
 
-from tektos.axioms import Axiom, AxiomSystem, axiom_create, axiom_has, axiom_verify, load_axioms
+from tektos.axioms import (
+    Axiom,
+    AxiomSystem,
+    axiom_create,
+    axiom_get,
+    axiom_has,
+    axiom_verify,
+    load_axioms,
+)
 
 
-# ── Axiom Data Model ────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Axiom dataclass
+# ---------------------------------------------------------------------------
 
-class TestAxiom:
-    def test_defaults(self):
-        a = Axiom(id="test.1", category="misc", status="pending", date="2026-01-01")
-        assert a.content == ""
-        assert a.notes == ""
-        assert a.metadata == {}
-        assert a.prerequisites == []
-        assert a.blocking == []
-        assert a.tags == []
+
+class TestAxiomDataclass:
+    def test_axiom_defaults(self):
+        axiom = Axiom(id="test.1", category="milestone", status="pending", date="2024-01-01")
+        assert axiom.id == "test.1"
+        assert axiom.content == ""
+        assert axiom.notes == ""
+        assert axiom.metadata == {}
+        assert axiom.prerequisites == []
+        assert axiom.blocking == []
+        assert axiom.tags == []
+
+    def test_axiom_custom_values(self):
+        axiom = Axiom(
+            id="test.2",
+            category="architecture",
+            status="verified",
+            date="2024-06-15",
+            content="Use event sourcing",
+            notes="See ADR-001",
+            metadata={"test_count": 100},
+            prerequisites=["test.1"],
+            blocking=[],
+            tags=["events", "persistence"],
+        )
+        assert axiom.id == "test.2"
+        assert axiom.category == "architecture"
+        assert axiom.status == "verified"
+        assert axiom.content == "Use event sourcing"
+        assert axiom.notes == "See ADR-001"
+        assert axiom.metadata == {"test_count": 100}
+        assert axiom.prerequisites == ["test.1"]
+        assert axiom.tags == ["events", "persistence"]
 
     def test_is_active_pending(self):
-        a = Axiom(id="test.1", category="misc", status="pending", date="2026-01-01")
-        assert a.is_active() is True
-        assert a.is_complete() is False
+        axiom = Axiom(id="a", category="x", status="pending", date="2024-01-01")
+        assert axiom.is_active() is True
 
     def test_is_active_in_progress(self):
-        a = Axiom(id="test.1", category="misc", status="in_progress", date="2026-01-01")
-        assert a.is_active() is True
-        assert a.is_complete() is False
+        axiom = Axiom(id="a", category="x", status="in_progress", date="2024-01-01")
+        assert axiom.is_active() is True
 
     def test_is_active_verified(self):
-        a = Axiom(id="test.1", category="misc", status="verified", date="2026-01-01")
-        assert a.is_active() is True
-        assert a.is_complete() is True
+        axiom = Axiom(id="a", category="x", status="verified", date="2024-01-01")
+        assert axiom.is_active() is True
 
     def test_is_active_deprecated(self):
-        a = Axiom(id="test.1", category="misc", status="deprecated", date="2026-01-01")
-        assert a.is_active() is False
-        assert a.is_complete() is False
+        axiom = Axiom(id="a", category="x", status="deprecated", date="2024-01-01")
+        assert axiom.is_active() is False
+
+    def test_is_complete_verified(self):
+        axiom = Axiom(id="a", category="x", status="verified", date="2024-01-01")
+        assert axiom.is_complete() is True
+
+    def test_is_complete_not_verified(self):
+        axiom = Axiom(id="a", category="x", status="pending", date="2024-01-01")
+        assert axiom.is_complete() is False
 
 
-# ── AxiomSystem ─────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# AxiomSystem CRUD
+# ---------------------------------------------------------------------------
 
-class TestAxiomSystem:
-    def test_load_empty_directory(self, tmp_path):
-        """Loading from empty directory should return empty system."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        assert len(system.list_active()) == 0
 
-    def test_load_single_axiom(self, tmp_path):
-        """Should load a single axiom from file."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "milestone.axiom"
-        axiom_file.write_text(yaml.dump({
-            'id': 'phase.6.1.test',
-            'category': 'milestone',
-            'status': 'verified',
-            'date': '2026-01-01',
-            'content': 'Test axiom',
-        }))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        assert system.has('phase.6.1.test') is True
-        axiom = system.get('phase.6.1.test')
-        assert axiom is not None
-        assert axiom.status == 'verified'
-        assert axiom.content == 'Test axiom'
+class TestAxiomSystemCRUD:
+    @pytest.fixture
+    def axsys(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()  # ensure empty
+        return s
 
-    def test_load_multiple_axioms(self, tmp_path):
-        """Should load multiple axioms from same file."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "milestone.axiom"
-        axiom_file.write_text(yaml.dump_all([{
-            'id': 'phase.6.1.test',
-            'category': 'milestone',
-            'status': 'verified',
-            'date': '2026-01-01',
-            'content': 'Test 1',
-        }, {
-            'id': 'phase.6.2.test',
-            'category': 'milestone',
-            'status': 'pending',
-            'date': '2026-01-02',
-            'content': 'Test 2',
-        }]))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        assert system.has('phase.6.1.test') is True
-        assert system.has('phase.6.2.test') is True
-        assert len(system.list_active()) == 2
+    def test_initial_empty(self, axsys):
+        assert axsys.list_active() == []
 
-    def test_get_returns_none(self, tmp_path):
-        """get() should return None for unknown axiom ID."""
-        system = AxiomSystem()
-        system.load()
-        assert system.get('nonexistent.id') is None
+    def test_add_axiom(self, axsys):
+        axiom = Axiom(id="test.1", category="milestone", status="verified", date="2024-01-01", content="done")
+        axsys.add(axiom)
+        found = axsys.get("test.1")
+        assert found is not None
+        assert found.content == "done"
 
-    def test_has_returns_false(self, tmp_path):
-        """has() should return False for unknown axiom ID."""
-        system = AxiomSystem()
-        system.load()
-        assert system.has('nonexistent.id') is False
+    def test_get_missing_returns_none(self, axsys):
+        assert axsys.get("nonexistent") is None
 
-    def test_verify_axiom(self, tmp_path):
-        """verify() should mark axiom as verified and persist."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "milestone.axiom"
-        axiom_file.write_text(yaml.dump({
-            'id': 'phase.6.1.test',
-            'category': 'milestone',
-            'status': 'pending',
-            'date': '2026-01-01',
-            'content': 'Test axiom',
-        }))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        assert system.verify('phase.6.1.test') is True
-        assert system.get('phase.6.1.test').status == 'verified'
+    def test_has_true(self, axsys):
+        axsys.add(Axiom(id="test.1", category="x", status="verified", date="2024-01-01"))
+        assert axsys.has("test.1") is True
 
-        # _save() groups by category into subdirectories, e.g. milestone/milestone.axiom
-        # Verify persistence by re-reading from the subdirectory
-        sub_dir = ax_dir / "milestone"
-        saved_file = sub_dir / "milestone.axiom"
-        with open(saved_file) as f:
-            data = list(yaml.safe_load_all(f))
-        assert len(data) >= 1
-        assert data[0]['status'] == 'verified'
+    def test_has_false(self, axsys):
+        assert axsys.has("nonexistent") is False
 
-    def test_set_status(self, tmp_path):
-        """set_status() should update status and persist."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "milestone.axiom"
-        axiom_file.write_text(yaml.dump({
-            'id': 'phase.6.1.test',
-            'category': 'milestone',
-            'status': 'pending',
-            'date': '2026-01-01',
-        }))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        assert system.set_status('phase.6.1.test', 'in_progress') is True
-        assert system.get('phase.6.1.test').status == 'in_progress'
-        assert system.set_status('nonexistent', 'verified') is False
+    def test_verify(self, axsys):
+        axsys.add(Axiom(id="test.1", category="x", status="pending", date="2024-01-01"))
+        result = axsys.verify("test.1")
+        assert result is True
+        found = axsys.get("test.1")
+        assert found.status == "verified"
 
-    def test_add_axiom(self, tmp_path):
-        """add() should store axiom and persist."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        axiom = Axiom(id='phase.6.1.new', category='milestone', status='verified', date='2026-01-01')
-        system.add(axiom)
-        assert system.has('phase.6.1.new') is True
+    def test_verify_missing(self, axsys):
+        assert axsys.verify("nonexistent") is False
 
-    def test_create_axiom(self, tmp_path):
-        """create() should create and persist axiom."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        axiom = system.create('phase.6.1.created', 'milestone', 'Created axiom')
-        assert axiom.id == 'phase.6.1.created'
-        assert axiom.category == 'milestone'
-        assert axiom.content == 'Created axiom'
-        assert axiom.status == 'pending'
-        assert system.has('phase.6.1.created') is True
+    def test_set_status(self, axsys):
+        axsys.add(Axiom(id="test.1", category="x", status="pending", date="2024-01-01"))
+        result = axsys.set_status("test.1", "in_progress")
+        assert result is True
+        found = axsys.get("test.1")
+        assert found.status == "in_progress"
 
-    def test_list_active(self, tmp_path):
-        """list_active() should exclude deprecated axioms."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "milestone.axiom"
-        axiom_file.write_text(yaml.dump_all([{
-            'id': 'active.test',
-            'category': 'milestone',
-            'status': 'verified',
-            'date': '2026-01-01',
-        }, {
-            'id': 'deprecated.test',
-            'category': 'milestone',
-            'status': 'deprecated',
-            'date': '2026-01-01',
-        }]))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        active = system.list_active()
-        assert len(active) == 1
-        assert active[0].id == 'active.test'
+    def test_set_status_missing(self, axsys):
+        assert axsys.set_status("nonexistent", "x") is False
 
-    def test_list_by_category(self, tmp_path):
-        """list_by_category() should filter by category."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "test.axiom"
-        axiom_file.write_text(yaml.dump_all([{
-            'id': 'test.1',
-            'category': 'milestone',
-            'status': 'verified',
-            'date': '2026-01-01',
-        }, {
-            'id': 'test.2',
-            'category': 'constraint',
-            'status': 'verified',
-            'date': '2026-01-01',
-        }]))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        milestones = system.list_by_category('milestone')
-        constraints = system.list_by_category('constraint')
-        assert len(milestones) == 1
-        assert milestones[0].id == 'test.1'
-        assert len(constraints) == 1
-        assert constraints[0].id == 'test.2'
+    def test_create(self, axsys):
+        axiom = axsys.create(
+            id="test.1", category="milestone", content="new axiom",
+            tags=["tag1"], metadata={"key": "val"},
+            prerequisites=["dep.1"],
+        )
+        assert axiom.id == "test.1"
+        assert axiom.category == "milestone"
+        assert axiom.status == "pending"
+        assert axiom.tags == ["tag1"]
+        assert axiom.metadata == {"key": "val"}
+        assert axiom.prerequisites == ["dep.1"]
+        # Verify it was persisted
+        found = axsys.get("test.1")
+        assert found is not None
 
-    def test_list_by_status(self, tmp_path):
-        """list_by_status() should filter by status."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "test.axiom"
-        axiom_file.write_text(yaml.dump_all([{
-            'id': 'test.1',
-            'category': 'misc',
-            'status': 'verified',
-            'date': '2026-01-01',
-        }, {
-            'id': 'test.2',
-            'category': 'misc',
-            'status': 'pending',
-            'date': '2026-01-01',
-        }]))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        verified = system.list_by_status('verified')
-        pending = system.list_by_status('pending')
-        assert len(verified) == 1
-        assert verified[0].id == 'test.1'
-        assert len(pending) == 1
-        assert pending[0].id == 'test.2'
+    def test_list_active(self, axsys):
+        axsys.add(Axiom(id="a1", category="x", status="verified", date="2024-01-01"))
+        axsys.add(Axiom(id="a2", category="x", status="deprecated", date="2024-01-01"))
+        axsys.add(Axiom(id="a3", category="x", status="in_progress", date="2024-01-01"))
+        active = axsys.list_active()
+        ids = {a.id for a in active}
+        assert "a1" in ids
+        assert "a3" in ids
+        assert "a2" not in ids  # deprecated is not active
 
-    def test_get_blockers(self, tmp_path):
-        """get_blockers() should return incomplete prerequisite axioms."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "test.axiom"
-        axiom_file.write_text(yaml.dump_all([{
-            'id': 'prereq.1',
-            'category': 'misc',
-            'status': 'pending',
-            'date': '2026-01-01',
-        }, {
-            'id': 'prereq.2',
-            'category': 'misc',
-            'status': 'verified',
-            'date': '2026-01-01',
-        }, {
-            'id': 'target.test',
-            'category': 'misc',
-            'status': 'pending',
-            'date': '2026-01-01',
-            'prerequisites': ['prereq.1', 'prereq.2'],
-        }]))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        # Debug: print loaded axiom IDs
-        print("Loaded axiom IDs:", list(system._axioms.keys()))
-        blockers = system.get_blockers('target.test')
-        # Only prereq.1 is incomplete (prereq.2 is verified)
+    def test_list_by_category(self, axsys):
+        axsys.add(Axiom(id="a1", category="architecture", status="verified", date="2024-01-01"))
+        axsys.add(Axiom(id="a2", category="milestone", status="verified", date="2024-01-01"))
+        axsys.add(Axiom(id="a3", category="architecture", status="pending", date="2024-01-01"))
+        arch = axsys.list_by_category("architecture")
+        assert len(arch) == 2
+        assert all(a.category == "architecture" for a in arch)
+
+    def test_list_by_status(self, axsys):
+        axsys.add(Axiom(id="a1", category="x", status="verified", date="2024-01-01"))
+        axsys.add(Axiom(id="a2", category="x", status="pending", date="2024-01-01"))
+        axsys.add(Axiom(id="a3", category="x", status="verified", date="2024-01-01"))
+        verified = axsys.list_by_status("verified")
+        assert len(verified) == 2
+        assert all(a.status == "verified" for a in verified)
+
+
+# ---------------------------------------------------------------------------
+# Dependency queries
+# ---------------------------------------------------------------------------
+
+
+class TestDependencyQueries:
+    @pytest.fixture
+    def axsys(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()
+        return s
+
+    def test_get_blockers_empty(self, axsys):
+        axsys.add(Axiom(id="a1", category="x", status="verified", date="2024-01-01", prerequisites=[]))
+        blockers = axsys.get_blockers("a1")
+        assert blockers == []
+
+    def test_get_blockers_present(self, axsys):
+        axsys.add(Axiom(id="dep1", category="x", status="pending", date="2024-01-01"))
+        axsys.add(Axiom(id="dep2", category="x", status="verified", date="2024-01-01"))
+        axsys.add(Axiom(id="a1", category="x", status="verified", date="2024-01-01", prerequisites=["dep1", "dep2"]))
+        blockers = axsys.get_blockers("a1")
         assert len(blockers) == 1
-        assert blockers[0].id == 'prereq.1'
+        assert blockers[0].id == "dep1"  # only pending one
 
-    def test_get_dependents(self, tmp_path):
-        """get_dependents() should return axioms that depend on given axiom."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "test.axiom"
-        axiom_file.write_text(yaml.dump_all([{
-            'id': 'base.test',
-            'category': 'misc',
-            'status': 'verified',
-            'date': '2026-01-01',
-        }, {
-            'id': 'dependent.1',
-            'category': 'misc',
-            'status': 'pending',
-            'date': '2026-01-01',
-            'prerequisites': ['base.test'],
-        }, {
-            'id': 'dependent.2',
-            'category': 'misc',
-            'status': 'pending',
-            'date': '2026-01-01',
-            'prerequisites': ['base.test'],
-        }]))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        dependents = system.get_dependents('base.test')
+    def test_get_blockers_missing_prerequisite(self, axsys):
+        axsys.add(Axiom(id="a1", category="x", status="verified", date="2024-01-01", prerequisites=["missing"]))
+        blockers = axsys.get_blockers("a1")
+        assert blockers == []  # missing prerequisite returns None, filtered out
+
+    def test_get_dependents(self, axsys):
+        axsys.add(Axiom(id="dep", category="x", status="verified", date="2024-01-01"))
+        axsys.add(Axiom(id="a1", category="x", status="pending", date="2024-01-01", prerequisites=["dep"]))
+        axsys.add(Axiom(id="a2", category="x", status="pending", date="2024-01-01", prerequisites=["dep"]))
+        axsys.add(Axiom(id="a3", category="x", status="pending", date="2024-01-01", prerequisites=["other"]))
+        dependents = axsys.get_dependents("dep")
         assert len(dependents) == 2
-        dep_ids = {d.id for d in dependents}
-        assert 'dependent.1' in dep_ids
-        assert 'dependent.2' in dep_ids
+        ids = {a.id for a in dependents}
+        assert "a1" in ids
+        assert "a2" in ids
+        assert "a3" not in ids
 
-    def test_to_markdown(self, tmp_path):
-        """to_markdown() should render axioms as Markdown."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "milestone.axiom"
-        axiom_file.write_text(yaml.dump({
-            'id': 'phase.6.1.test',
-            'category': 'milestone',
-            'status': 'verified',
-            'date': '2026-01-01',
-            'content': 'Test axiom',
-        }))
-        system = AxiomSystem(str(ax_dir))
-        system.load()
-        md = system.to_markdown()
-        assert '# Tektos Axioms' in md
-        assert 'phase.6.1.test' in md
-        assert 'Test axiom' in md
-
-    def test_empty_directory_creates_no_error(self):
-        """Loading from nonexistent directory should not crash."""
-        system = AxiomSystem('/nonexistent/path')
-        system.load()
-        assert len(system.list_active()) == 0
+    def test_get_dependents_none(self, axsys):
+        axsys.add(Axiom(id="a1", category="x", status="pending", date="2024-01-01", prerequisites=[]))
+        dependents = axsys.get_dependents("a1")
+        assert dependents == []
 
 
-# ── Convenience Functions ───────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Persistence to .axiom YAML
+# ---------------------------------------------------------------------------
+
+
+class TestPersistence:
+    def test_save_load_yaml(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()
+        s.add(Axiom(id="persist.1", category="milestone", status="verified", date="2024-01-01", content="saved", tags=["test"]))
+        # Re-create to simulate reload
+        s2 = AxiomSystem(str(tmp_path))
+        s2.load()
+        found = s2.get("persist.1")
+        assert found is not None
+        assert found.content == "saved"
+        assert found.tags == ["test"]
+
+    def test_yaml_file_created(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()
+        s.add(Axiom(id="f.1", category="architecture", status="verified", date="2024-01-01", content="yml"))
+        # Should create architecture/architecture.axiom
+        yml_path = tmp_path / "architecture" / "architecture.axiom"
+        assert yml_path.exists()
+        with open(yml_path) as f:
+            docs = list(yaml.safe_load_all(f))
+        assert any(d["id"] == "f.1" for d in docs if d)
+
+    def test_save_creates_categories(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()
+        s.add(Axiom(id="a.1", category="milestone", status="verified", date="2024-01-01"))
+        s.add(Axiom(id="a.2", category="directive", status="pending", date="2024-01-01"))
+        dirs = [d.name for d in tmp_path.iterdir() if d.is_dir()]
+        assert "milestone" in dirs
+        assert "directive" in dirs
+
+    def test_overwrite_existing_axiom(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()
+        s.add(Axiom(id="over.1", category="x", status="pending", date="2024-01-01"))
+        s.add(Axiom(id="over.1", category="x", status="verified", date="2024-01-02", content="updated"))
+        s2 = AxiomSystem(str(tmp_path))
+        s2.load()
+        found = s2.get("over.1")
+        assert found.status == "verified"
+        assert found.content == "updated"
+
+
+# ---------------------------------------------------------------------------
+# to_markdown
+# ---------------------------------------------------------------------------
+
+
+class TestToMarkdown:
+    def test_markdown_empty(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()
+        md = s.to_markdown()
+        assert "# Tektos Axioms" in md
+        assert "## Active Axioms" in md
+
+    def test_markdown_with_axioms(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()
+        s.add(Axiom(id="md.1", category="milestone", status="verified", date="2024-01-01", content="test content", tags=["a", "b"]))
+        md = s.to_markdown()
+        assert "### `md.1`" in md
+        assert "**Category**: milestone" in md
+        assert "**Status**: verified" in md
+        assert "**Summary**: test content" in md
+        assert "**Tags**: a, b" in md
+
+    def test_markdown_excludes_deprecated(self, tmp_path):
+        s = AxiomSystem(str(tmp_path))
+        s.load()
+        s.add(Axiom(id="dep.1", category="x", status="deprecated", date="2024-01-01"))
+        md = s.to_markdown()
+        assert "dep.1" not in md
+
+
+# ---------------------------------------------------------------------------
+# Convenience functions
+# ---------------------------------------------------------------------------
+
 
 class TestConvenienceFunctions:
-    @pytest.fixture(autouse=True)
-    def reset_cache(self):
-        """Reset global axiom cache before each test."""
-        import tektos.axioms
-        tektos.axioms._axiom_system = None
-        yield
-        tektos.axioms._axiom_system = None
+    def test_axiom_create_and_get(self, tmp_path):
+        # Reset global cache
+        import tektos.axioms as axmod
+        axmod._axiom_system = None
+        s = AxiomSystem(str(tmp_path))
+        axmod._axiom_system = s
+        s.load()
 
-    def test_axiom_has(self, tmp_path):
-        """axiom_has() should check existence."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "milestone.axiom"
-        axiom_file.write_text(yaml.dump({
-            'id': 'test.has',
-            'category': 'misc',
-            'status': 'verified',
-            'date': '2026-01-01',
-        }))
-        import tektos.axioms
-        tektos.axioms._axiom_system = AxiomSystem(str(ax_dir))
-        tektos.axioms._axiom_system.load()
-        assert axiom_has('test.has') is True
-        assert axiom_has('nonexistent') is False
+        axiom = axiom_create("conv.1", "milestone", "convenience test", tags=["conv"])
+        assert axiom.id == "conv.1"
+        assert axiom.content == "convenience test"
 
-    def test_axiom_verify(self, tmp_path):
-        """axiom_verify() should mark as verified."""
-        ax_dir = tmp_path / "axioms"
-        ax_dir.mkdir()
-        axiom_file = ax_dir / "milestone.axiom"
-        axiom_file.write_text(yaml.dump({
-            'id': 'test.verify',
-            'category': 'milestone',
-            'status': 'pending',
-            'date': '2026-01-01',
-        }))
-        from tektos.axioms import axiom_get
-        import tektos.axioms
-        tektos.axioms._axiom_system = AxiomSystem(str(ax_dir))
-        tektos.axioms._axiom_system.load()
-        assert axiom_verify('test.verify') is True
-        ax = axiom_get('test.verify')
-        assert ax is not None
-        assert ax.status == 'verified'
+        found = axiom_get("conv.1")
+        assert found is not None
+        assert found.id == "conv.1"
+
+        assert axiom_has("conv.1") is True
+        assert axiom_has("conv.missing") is False
+
+        assert axiom_verify("conv.1") is True
+        found = axiom_get("conv.1")
+        assert found.status == "verified"
+
+    def test_axiom_verify_missing(self):
+        import tektos.axioms as axmod
+        s = AxiomSystem("/nonexistent/path")
+        axmod._axiom_system = s
+        s.load()
+        assert axiom_verify("missing") is False
+
+    def test_axiom_get_missing(self):
+        import tektos.axioms as axmod
+        s = AxiomSystem("/nonexistent/path")
+        axmod._axiom_system = s
+        s.load()
+        assert axiom_get("missing") is None
