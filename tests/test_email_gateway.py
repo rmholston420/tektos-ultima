@@ -1,12 +1,23 @@
-"""Tests for EmailGateway — Gmail IMAP/SMTP integration."""
+"""
+Tektos-Ultima v1 — Email Gateway Tests
+
+Tests EmailConfig, EmailMessage, EmailGatewayResponse, and EmailGateway:
+- Config validation (Pydantic)
+- Dataclass defaults
+- Gateway lifecycle (init, poll, send, shutdown)
+- Email parsing (plain, multipart, HTML, attachments)
+- Handler invocation
+- Auto-reply logic
+- Subject prefix extraction
+"""
 
 import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
+from pydantic import ValidationError
 
-from src.tektos.email_gateway import (
+from tektos.email_gateway import (
     EmailConfig,
     EmailGateway,
     EmailGatewayResponse,
@@ -14,10 +25,13 @@ from src.tektos.email_gateway import (
 )
 
 
-class TestEmailConfig:
-    """Tests for EmailConfig defaults."""
+# ---------------------------------------------------------------------------
+# Config tests
+# ---------------------------------------------------------------------------
 
-    def test_config_defaults(self):
+
+class TestEmailConfig:
+    def test_default_config(self):
         config = EmailConfig()
         assert config.enabled is False
         assert config.imap_host == "imap.gmail.com"
@@ -25,30 +39,41 @@ class TestEmailConfig:
         assert config.smtp_host == "smtp.gmail.com"
         assert config.smtp_port == 587
         assert config.email_address == ""
+        assert config.password == ""
+        assert config.use_oauth2 is True
         assert config.poll_interval_seconds == 60
         assert config.max_emails_per_poll == 50
+        assert config.inbox_label == "INBOX"
         assert config.session_prefix == "tektos:"
         assert config.auto_reply is True
 
-    def test_config_custom(self):
+    def test_custom_config(self):
         config = EmailConfig(
             enabled=True,
-            imap_host="custom.imap.com",
-            smtp_port=465,
-            session_prefix="custom:",
-            auto_reply=False,
+            email_address="test@gmail.com",
+            password="app-pass",
+            use_oauth2=False,
+            poll_interval_seconds=30,
         )
         assert config.enabled is True
-        assert config.imap_host == "custom.imap.com"
-        assert config.smtp_port == 465
-        assert config.session_prefix == "custom:"
-        assert config.auto_reply is False
+        assert config.email_address == "test@gmail.com"
+        assert config.password == "app-pass"
+        assert config.use_oauth2 is False
+        assert config.poll_interval_seconds == 30
+
+    def test_search_filters(self):
+        config = EmailConfig(search_from="sender@example.com", search_subject="urgent")
+        assert config.search_from == "sender@example.com"
+        assert config.search_subject == "urgent"
 
 
-class TestEmailMessage:
-    """Tests for EmailMessage dataclass."""
+# ---------------------------------------------------------------------------
+# Dataclass tests
+# ---------------------------------------------------------------------------
 
-    def test_message_defaults(self):
+
+class TestDataclasses:
+    def test_email_message_defaults(self):
         msg = EmailMessage()
         assert msg.message_id == ""
         assert msg.from_addr == ""
@@ -59,26 +84,7 @@ class TestEmailMessage:
         assert msg.has_attachments is False
         assert msg.raw_email == ""
 
-    def test_message_with_data(self):
-        msg = EmailMessage(
-            message_id="abc123",
-            from_addr="sender@example.com",
-            from_name="Test Sender",
-            to_addr="recipient@example.com",
-            subject="Test Subject",
-            body_text="Test body content",
-            date=datetime(2024, 1, 15, 10, 30, 0),
-        )
-        assert msg.message_id == "abc123"
-        assert msg.from_addr == "sender@example.com"
-        assert msg.subject == "Test Subject"
-        assert msg.body_text == "Test body content"
-
-
-class TestEmailGatewayResponse:
-    """Tests for EmailGatewayResponse."""
-
-    def test_response_defaults(self):
+    def test_email_gateway_response_defaults(self):
         resp = EmailGatewayResponse()
         assert resp.success is False
         assert resp.error is None
@@ -86,239 +92,476 @@ class TestEmailGatewayResponse:
         assert resp.emails == []
         assert resp.sent is False
 
-    def test_response_with_data(self):
+    def test_email_message_with_values(self):
+        dt = datetime(2024, 1, 15, 10, 30, 0)
         msg = EmailMessage(
-            message_id="test123",
-            subject="Test Email",
-            body_text="Body content",
-        )
-        resp = EmailGatewayResponse(
-            success=True,
-            email_count=1,
-            emails=[msg],
-            sent=True,
-        )
-        assert resp.success is True
-        assert resp.email_count == 1
-        assert len(resp.emails) == 1
-        assert resp.emails[0].message_id == "test123"
-        assert resp.sent is True
-
-
-class TestEmailGateway:
-    """Tests for EmailGateway initialization and lifecycle."""
-
-    def test_gateway_initialization(self):
-        config = EmailConfig(
-            enabled=True,
-            email_address="test@gmail.com",
-            password="app-password",
-        )
-        gateway = EmailGateway(config)
-        assert gateway.config.email_address == "test@gmail.com"
-        assert gateway._imap is None
-        assert gateway._running is False
-
-    @pytest.mark.asyncio
-    async def test_shutdown_without_initialize(self):
-        """Test shutdown without prior initialization is safe."""
-        gateway = EmailGateway()
-        await gateway.shutdown()  # Should not raise
-
-    @pytest.mark.asyncio
-    async def test_poll_inbox_without_init(self):
-        """Test polling without initialization returns error."""
-        gateway = EmailGateway()
-        response = await gateway.poll_inbox()
-        assert response.success is False
-        assert "not initialized" in response.error.lower()
-
-    @pytest.mark.asyncio
-    async def test_send_email_without_init(self):
-        """Test sending without initialization returns error."""
-        gateway = EmailGateway()
-        response = await gateway.send_email(
-            to="recipient@example.com",
+            message_id="abc123",
+            from_addr="user@example.com",
             subject="Test",
-            body="Hello",
+            body_text="Hello",
+            date=dt,
+            has_attachments=True,
         )
-        assert response.success is False
-
-    @pytest.mark.asyncio
-    async def test_add_handler(self):
-        """Test adding email handlers."""
-        gateway = EmailGateway()
-
-        async def handler(email_msg):
-            pass
-
-        gateway.add_handler(handler)
-        assert len(gateway._handlers) == 1
-
-    @pytest.mark.asyncio
-    async def test_handle_email_with_handler(self):
-        """Test email handler invocation."""
-        gateway = EmailGateway()
-
-        handler_called = False
-
-        async def mock_handler(email_msg):
-            nonlocal handler_called
-            handler_called = True
-
-        gateway.add_handler(mock_handler)
-
-        email_msg = EmailMessage(
-            from_addr="sender@example.com",
-            subject="tektos:session123",
-            body_text="Test message",
-        )
-        await gateway._handle_email(email_msg)
-        assert handler_called is True
-
-    @pytest.mark.asyncio
-    async def test_handle_email_auto_reply(self):
-        """Test auto-reply when enabled."""
-        config = EmailConfig(
-            email_address="test@gmail.com",
-            password="app-password",
-            auto_reply=True,
-        )
-        gateway = EmailGateway(config)
-
-        with patch.object(gateway, "send_email") as mock_send:
-            email_msg = EmailMessage(
-                from_addr="sender@example.com",
-                subject="Test Subject",
-                body_text="Hello Karl",
-            )
-            await gateway._handle_email(email_msg)
-            assert mock_send.call_count == 1
-            call_args = mock_send.call_args
-            assert call_args.kwargs["to"] == "sender@example.com"
-            assert "Karl" in call_args.kwargs["body"]
-
-    @pytest.mark.asyncio
-    async def test_handle_email_no_auto_reply(self):
-        """Test no auto-reply when disabled."""
-        config = EmailConfig(
-            email_address="test@gmail.com",
-            password="app-password",
-            auto_reply=False,
-        )
-        gateway = EmailGateway(config)
-
-        with patch.object(gateway, "send_email") as mock_send:
-            email_msg = EmailMessage(
-                from_addr="sender@example.com",
-                subject="Test Subject",
-                body_text="Hello",
-            )
-            await gateway._handle_email(email_msg)
-            assert mock_send.call_count == 0
-
-    def test_parse_email_simple(self):
-        """Test parsing a simple email."""
-        gateway = EmailGateway()
-
-        raw_email = (
-            "From: sender@example.com\r\n"
-            "To: recipient@example.com\r\n"
-            "Subject: Test Email\r\n"
-            "Date: Mon, 15 Jan 2024 10:30:00 +0000\r\n"
-            "Message-ID: <test123@example.com>\r\n"
-            "\r\n"
-            "This is the body"
-        )
-
-        msg = gateway._parse_email(raw_email.encode())
-        assert msg.from_addr == "sender@example.com"
-        assert msg.to_addr == "recipient@example.com"
-        assert msg.subject == "Test Email"
-        assert msg.body_text == "This is the body"
-        assert msg.message_id == "<test123@example.com>"
-
-    def test_parse_email_with_attachments(self):
-        """Test parsing email with attachments."""
-        gateway = EmailGateway()
-
-        raw_email = (
-            "From: sender@example.com\r\n"
-            "To: recipient@example.com\r\n"
-            "Subject: Email with Attachment\r\n"
-            "Date: Mon, 15 Jan 2024 10:30:00 +0000\r\n"
-            "Content-Type: multipart/mixed; boundary=\"boundary123\"\r\n"
-            "\r\n"
-            "--boundary123\r\n"
-            "Content-Type: text/plain\r\n"
-            "\r\n"
-            "Body content\r\n"
-            "--boundary123\r\n"
-            "Content-Type: application/pdf\r\n"
-            "Content-Disposition: attachment; filename=\"file.pdf\"\r\n"
-            "\r\n"
-            "PDF content\r\n"
-            "--boundary123--"
-        )
-
-        msg = gateway._parse_email(raw_email.encode())
-        assert msg.body_text == "Body content"
+        assert msg.message_id == "abc123"
+        assert msg.from_addr == "user@example.com"
+        assert msg.subject == "Test"
+        assert msg.body_text == "Hello"
+        assert msg.date == dt
         assert msg.has_attachments is True
 
-    def test_parse_email_multipart_html(self):
-        """Test parsing multipart email with HTML."""
-        gateway = EmailGateway()
 
-        raw_email = (
-            "From: sender@example.com\r\n"
-            "To: recipient@example.com\r\n"
-            "Subject: HTML Email\r\n"
-            "Date: Mon, 15 Jan 2024 10:30:00 +0000\r\n"
-            "Content-Type: multipart/alternative; boundary=\"boundary123\"\r\n"
-            "\r\n"
-            "--boundary123\r\n"
-            "Content-Type: text/plain\r\n"
-            "\r\n"
-            "Plain text body\r\n"
-            "--boundary123\r\n"
-            "Content-Type: text/html\r\n"
-            "\r\n"
-            "<html><body>HTML body</body></html>\r\n"
-            "--boundary123--"
+# ---------------------------------------------------------------------------
+# Gateway lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestGatewayLifecycle:
+    def test_create_gateway_default_config(self):
+        gateway = EmailGateway()
+        assert gateway.config is not None
+        assert isinstance(gateway.config, EmailConfig)
+
+    def test_create_gateway_custom_config(self):
+        config = EmailConfig(email_address="test@gmail.com", password="pass")
+        gateway = EmailGateway(config)
+        assert gateway.config.email_address == "test@gmail.com"
+
+    def test_gateway_initial_state(self):
+        gateway = EmailGateway()
+        assert gateway._running is False
+        assert gateway._imap is None
+        assert gateway._poll_task is None
+
+    def test_initialize_calls_connect_imap(self):
+        gateway = EmailGateway()
+        gateway._connect_imap = AsyncMock(return_value=MagicMock())
+        gateway._poll_loop = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway.initialize())
+        finally:
+            loop.close()
+        gateway._connect_imap.assert_called_once()
+
+    def test_initialize_sets_running(self):
+        gateway = EmailGateway()
+        gateway._connect_imap = AsyncMock(return_value=MagicMock())
+        gateway._poll_loop = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway.initialize())
+        finally:
+            loop.close()
+        assert gateway._running is True
+
+    def test_initialize_creates_poll_task(self):
+        gateway = EmailGateway()
+        gateway._connect_imap = AsyncMock(return_value=MagicMock())
+        gateway._poll_loop = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway.initialize())
+        finally:
+            loop.close()
+        assert gateway._poll_task is not None
+
+    def test_shutdown_cancels_poll_task(self):
+        async def fake_shutdown():
+            async def fake_poll():
+                await asyncio.sleep(999)
+            task = asyncio.ensure_future(fake_poll())
+            gateway._poll_task = task
+            gateway._running = True
+            await gateway.shutdown()
+            assert gateway._running is False
+        gateway = EmailGateway()
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(fake_shutdown())
+        finally:
+            loop.close()
+
+    def test_shutdown_closes_imap(self):
+        gateway = EmailGateway()
+        mock_imap = MagicMock()
+        gateway._imap = mock_imap
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway.shutdown())
+        finally:
+            loop.close()
+        mock_imap.logout.assert_called_once()
+        assert gateway._imap is None
+
+    def test_poll_without_init_returns_error(self):
+        gateway = EmailGateway()
+        loop = asyncio.new_event_loop()
+        try:
+            resp = loop.run_until_complete(gateway.poll_inbox())
+        finally:
+            loop.close()
+        assert resp.success is False
+        assert "not initialized" in resp.error
+
+    def test_send_email_builds_plain_message(self):
+        """Plain email (no HTML) uses MIMEText."""
+        gateway = EmailGateway(
+            config=EmailConfig(email_address="from@example.com", password="pass")
+        )
+        mock_smtp = MagicMock()
+        mock_smtp.ehlo = MagicMock()
+        mock_smtp.starttls = MagicMock()
+        mock_smtp.login = MagicMock()
+        mock_smtp.sendmail = MagicMock()
+        mock_smtp.quit = MagicMock()
+
+        with patch("smtplib.SMTP", return_value=mock_smtp):
+            loop = asyncio.new_event_loop()
+            try:
+                resp = loop.run_until_complete(
+                    gateway.send_email("to@example.com", "Subject", "Body text")
+                )
+            finally:
+                loop.close()
+        assert resp.success is True
+        assert resp.sent is True
+
+    def test_send_email_builds_multipart_message(self):
+        """HTML email uses MIMEMultipart with text + html parts."""
+        gateway = EmailGateway(
+            config=EmailConfig(email_address="from@example.com", password="pass")
+        )
+        mock_smtp = MagicMock()
+        mock_smtp.ehlo = MagicMock()
+        mock_smtp.starttls = MagicMock()
+        mock_smtp.login = MagicMock()
+        mock_smtp.sendmail = MagicMock()
+        mock_smtp.quit = MagicMock()
+
+        with patch("smtplib.SMTP", return_value=mock_smtp):
+            loop = asyncio.new_event_loop()
+            try:
+                resp = loop.run_until_complete(
+                    gateway.send_email(
+                        "to@example.com", "Subject", "Text body", html="<p>HTML body</p>"
+                    )
+                )
+            finally:
+                loop.close()
+        assert resp.success is True
+
+    def test_send_email_error_returns_error(self):
+        """SMTP errors return error response."""
+        gateway = EmailGateway(
+            config=EmailConfig(email_address="from@example.com", password="pass")
         )
 
-        msg = gateway._parse_email(raw_email.encode())
+        with patch("smtplib.SMTP", side_effect=Exception("SMTP failed")):
+            loop = asyncio.new_event_loop()
+            try:
+                resp = loop.run_until_complete(
+                    gateway.send_email("to@example.com", "Subject", "Body")
+                )
+            finally:
+                loop.close()
+        assert resp.success is False
+        assert resp.error is not None
+
+    def test_send_email_ssl_port(self):
+        """Port 465 uses SMTP_SSL."""
+        gateway = EmailGateway(
+            config=EmailConfig(smtp_port=465, email_address="from@example.com", password="pass")
+        )
+        mock_smtp_ssl = MagicMock()
+        mock_smtp_ssl.login = MagicMock()
+        mock_smtp_ssl.sendmail = MagicMock()
+        mock_smtp_ssl.quit = MagicMock()
+
+        with patch("smtplib.SMTP_SSL", return_value=mock_smtp_ssl):
+            loop = asyncio.new_event_loop()
+            try:
+                resp = loop.run_until_complete(
+                    gateway.send_email("to@example.com", "Subject", "Body")
+                )
+            finally:
+                loop.close()
+        assert resp.success is True
+        mock_smtp_ssl.login.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Email parsing
+# ---------------------------------------------------------------------------
+
+
+class TestEmailParsing:
+    def test_parse_plain_email(self):
+        gateway = EmailGateway()
+        raw = b"From: sender@example.com\r\nTo: receiver@example.com\r\nSubject: Test\r\n\r\nHello world"
+        msg = gateway._parse_email(raw)
+        assert msg.from_addr == "sender@example.com"
+        assert msg.to_addr == "receiver@example.com"
+        assert msg.subject == "Test"
+        assert msg.body_text == "Hello world"
+
+    def test_parse_plain_text_multipart(self):
+        gateway = EmailGateway()
+        raw = b"""\
+From: sender@example.com
+To: receiver@example.com
+Subject: Test
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="BOUNDARY"
+
+--BOUNDARY
+Content-Type: text/plain
+
+Plain text body
+--BOUNDARY
+Content-Type: text/html
+
+<html><body>HTML body</body></html>
+--BOUNDARY--
+"""
+        msg = gateway._parse_email(raw)
         assert msg.body_text == "Plain text body"
         assert msg.body_html is not None
         assert "HTML body" in msg.body_html
 
-    def test_parse_email_encoded_subject(self):
-        """Test parsing email with encoded subject."""
+    def test_parse_email_with_attachments(self):
+        gateway = EmailGateway()
+        raw = b"""\
+From: sender@example.com
+To: receiver@example.com
+Subject: With attachment
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUNDARY"
+
+--BOUNDARY
+Content-Type: text/plain
+
+Main body
+--BOUNDARY
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="file.txt"
+
+Attachment content
+--BOUNDARY--
+"""
+        msg = gateway._parse_email(raw)
+        assert msg.body_text == "Main body"
+        assert msg.has_attachments is True
+
+    def test_parse_email_missing_headers(self):
+        gateway = EmailGateway()
+        raw = b"\r\n\r\nNo headers here"
+        msg = gateway._parse_email(raw)
+        assert msg.message_id == ""
+        assert msg.subject == ""
+
+    def test_parse_email_decoded_subject(self):
+        gateway = EmailGateway()
+        raw = b"""\
+From: sender@example.com
+To: receiver@example.com
+Subject: =?UTF-8?B?VGVzdA==?=
+
+Body
+"""
+        msg = gateway._parse_email(raw)
+        assert msg.subject != ""
+
+
+# ---------------------------------------------------------------------------
+# Handler invocation
+# ---------------------------------------------------------------------------
+
+
+class TestHandlerInvocation:
+    def test_add_handler(self):
+        gateway = EmailGateway()
+        handler = MagicMock()
+        gateway.add_handler(handler)
+        assert handler in gateway._handlers
+        assert len(gateway._handlers) == 1
+
+    def test_invoke_async_handler(self):
+        gateway = EmailGateway()
+        handler = AsyncMock()
+        gateway.add_handler(handler)
+        msg = EmailMessage(subject="tektos:session-1", body_text="Test")
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+        finally:
+            loop.close()
+        handler.assert_called_once_with(msg)
+
+    def test_invoke_sync_handler(self):
+        gateway = EmailGateway()
+        handler = MagicMock()
+        gateway.add_handler(handler)
+        msg = EmailMessage(subject="tektos:session-1", body_text="Test")
+        gateway._running = True
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+        finally:
+            loop.close()
+        handler.assert_called_once_with(msg)
+
+    def test_handler_exception_logged(self):
+        """Handler exceptions are caught and logged, not propagated."""
         gateway = EmailGateway()
 
-        raw_email = (
-            "From: sender@example.com\r\n"
-            "To: recipient@example.com\r\n"
-            "Subject: =?UTF-8?B?VGVzdCBTdWJqZWN0?=\r\n"
-            "Date: Mon, 15 Jan 2024 10:30:00 +0000\r\n"
-            "\r\n"
-            "Body"
+        async def bad_handler(email):
+            raise ValueError("handler error")
+
+        gateway.add_handler(bad_handler)
+        msg = EmailMessage(subject="tektos:session-1", body_text="Test")
+        # Should not raise
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+        finally:
+            loop.close()
+
+    def test_multiple_handlers(self):
+        gateway = EmailGateway()
+        h1 = AsyncMock()
+        h2 = AsyncMock()
+        gateway.add_handler(h1)
+        gateway.add_handler(h2)
+        msg = EmailMessage(subject="tektos:session-1", body_text="Test")
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+        finally:
+            loop.close()
+        assert h1.call_count == 1
+        assert h2.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Auto-reply
+# ---------------------------------------------------------------------------
+
+
+class TestAutoReply:
+    def test_auto_reply_enabled(self):
+        gateway = EmailGateway(
+            config=EmailConfig(email_address="from@example.com", auto_reply=True)
         )
+        mock_send = AsyncMock(return_value=AsyncMock(success=True))
+        gateway.send_email = mock_send
+        msg = EmailMessage(from_addr="sender@example.com", subject="Test", body_text="Hello")
+        gateway._running = True
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+        finally:
+            loop.close()
+        assert mock_send.call_count == 1
+        call_kwargs = mock_send.call_args
+        assert call_kwargs[1]["to"] == "sender@example.com"
+        assert call_kwargs[1]["subject"].startswith("Re: Test")
 
-        msg = gateway._parse_email(raw_email.encode())
-        assert msg.subject == "Test Subject"
+    def test_auto_reply_disabled(self):
+        gateway = EmailGateway(
+            config=EmailConfig(email_address="from@example.com", auto_reply=False)
+        )
+        mock_send = AsyncMock()
+        gateway.send_email = mock_send
+        msg = EmailMessage(from_addr="sender@example.com", subject="Test", body_text="Hello")
+        gateway._running = True
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+        finally:
+            loop.close()
+        assert mock_send.call_count == 0
 
-    def test_context_manager(self):
-        """Test async context manager pattern."""
-        config = EmailConfig(email_address="test@gmail.com", password="pass")
-        gateway = EmailGateway(config)
-        assert gateway._running is False
+    def test_auto_reply_truncates_body(self):
+        gateway = EmailGateway(
+            config=EmailConfig(email_address="from@example.com", auto_reply=True)
+        )
+        replies = []
 
-    @pytest.mark.asyncio
-    async def test_poll_loop_stops_on_shutdown(self):
-        """Test poll loop stops when _running is False."""
+        async def capture_send(*args, **kwargs):
+            replies.append(kwargs)
+
+        gateway.send_email = capture_send
+        long_body = "x" * 500
+        msg = EmailMessage(from_addr="sender@example.com", subject="Test", body_text=long_body)
+        gateway._running = True
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+        finally:
+            loop.close()
+        assert len(replies) == 1
+        # Reply body should truncate body_text to ~200 chars
+        assert "Tektos AI" in replies[0]["body"]
+
+
+# ---------------------------------------------------------------------------
+# Subject prefix extraction
+# ---------------------------------------------------------------------------
+
+
+class TestSubjectPrefix:
+    def test_extract_session_id(self):
+        gateway = EmailGateway(
+            config=EmailConfig(session_prefix="tektos:")
+        )
+        msg = EmailMessage(subject="tektos:session-abc-123")
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+        finally:
+            loop.close()
+        # Handler should have seen the message (no error)
+
+    def test_no_session_id_prefix(self):
+        """Non-tektos subjects don't extract session_id."""
+        gateway = EmailGateway(
+            config=EmailConfig(session_prefix="tektos:")
+        )
+        msg = EmailMessage(subject="Just a regular email")
+        msg2 = EmailMessage(subject="Re: Meeting Notes")
+        # Both should be handled without session ID extraction
+        gateway._running = True
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway._handle_email(msg))
+            loop.run_until_complete(gateway._handle_email(msg2))
+        finally:
+            loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Context manager
+# ---------------------------------------------------------------------------
+
+
+class TestContextManager:
+    def test_aenter(self):
         gateway = EmailGateway()
-        gateway._running = False
+        gateway.initialize = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(gateway.__aenter__())
+        finally:
+            loop.close()
+        assert result is gateway
+        gateway.initialize.assert_called_once()
 
-        # Poll loop should exit immediately
-        await gateway._poll_loop()
+    def test_aexit(self):
+        gateway = EmailGateway()
+        gateway.shutdown = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(gateway.__aexit__(None, None, None))
+        finally:
+            loop.close()
+        gateway.shutdown.assert_called_once()

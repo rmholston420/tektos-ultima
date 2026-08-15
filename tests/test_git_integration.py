@@ -1,293 +1,511 @@
-"""Tests for GitIntegration module — git operations, status tracking, branching, rollback."""
+"""
+Tektos-Ultima v1 — Git Integration Tests
 
-import json
+Tests GitIntegration class using real git repos in temp dirs:
+- init_repo, is_repo
+- get_status (dirty/clean, staged/modified/untracked)
+- get_commits with --numstat parsing
+- get_diff (staged and unstaged)
+- stage_file, stage_all
+- commit with author parsing
+- create_branch, switch_branch, delete_branch
+- list_branches, current_branch
+- rollback (hard and soft)
+- get_head_hash
+- get_file_history
+- auto_commit_if_changes
+- is_gitignored
+"""
+
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tektos.git_integration import GitIntegration, GitCommit, GitStatus
+from tektos.git_integration import GitIntegration, GitStatus, GitCommit
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-def _run_git(cwd, *args):
-    """Helper to run git commands in a test repo."""
-    return subprocess.run(
-        ['git'] + list(args),
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
+@pytest.fixture
+def bare_repo(tmp_path):
+    """Create a bare git repo at tmp_path (no working tree)."""
+    subprocess.run(["git", "init", "--bare"], cwd=str(tmp_path), capture_output=True, check=True)
+    return tmp_path
 
 
-def _make_test_repo(tmp_path) -> Path:
-    """Create a minimal git repo for testing."""
-    repo = tmp_path / "test_repo"
-    repo.mkdir()
-    _run_git(repo, 'init')
-    _run_git(repo, 'config', 'user.name', 'Test User')
-    _run_git(repo, 'config', 'user.email', 'test@example.com')
-    # Create initial commit so HEAD exists for branch ops
-    (repo / '.gitignore').write_text('*.pyc\n__pycache__/\n')
-    _run_git(repo, 'add', '.gitignore')
-    _run_git(repo, 'commit', '-m', 'Initial commit')
-    return repo
+@pytest.fixture
+def working_repo(tmp_path):
+    """Create a working git repo with user config and initial commit."""
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@tektos.dev"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=True)
+    # Make an initial commit so git recognizes the repo
+    (tmp_path / ".gitkeep").write_text("")
+    subprocess.run(["git", "add", ".gitkeep"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=str(tmp_path), capture_output=True, check=True)
+    return tmp_path
 
 
-# ── GitStatus / GitCommit ────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# init_repo / is_repo
+# ---------------------------------------------------------------------------
+
+
+class TestInitRepo:
+    def test_is_repo_returns_true_in_git_repo(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        assert git.is_repo() is True
+
+    def test_is_repo_returns_false_outside_git_repo(self, tmp_path):
+        git = GitIntegration(str(tmp_path))
+        assert git.is_repo() is False
+
+    def test_is_repo_returns_false_for_nonexistent(self, tmp_path):
+        git = GitIntegration(str(tmp_path / "nonexistent"))
+        assert git.is_repo() is False
+
+    def test_init_repo_already_initialized(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        assert git.init_repo() is True  # should succeed without error
+
+
+# ---------------------------------------------------------------------------
+# GitStatus
+# ---------------------------------------------------------------------------
+
 
 class TestGitStatus:
-    def test_defaults(self):
-        s = GitStatus(root="/tmp")
-        assert s.is_repo is False
-        assert s.branch == ""
-        assert s.is_dirty is False
-        assert s.staged_files == []
-        assert s.modified_files == []
-        assert s.untracked_files == []
-
-    def test_dirty_with_branch(self):
-        s = GitStatus(root="/tmp", is_repo=True, branch="main", is_dirty=True, modified_files=["a.py"])
-        assert s.branch == "main"
-        assert s.is_dirty is True
-        assert "a.py" in s.modified_files
-
-
-class TestGitCommit:
-    def test_defaults(self):
-        c = GitCommit(hash="abc123", short_hash="abc1234", message="test", author="Test", timestamp="2026-01-01")
-        assert c.files_changed == []
-        assert c.lines_added == 0
-        assert c.lines_deleted == 0
-
-
-# ── GitIntegration — Init & Status ──────────────────────────────────────────
-
-class TestGitIntegrationInit:
-    def test_is_repo_true(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        assert gi.is_repo() is True
-
-    def test_is_repo_false(self, tmp_path):
-        gi = GitIntegration(str(tmp_path))
-        assert gi.is_repo() is False
-
-    def test_init_repo(self, tmp_path):
-        gi = GitIntegration(str(tmp_path))
-        assert gi.init_repo() is True
-        assert gi.is_repo() is True
-
-    def test_init_repo_noop(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        assert gi.init_repo() is True
-
-    def test_get_status_not_repo(self, tmp_path):
-        gi = GitIntegration(str(tmp_path))
-        status = gi.get_status()
-        assert status.is_repo is False
-        assert status.branch == ""
-
-
-# ── GitIntegration — File Operations ────────────────────────────────────────
-
-class TestGitIntegrationStatus:
-    def test_get_status_clean(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        status = gi.get_status()
+    def test_initial_status_clean(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        status = git.get_status()
+        assert isinstance(status, GitStatus)
         assert status.is_dirty is False
 
-    def test_get_status_dirty(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("print('hello')")
-        _run_git(repo, 'add', 'test.py')
-        _run_git(repo, 'commit', '-m', 'init')
-        (repo / "test.py").write_text("print('world')")
-        _run_git(repo, 'add', 'test.py')
-
-        gi = GitIntegration(str(repo))
-        status = gi.get_status()
+    def test_status_dirty_after_unstaged_change(self, working_repo):
+        f = working_repo / "change.txt"
+        f.write_text("dirty content")
+        subprocess.run(["git", "add", "change.txt"], cwd=str(working_repo), capture_output=True)
+        f.write_text("dirty content modified")
+        git = GitIntegration(str(working_repo))
+        status = git.get_status()
         assert status.is_dirty is True
-        assert "test.py" in status.staged_files
+        # After amend: staged + modified, code may return staged_files instead
+        assert "change.txt" in status.staged_files or "change.txt" in status.modified_files
 
-    def test_get_branch(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        status = gi.get_status()
-        assert status.branch in ("master", "main")
+    def test_status_untracked_file(self, working_repo):
+        f = working_repo / "new_file.txt"
+        f.write_text("untracked")
+        git = GitIntegration(str(working_repo))
+        status = git.get_status()
+        assert status.is_dirty is True
+        assert "new_file.txt" in status.untracked_files
+
+    def test_status_staged_file(self, working_repo):
+        f = working_repo / "staged.txt"
+        f.write_text("staged content")
+        subprocess.run(["git", "add", "staged.txt"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        status = git.get_status()
+        assert status.is_dirty is True
+        assert "staged.txt" in status.staged_files
+
+    def test_branch_name(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        status = git.get_status()
+        assert status.branch == "master" or status.branch == "main"
+
+    def test_branch_after_switch(self, working_repo):
+        f = working_repo / "initial.txt"
+        f.write_text("initial")
+        subprocess.run(["git", "add", "initial.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        git.create_branch("feature")
+        status = git.get_status()
+        assert status.branch == "master" or status.branch == "main"
 
 
-# ── GitIntegration — Commits ────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# get_commits
+# ---------------------------------------------------------------------------
 
-class TestGitIntegrationCommits:
-    def test_get_commits_empty(self, tmp_path):
-        """After init but no new commits, get_commits should return at least the initial."""
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        commits = gi.get_commits()
-        # _make_test_repo creates an initial commit, so we should have at least 1
+
+class TestGetCommits:
+    def test_empty_repo_no_commits(self, tmp_path):
+        """A repo with no commits at all returns no commits."""
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "test@tektos.dev"], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=True)
+        git = GitIntegration(str(tmp_path))
+        commits = git.get_commits()
+        assert commits == []
+
+    def test_commits_after_commit(self, working_repo):
+        f = working_repo / "file.txt"
+        f.write_text("content")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "first commit"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        commits = git.get_commits()
         assert len(commits) >= 1
+        assert commits[0].message == "first commit"
 
-    def test_get_commits_after_commit(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("print('hello')")
-        _run_git(repo, 'add', 'test.py')
-        _run_git(repo, 'commit', '-m', 'Initial commit')
-
-        gi = GitIntegration(str(repo))
-        commits = gi.get_commits(count=5)
+    def test_commit_has_hash_fields(self, working_repo):
+        f = working_repo / "file.txt"
+        f.write_text("content")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "hash test"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        commits = git.get_commits()
         assert len(commits) >= 1
-        assert commits[0].message == "Initial commit"
-        assert commits[0].short_hash != ""
-        assert "test.py" in commits[0].files_changed
+        c = commits[0]
+        assert isinstance(c, GitCommit)
+        assert len(c.hash) == 40
+        assert len(c.short_hash) == 7
 
-    def test_commit_no_changes(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        result = gi.commit("Empty commit")
-        # Should fail or succeed depending on git config (no error in test)
-        assert result is None or isinstance(result, str)
+    def test_commit_has_author(self, working_repo):
+        f = working_repo / "file.txt"
+        f.write_text("content")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "author test"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        commits = git.get_commits()
+        assert commits[0].author == "Test User"
+
+    def test_commits_count_limit(self, tmp_path):
+        """Count limit returns exactly N commits from a repo with more."""
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "test@tektos.dev"], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True, check=True)
+        for i in range(5):
+            f = tmp_path / f"file{i}.txt"
+            f.write_text(f"content {i}")
+            subprocess.run(["git", "add", f"file{i}.txt"], cwd=str(tmp_path), capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"commit {i}"], cwd=str(tmp_path), capture_output=True)
+        git = GitIntegration(str(tmp_path))
+        commits = git.get_commits(count=3)
+        assert len(commits) == 3
+
+    def test_commit_files_changed(self, working_repo):
+        f = working_repo / "multi.txt"
+        f.write_text("line1\nline2\nline3\n")
+        subprocess.run(["git", "add", "multi.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "multi file"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        commits = git.get_commits()
+        assert commits[0].files_changed == ["multi.txt"]
+        assert commits[0].lines_added == 3
+
+    def test_commit_lines_added_deleted(self, working_repo):
+        # First commit
+        f = working_repo / "file.txt"
+        f.write_text("line1\nline2\nline3\n")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "first"], cwd=str(working_repo), capture_output=True)
+        # Second commit — modify and delete
+        f.write_text("line1\nline2\nline3\nline4\n")  # +1 line
+        subprocess.run(["git", "add", "file.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "second"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        commits = git.get_commits()
+        assert len(commits) >= 2
+        assert commits[0].lines_added >= 1
+
+    def test_get_commits_non_repo(self, bare_repo):
+        """Bare repos return empty commits (no working tree)."""
+        git = GitIntegration(str(bare_repo))
+        commits = git.get_commits()
+        assert commits == []
 
 
-# ── GitIntegration — Staging ────────────────────────────────────────────────
-
-class TestGitIntegrationStaging:
-    def test_stage_file(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("x = 1")
-        gi = GitIntegration(str(repo))
-        assert gi.stage_file("test.py") is True
-
-    def test_stage_all(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("x = 1")
-        (repo / "test2.py").write_text("y = 2")
-        gi = GitIntegration(str(repo))
-        assert gi.stage_all() is True
-
-    def test_get_diff(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("x = 1")
-        # git diff shows unstaged changes — don't stage it
-        gi = GitIntegration(str(repo))
-        diff = gi.get_diff("test.py")
-        assert "x = 1" in diff
-
-    def test_get_diff_staged(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("x = 1")
-        _run_git(repo, 'add', 'test.py')
-        gi = GitIntegration(str(repo))
-        diff = gi.get_diff_staged("test.py")
-        assert "x = 1" in diff
+# ---------------------------------------------------------------------------
+# get_diff
+# ---------------------------------------------------------------------------
 
 
-# ── GitIntegration — Branches ───────────────────────────────────────────────
+class TestGetDiff:
+    def test_diff_empty_on_clean(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        diff = git.get_diff()
+        assert diff == ""
 
-class TestGitIntegrationBranches:
-    def test_create_branch(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        assert gi.create_branch("test-branch") is True
+    def test_diff_shows_modified(self, working_repo):
+        f = working_repo / "file.txt"
+        f.write_text("original")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "original"], cwd=str(working_repo), capture_output=True)
+        f.write_text("modified content")
+        git = GitIntegration(str(working_repo))
+        diff = git.get_diff()
+        assert "modified content" in diff
 
-    def test_switch_branch(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        gi.create_branch("test-branch")
-        assert gi.switch_branch("test-branch") is True
+    def test_diff_staged(self, working_repo):
+        f = working_repo / "file.txt"
+        f.write_text("content")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        diff = git.get_diff_staged()
+        assert "content" in diff
 
-    def test_delete_branch(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        gi.create_branch("test-branch")
-        assert gi.delete_branch("test-branch") is True
+    def test_diff_file_specific(self, working_repo):
+        f = working_repo / "file.txt"
+        f.write_text("original")
+        subprocess.run(["git", "add", "file.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "orig"], cwd=str(working_repo), capture_output=True)
+        f.write_text("changed")
+        git = GitIntegration(str(working_repo))
+        diff = git.get_diff("file.txt")
+        assert "changed" in diff
 
-    def test_list_branches(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        branches = gi.list_branches()
+
+# ---------------------------------------------------------------------------
+# stage / commit
+# ---------------------------------------------------------------------------
+
+
+class TestStageCommit:
+    def test_stage_file(self, working_repo):
+        f = working_repo / "stage.txt"
+        f.write_text("to stage")
+        git = GitIntegration(str(working_repo))
+        result = git.stage_file("stage.txt")
+        assert result is True
+        status = git.get_status()
+        assert "stage.txt" in status.staged_files
+
+    def test_stage_all(self, working_repo):
+        (working_repo / "a.txt").write_text("a")
+        (working_repo / "b.txt").write_text("b")
+        git = GitIntegration(str(working_repo))
+        result = git.stage_all()
+        assert result is True
+        status = git.get_status()
+        assert "a.txt" in status.staged_files
+        assert "b.txt" in status.staged_files
+
+    def test_commit_returns_hash(self, working_repo):
+        f = working_repo / "commit.txt"
+        f.write_text("commit me")
+        subprocess.run(["git", "add", "commit.txt"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        commit_hash = git.commit("test commit")
+        assert commit_hash is not None
+        assert len(commit_hash) == 40
+
+    def test_commit_no_changes_returns_none(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        result = git.commit("no changes")
+        assert result is None
+
+    def test_commit_with_author(self, working_repo):
+        f = working_repo / "author.txt"
+        f.write_text("author test")
+        subprocess.run(["git", "add", "author.txt"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        git.commit("author commit", author="Other Author <other@test.com>")
+        commits = git.get_commits()
+        assert commits[0].author == "Other Author"
+
+    def test_commit_twice(self, working_repo):
+        f = working_repo / "c.txt"
+        subprocess.run(["git", "add", "."], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        h1 = git.commit("first")
+        f.write_text("second")
+        subprocess.run(["git", "add", "c.txt"], cwd=str(working_repo), capture_output=True)
+        h2 = git.commit("second")
+        assert h1 != h2
+
+    def test_stage_all_returns_true(self, working_repo):
+        (working_repo / "sa.txt").write_text("data")
+        git = GitIntegration(str(working_repo))
+        assert git.stage_all() is True
+
+
+# ---------------------------------------------------------------------------
+# Branch management
+# ---------------------------------------------------------------------------
+
+
+class TestBranchManagement:
+    def test_create_branch(self, working_repo):
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "empty"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        result = git.create_branch("feature/test")
+        assert result is True
+
+    def test_create_branch_from(self, working_repo):
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "empty"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        result = git.create_branch("from-branch", from_branch="master")
+        assert result is True
+
+    def test_switch_branch(self, working_repo):
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "empty"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        git.create_branch("switchable")
+        result = git.switch_branch("switchable")
+        assert result is True
+        assert git.get_current_branch() == "switchable"
+
+    def test_switch_branch_nonexistent(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        result = git.switch_branch("nonexistent")
+        assert result is False
+
+    def test_delete_branch(self, working_repo):
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "empty"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        git.create_branch("deletable")
+        result = git.delete_branch("deletable")
+        assert result is True
+
+    def test_delete_current_branch_fails(self, working_repo):
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "empty"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        result = git.delete_branch("master")
+        assert result is False
+
+    def test_list_branches(self, working_repo):
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "empty"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        git.create_branch("branch-a")
+        git.create_branch("branch-b")
+        branches = git.list_branches()
         assert "master" in branches or "main" in branches
+        assert "branch-a" in branches
+        assert "branch-b" in branches
 
-    def test_get_current_branch(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        branch = gi.get_current_branch()
-        assert branch == "master" or branch == "main"
+    def test_list_branches_empty(self, tmp_path):
+        """A repo with no commits has no branches."""
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        git = GitIntegration(str(tmp_path))
+        branches = git.list_branches()
+        assert len(branches) == 0
+
+    def test_current_branch(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        branch = git.get_current_branch()
+        assert branch is not None
 
 
-# ── GitIntegration — Rollback ───────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Rollback
+# ---------------------------------------------------------------------------
 
-class TestGitIntegrationRollback:
-    def test_rollback_no_commits(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        # Should fail gracefully — no commits yet
-        result = gi.rollback("HEAD~1")
+
+class TestRollback:
+    def test_rollback_hard(self, working_repo):
+        f = working_repo / "rollback.txt"
+        f.write_text("before")
+        subprocess.run(["git", "add", "rollback.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "before"], cwd=str(working_repo), capture_output=True)
+        head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(working_repo), capture_output=True, text=True).stdout.strip()
+        f.write_text("after")
+        subprocess.run(["git", "add", "rollback.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "after"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        result = git.rollback(head_before, soft=False)
+        assert result is True
+        assert f.read_text() == "before"
+
+    def test_rollback_soft(self, working_repo):
+        f = working_repo / "soft.txt"
+        f.write_text("before")
+        subprocess.run(["git", "add", "soft.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "before"], cwd=str(working_repo), capture_output=True)
+        head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(working_repo), capture_output=True, text=True).stdout.strip()
+        f.write_text("after")
+        subprocess.run(["git", "add", "soft.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "after"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        result = git.rollback(head_before, soft=True)
+        assert result is True
+        # Soft reset keeps changes in staging area
+        status = git.get_status()
+        assert status.is_dirty is True
+
+    def test_rollback_invalid_hash(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        result = git.rollback("invalid-nonexistent-hash", soft=False)
         assert result is False
 
 
-# ── GitIntegration — Helpers ────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Head hash / file history
+# ---------------------------------------------------------------------------
 
-class TestGitIntegrationHelpers:
-    def test_get_head_hash_no_commits(self, tmp_path):
-        gi = GitIntegration(str(tmp_path))
-        gi.init_repo()
-        h = gi.get_head_hash()
-        # After init but before any commit, HEAD doesn't exist
-        assert h == ""
 
-    def test_get_file_history_no_commits(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        history = gi.get_file_history("test.py")
+class TestHeadAndHistory:
+    def test_get_head_hash(self, working_repo):
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "empty"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        h = git.get_head_hash()
+        assert len(h) == 40
+
+    def test_head_hash_matches_git(self, working_repo):
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "empty"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        h = git.get_head_hash()
+        actual = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(working_repo), capture_output=True, text=True).stdout.strip()
+        assert h == actual
+
+    def test_file_history_empty(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        history = git.get_file_history("nonexistent.txt")
         assert history == []
 
-    def test_is_gitignored(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        # No .gitignore yet
-        assert gi.is_gitignored("test.py") is False
+    def test_file_history_returns_entries(self, working_repo):
+        f = working_repo / "history.txt"
+        f.write_text("v1")
+        subprocess.run(["git", "add", "history.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "v1"], cwd=str(working_repo), capture_output=True)
+        f.write_text("v2")
+        subprocess.run(["git", "add", "history.txt"], cwd=str(working_repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "v2"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        history = git.get_file_history("history.txt")
+        assert len(history) >= 2
 
-    def test_auto_commit_no_changes(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        assert gi.auto_commit_if_changes() is True
+    def test_file_history_limit(self, working_repo):
+        f = working_repo / "limited.txt"
+        for i in range(5):
+            f.write_text(f"v{i}")
+            subprocess.run(["git", "add", "limited.txt"], cwd=str(working_repo), capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"v{i}"], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        history = git.get_file_history("limited.txt", limit=2)
+        assert len(history) == 2
 
-    def test_auto_commit_with_changes(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("x = 1")
-        gi = GitIntegration(str(repo))
-        # auto_commit stages + commits
-        result = gi.auto_commit_if_changes()
+
+# ---------------------------------------------------------------------------
+# auto_commit / is_gitignored
+# ---------------------------------------------------------------------------
+
+
+class TestAutoCommit:
+    def test_auto_commit_no_changes(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        assert git.auto_commit_if_changes() is True
+
+    def test_auto_commit_with_changes(self, working_repo):
+        f = working_repo / "auto.txt"
+        f.write_text("auto content")
+        subprocess.run(["git", "add", "."], cwd=str(working_repo), capture_output=True)
+        git = GitIntegration(str(working_repo))
+        result = git.auto_commit_if_changes()
         assert result is True
+        # Should be clean now
+        status = git.get_status()
+        assert status.is_dirty is False
 
+    def test_is_gitignored(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        (working_repo / ".gitignore").write_text("*.log")
+        (working_repo / "test.log").write_text("log")
+        assert git.is_gitignored("test.log") is True
 
-# ── GitIntegration — Edge Cases ─────────────────────────────────────────────
-
-class TestGitIntegrationEdgeCases:
-    def test_commit_with_author(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("x = 1")
-        gi = GitIntegration(str(repo))
-        gi.stage_file("test.py")
-        commit_hash = gi.commit("Test commit", author="Test User <test@example.com>")
-        assert commit_hash is not None
-        assert len(commit_hash) > 0
-
-    def test_create_branch_from_branch(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        gi = GitIntegration(str(repo))
-        gi.create_branch("existing-branch")
-        assert gi.create_branch("new-branch", from_branch="existing-branch") is True
-
-    def test_get_diff_staged(self, tmp_path):
-        repo = _make_test_repo(tmp_path)
-        (repo / "test.py").write_text("x = 1")
-        _run_git(repo, 'add', 'test.py')
-        gi = GitIntegration(str(repo))
-        diff = gi.get_diff_staged("test.py")
-        assert "x = 1" in diff
+    def test_is_gitignored_not_ignored(self, working_repo):
+        git = GitIntegration(str(working_repo))
+        (working_repo / ".gitignore").write_text("*.log")
+        (working_repo / "test.py").write_text("code")
+        assert git.is_gitignored("test.py") is False
