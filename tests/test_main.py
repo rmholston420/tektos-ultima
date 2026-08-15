@@ -77,6 +77,10 @@ def _build_mocked_app():
 
     mock_ws_mgr = MagicMock()
     mock_ws_mgr._sessions = {}
+    mock_ws_mgr.add = AsyncMock()
+    mock_ws_mgr.remove = AsyncMock()
+    mock_ws_mgr.broadcast = AsyncMock()
+    mock_ws_mgr.broadcast_all = AsyncMock()
 
     mock_schema_engine = MagicMock()
     mock_schema_engine.get_schema = MagicMock(return_value={"tables": []})

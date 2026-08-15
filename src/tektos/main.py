@@ -817,8 +817,10 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    # Add WS connection
+    # Add WS connection to both registries (session_manager for lifecycle,
+    # ws_manager for broadcast fanout)
     await session_manager.add_ws_connection(session_id, websocket)
+    await ws_manager.add(session_id, websocket)
 
     try:
         # Accept the WebSocket connection FIRST
@@ -928,6 +930,7 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
         log.error(f"WS handler error: {exc}", exc_info=True)
     finally:
         await session_manager.remove_ws_connection(session_id, websocket)
+        await ws_manager.remove(session_id, websocket)
 
 
 # ---------------------------------------------------------------------------
