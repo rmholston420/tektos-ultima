@@ -111,7 +111,7 @@ class TestToolDefinitions:
         assert set(fw["function"]["parameters"]["required"]) == {"path", "content"}
 
     def test_tools_schema_count(self):
-        assert len(TOOLS_SCHEMA) == 7
+        assert len(TOOLS_SCHEMA) == 8
 
 
 # ── RuntimeSDK — Lifecycle ─────────────────────────────────────────────────

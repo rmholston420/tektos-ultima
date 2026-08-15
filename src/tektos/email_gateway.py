@@ -18,6 +18,7 @@ import asyncio
 import email
 import email.header
 import email.utils
+import inspect
 import logging
 import re
 import ssl
@@ -306,7 +307,7 @@ class EmailGateway:
         # Invoke handlers
         for handler in self._handlers:
             try:
-                if asyncio.iscoroutinefunction(handler):
+                if inspect.iscoroutinefunction(handler):
                     await handler(email_msg)
                 else:
                     handler(email_msg)

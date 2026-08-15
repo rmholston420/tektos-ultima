@@ -114,16 +114,18 @@ class GitIntegration:
             status.is_dirty = bool(result.stdout.strip())
 
             # Parse status output
-            for line in result.stdout.strip().split('\n'):
+            for line in result.stdout.split('\n'):
                 if not line:
                     continue
                 status_code = line[:2]
                 filepath = line[3:]
 
-                if status_code.startswith('A') or status_code.startswith('M'):
+                if status_code[0] == ' ':
+                    # Work tree only changes (second char is M/D/U/R/C)
+                    if len(status_code) >= 2 and status_code[1] in ('M', 'D', 'U', 'R', 'C'):
+                        status.modified_files.append(filepath)
+                elif status_code.startswith('A') or status_code.startswith('M'):
                     status.staged_files.append(filepath)
-                elif status_code.startswith('M') and not status_code.startswith('AM'):
-                    status.modified_files.append(filepath)
                 elif status_code.startswith('??'):
                     status.untracked_files.append(filepath)
 

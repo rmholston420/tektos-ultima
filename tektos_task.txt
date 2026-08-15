@@ -1,0 +1,12 @@
+"""Binary Search Tree implementation.
+
+Write a complete BST implementation in Python with:
+1. Node class with value, left, right attributes
+2. BST class with insert, search, delete, traverse methods
+3. Support for in-order, pre-order, post-order traversals
+4. Height calculation
+5. Is balanced check
+6. Type hints throughout
+
+Save to: /home/rmholston/dev/tektos-ultima-v1/demo_bst.py
+"""

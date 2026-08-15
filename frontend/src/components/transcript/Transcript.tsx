@@ -218,6 +218,17 @@ function buildMessages(
           timestamp: event.timestamp,
         });
       }
+    } else if (eventType === "message") {
+      // Generic message event (e.g., vision responses)
+      const text = event.payload.text as string;
+      if (text) {
+        messages.push({
+          id: `msg-${event.seq}`,
+          type: "assistant",
+          content: text,
+          timestamp: event.timestamp,
+        });
+      }
     }
   }
 

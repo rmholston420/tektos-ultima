@@ -43,6 +43,12 @@ try:
     from aiogram.fsm.storage.memory import MemoryStorage
     from aiogram.fsm.state import State, StatesGroup
     from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
+    # BotBlocked was added in aiogram 3.14+
+    try:
+        from aiogram.exceptions import BotBlocked as _BotBlocked
+    except ImportError:
+        # Fallback: use TelegramForbiddenError which covers "bot was blocked by user"
+        _BotBlocked = TelegramForbiddenError
 except ImportError:
     raise ImportError(
         "aiogram is required for Telegram gateway. "
@@ -128,289 +134,337 @@ class TelegramGateway:
         # Register handlers
         self._register_handlers()
 
+    # =========================================================================
+    # Public command handlers — exposed as methods for testability
+    # =========================================================================
+
+    async def cmd_new(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /new command — create new session."""
+        if self.session_manager is None:
+            await message.answer("❌ Session manager not available.")
+            return
+
+        try:
+            session = await self.session_manager.create_session(
+                model=self._user_models.get(message.from_user.id, "qwen3.6-35b-a3b-ud-q4_k_xl"),
+                cwd=".",
+            )
+            self._user_sessions[message.from_user.id] = session.id
+            await message.answer(
+                f"✅ *New session created*\n\n"
+                f"ID: `{session.id[:8]}`\n"
+                f"Model: {session.model}\n"
+                f"Status: {session.status}\n\n"
+                f"Send a message to start working.",
+                parse_mode="Markdown",
+            )
+        except Exception as exc:
+            await message.answer(f"❌ Failed to create session: {exc}")
+            log.error(f"Failed to create session: {exc}", exc_info=True)
+
+    async def cmd_help(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /help command."""
+        await message.answer(
+            "🤖 *Tektos Agent — Commands*\n\n"
+            "/new — Create a new session\n"
+            "/list — List your active sessions\n"
+            "/resume <id> — Resume a session\n"
+            "/interrupt — Interrupt current session\n"
+            "/stop — Stop current session\n"
+            "/model <name> — Switch model\n"
+            "/status — Show session status\n"
+            "/admin — Show admin panel\n"
+            "\nSend a text message to start a task.",
+            parse_mode="Markdown",
+        )
+
+    async def cmd_list(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /list command — list active sessions."""
+        if self.session_manager is None:
+            await message.answer("❌ Session manager not available.")
+            return
+
+        try:
+            sessions = await self.session_manager.list_sessions()
+            user_id = message.from_user.id
+            my_sessions = [s for s in sessions if not s.is_archived]
+
+            if not my_sessions:
+                await message.answer("📭 No active sessions.")
+                return
+
+            text = "📋 *Your Sessions*\n\n"
+            for i, session in enumerate(my_sessions[:10], 1):  # Limit to 10
+                status_emoji = {"ready": "✅", "running": "⏳", "failed": "❌", "interrupted": "⏸️"}.get(session.status, "🔵")
+                text += f"{i}. {status_emoji} `{session.id[:8]}` — {session.status}\n"
+                text += f"   Model: {session.model}\n"
+                text += f"   Updated: {session.updated_at:.0f}s ago\n\n"
+
+            if len(my_sessions) > 10:
+                text += f"... and {len(my_sessions) - 10} more"
+
+            await message.answer(text, parse_mode="Markdown")
+        except Exception as exc:
+            await message.answer(f"❌ Failed to list sessions: {exc}")
+            log.error(f"Failed to list sessions: {exc}", exc_info=True)
+
+    async def cmd_resume(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /resume <id> command — resume a session."""
+        if self.session_manager is None:
+            await message.answer("❌ Session manager not available.")
+            return
+
+        try:
+            args = message.text.split(maxsplit=1)
+            if len(args) < 2:
+                await message.answer("Usage: /resume <session_id>")
+                return
+
+            session_id = args[1].strip()
+            session = await self.session_manager.resume_session(session_id)
+            self._user_sessions[message.from_user.id] = session.id
+
+            await message.answer(
+                f"✅ *Session resumed*\n\n"
+                f"ID: `{session.id[:8]}`\n"
+                f"Model: {session.model}\n"
+                f"Status: {session.status}",
+                parse_mode="Markdown",
+            )
+        except Exception as exc:
+            await message.answer(f"❌ Failed to resume session: {exc}")
+            log.error(f"Failed to resume session: {exc}", exc_info=True)
+
+    async def cmd_interrupt(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /interrupt command — interrupt current session."""
+        user_id = message.from_user.id
+        if user_id not in self._user_sessions:
+            await message.answer("❌ No active session to interrupt.")
+            return
+
+        session_id = self._user_sessions[user_id]
+        try:
+            if self.session_manager:
+                await self.session_manager.interrupt_session(session_id)
+            if self.runtime_sdk:
+                session = await self.session_manager.get_session(session_id)
+                await self.runtime_sdk.interrupt(session)
+            await message.answer("⏸️ Session interrupted.")
+        except Exception as exc:
+            await message.answer(f"❌ Failed to interrupt: {exc}")
+            log.error(f"Failed to interrupt session: {exc}", exc_info=True)
+
+    async def cmd_stop(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /stop command — stop current session."""
+        user_id = message.from_user.id
+        if user_id not in self._user_sessions:
+            await message.answer("❌ No active session to stop.")
+            return
+
+        session_id = self._user_sessions[user_id]
+        try:
+            # Interrupt first
+            if self.session_manager:
+                await self.session_manager.interrupt_session(session_id)
+            if self.runtime_sdk:
+                session = await self.session_manager.get_session(session_id)
+                await self.runtime_sdk.interrupt(session)
+            # Clear user session
+            del self._user_sessions[user_id]
+            await message.answer("⏹️ Session stopped.")
+        except Exception as exc:
+            await message.answer(f"❌ Failed to stop: {exc}")
+            log.error(f"Failed to stop session: {exc}", exc_info=True)
+
+    async def cmd_model(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /model <name> command — switch model."""
+        user_id = message.from_user.id
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.answer("Usage: /model <model_name>")
+            return
+
+        model_name = args[1].strip()
+        self._user_models[user_id] = model_name
+
+        # If there's an active session, switch its model
+        if user_id in self._user_sessions and self.session_manager:
+            session_id = self._user_sessions[user_id]
+            try:
+                session = await self.session_manager.get_session(session_id)
+                if session:
+                    session.model = model_name
+            except Exception as exc:
+                log.warning(f"Failed to switch model: {exc}")
+
+        await message.answer(f"✅ Model set to: {model_name}")
+
+    async def cmd_status(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /status command — show session status."""
+        user_id = message.from_user.id
+        if user_id not in self._user_sessions:
+            await message.answer("❌ No active session.")
+            return
+
+        session_id = self._user_sessions[user_id]
+        try:
+            if self.session_manager:
+                session = await self.session_manager.get_session(session_id)
+                if session:
+                    await message.answer(
+                        f"📊 *Session Status*\n\n"
+                        f"ID: `{session.id[:8]}`\n"
+                        f"Model: {session.model}\n"
+                        f"Status: {session.status}\n"
+                        f"CWD: {session.cwd}\n"
+                        f"Updated: {session.updated_at:.0f}s ago",
+                        parse_mode="Markdown",
+                    )
+        except Exception as exc:
+            await message.answer(f"❌ Failed to get status: {exc}")
+            log.error(f"Failed to get status: {exc}", exc_info=True)
+
+    async def cmd_admin(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /admin command — admin panel (admin only)."""
+        if self.admin_chat_id is not None and message.from_user.id != self.admin_chat_id:
+            await message.answer("❌ Admin access denied.")
+            return
+
+        try:
+            # Gather system info
+            health_data = {
+                "sessions_active": len(self.session_manager._sessions) if self.session_manager else 0,
+                "users_connected": len(self._user_sessions),
+                "bot_token_set": bool(self.bot_token),
+                "webhook_url": self.webhook_url or "Polling",
+            }
+
+            text = "🛠️ *Admin Panel*\n\n"
+            for key, value in health_data.items():
+                text += f"{key}: `{value}`\n"
+
+            text += "\n*Quick Actions:*\n"
+            text += "/health — Check system health\n"
+            text += "/stats — Show system statistics\n"
+            text += "/logs — Show recent logs\n"
+
+            await message.answer(text, parse_mode="Markdown")
+        except Exception as exc:
+            await message.answer(f"❌ Admin error: {exc}")
+            log.error(f"Admin error: {exc}", exc_info=True)
+
+    async def cmd_health(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /health command — check system health."""
+        if self.admin_chat_id is not None and message.from_user.id != self.admin_chat_id:
+            await message.answer("❌ Admin access denied.")
+            return
+
+        try:
+            if self.runtime_sdk:
+                await message.answer("✅ System healthy.")
+            else:
+                await message.answer("⚠️ System not fully initialized.")
+        except Exception as exc:
+            await message.answer(f"❌ Health check failed: {exc}")
+            log.error(f"Health check failed: {exc}", exc_info=True)
+
+    async def cmd_stats(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /stats command — show system statistics."""
+        if self.admin_chat_id is not None and message.from_user.id != self.admin_chat_id:
+            await message.answer("❌ Admin access denied.")
+            return
+
+        try:
+            if self.session_manager:
+                sessions = await self.session_manager.list_sessions()
+                active = len([s for s in sessions if not s.is_archived])
+                archived = len([s for s in sessions if s.is_archived])
+
+                await message.answer(
+                    f"📊 *System Statistics*\n\n"
+                    f"Total sessions: {len(sessions)}\n"
+                    f"Active: {active}\n"
+                    f"Archived: {archived}\n"
+                    f"Connected users: {len(self._user_sessions)}",
+                    parse_mode="Markdown",
+                )
+        except Exception as exc:
+            await message.answer(f"❌ Stats error: {exc}")
+            log.error(f"Stats error: {exc}", exc_info=True)
+
+    async def cmd_start(self, message: Message, state: FSMContext | None = None) -> None:
+        """Handle /start command."""
+        await message.answer(
+            "🤖 *Tektos Agent*\n\n"
+            "I am your autonomous coding assistant.\n\n"
+            "Available commands:\n"
+            "/new — Create a new session\n"
+            "/list — List your active sessions\n"
+            "/resume <id> — Resume a session\n"
+            "/interrupt — Interrupt current session\n"
+            "/stop — Stop current session\n"
+            "/model <name> — Switch model\n"
+            "/help — Show this message\n"
+            "/status — Show session status\n"
+            "\nSimply send a text message to start a task.",
+            parse_mode="Markdown",
+        )
+
+    # =========================================================================
+    # Internal helpers
+    # =========================================================================
+
     def _register_handlers(self) -> None:
         """Register all Telegram message and callback handlers."""
 
         # --- Commands ---
         @self.dp.message(CommandStart())
-        async def cmd_start(message: Message) -> None:
-            """Handle /start command."""
-            await message.answer(
-                "🤖 *Tektos Agent*\n\n"
-                "I am your autonomous coding assistant.\n\n"
-                "Available commands:\n"
-                "/new — Create a new session\n"
-                "/list — List your active sessions\n"
-                "/resume <id> — Resume a session\n"
-                "/interrupt — Interrupt current session\n"
-                "/stop — Stop current session\n"
-                "/model <name> — Switch model\n"
-                "/help — Show this message\n"
-                "/status — Show session status\n"
-                "\nSimply send a text message to start a task.",
-                parse_mode="Markdown",
-            )
+        async def _cmd_start(message: Message) -> None:
+            await self.cmd_start(message, None)
 
         @self.dp.message(Command("help"))
-        async def cmd_help(message: Message) -> None:
-            """Handle /help command."""
-            await message.answer(
-                "🤖 *Tektos Agent — Commands*\n\n"
-                "/new — Create a new session\n"
-                "/list — List your active sessions\n"
-                "/resume <id> — Resume a session\n"
-                "/interrupt — Interrupt current session\n"
-                "/stop — Stop current session\n"
-                "/model <name> — Switch model\n"
-                "/status — Show session status\n"
-                "/admin — Show admin panel\n"
-                "\nSend a text message to start a task.",
-                parse_mode="Markdown",
-            )
+        async def _cmd_help(message: Message) -> None:
+            await self.cmd_help(message, None)
 
         @self.dp.message(Command("new"))
-        async def cmd_new(message: Message) -> None:
-            """Handle /new command — create new session."""
-            if self.session_manager is None:
-                await message.answer("❌ Session manager not available.")
-                return
-
-            try:
-                session = await self.session_manager.create_session(
-                    model=self._user_models.get(message.from_user.id, "qwen3.6-35b-a3b-ud-q4_k_xl"),
-                    cwd=".",
-                )
-                self._user_sessions[message.from_user.id] = session.id
-                await message.answer(
-                    f"✅ *New session created*\n\n"
-                    f"ID: `{session.id[:8]}`\n"
-                    f"Model: {session.model}\n"
-                    f"Status: {session.status}\n\n"
-                    f"Send a message to start working.",
-                    parse_mode="Markdown",
-                )
-            except Exception as exc:
-                await message.answer(f"❌ Failed to create session: {exc}")
-                log.error(f"Failed to create session: {exc}", exc_info=True)
+        async def _cmd_new(message: Message) -> None:
+            await self.cmd_new(message, None)
 
         @self.dp.message(Command("list"))
-        async def cmd_list(message: Message) -> None:
-            """Handle /list command — list active sessions."""
-            if self.session_manager is None:
-                await message.answer("❌ Session manager not available.")
-                return
-
-            try:
-                sessions = await self.session_manager.list_sessions()
-                user_id = message.from_user.id
-                my_sessions = [s for s in sessions if not s.is_archived]
-
-                if not my_sessions:
-                    await message.answer("📭 No active sessions.")
-                    return
-
-                text = "📋 *Your Sessions*\n\n"
-                for i, session in enumerate(my_sessions[:10], 1):  # Limit to 10
-                    status_emoji = {"ready": "✅", "running": "⏳", "failed": "❌", "interrupted": "⏸️"}.get(session.status, "🔵")
-                    text += f"{i}. {status_emoji} `{session.id[:8]}` — {session.status}\n"
-                    text += f"   Model: {session.model}\n"
-                    text += f"   Updated: {session.updated_at:.0f}s ago\n\n"
-
-                if len(my_sessions) > 10:
-                    text += f"... and {len(my_sessions) - 10} more"
-
-                await message.answer(text, parse_mode="Markdown")
-            except Exception as exc:
-                await message.answer(f"❌ Failed to list sessions: {exc}")
-                log.error(f"Failed to list sessions: {exc}", exc_info=True)
+        async def _cmd_list(message: Message) -> None:
+            await self.cmd_list(message, None)
 
         @self.dp.message(Command("resume"))
-        async def cmd_resume(message: Message) -> None:
-            """Handle /resume <id> command — resume a session."""
-            if self.session_manager is None:
-                await message.answer("❌ Session manager not available.")
-                return
-
-            try:
-                args = message.text.split(maxsplit=1)
-                if len(args) < 2:
-                    await message.answer("Usage: /resume <session_id>")
-                    return
-
-                session_id = args[1].strip()
-                session = await self.session_manager.resume_session(session_id)
-                self._user_sessions[message.from_user.id] = session.id
-
-                await message.answer(
-                    f"✅ *Session resumed*\n\n"
-                    f"ID: `{session.id[:8]}`\n"
-                    f"Model: {session.model}\n"
-                    f"Status: {session.status}",
-                    parse_mode="Markdown",
-                )
-            except Exception as exc:
-                await message.answer(f"❌ Failed to resume session: {exc}")
-                log.error(f"Failed to resume session: {exc}", exc_info=True)
+        async def _cmd_resume(message: Message) -> None:
+            await self.cmd_resume(message, None)
 
         @self.dp.message(Command("interrupt"))
-        async def cmd_interrupt(message: Message) -> None:
-            """Handle /interrupt command — interrupt current session."""
-            user_id = message.from_user.id
-            if user_id not in self._user_sessions:
-                await message.answer("❌ No active session to interrupt.")
-                return
-
-            session_id = self._user_sessions[user_id]
-            try:
-                if self.session_manager:
-                    await self.session_manager.interrupt_session(session_id)
-                if self.runtime_sdk:
-                    session = await self.session_manager.get_session(session_id)
-                    await self.runtime_sdk.interrupt(session)
-                await message.answer("⏸️ Session interrupted.")
-            except Exception as exc:
-                await message.answer(f"❌ Failed to interrupt: {exc}")
-                log.error(f"Failed to interrupt session: {exc}", exc_info=True)
+        async def _cmd_interrupt(message: Message) -> None:
+            await self.cmd_interrupt(message, None)
 
         @self.dp.message(Command("stop"))
-        async def cmd_stop(message: Message) -> None:
-            """Handle /stop command — stop current session."""
-            user_id = message.from_user.id
-            if user_id not in self._user_sessions:
-                await message.answer("❌ No active session to stop.")
-                return
-
-            session_id = self._user_sessions[user_id]
-            try:
-                # Interrupt first
-                await cmd_interrupt(message)
-                # Clear user session
-                del self._user_sessions[user_id]
-                await message.answer("⏹️ Session stopped.")
-            except Exception as exc:
-                await message.answer(f"❌ Failed to stop: {exc}")
-                log.error(f"Failed to stop session: {exc}", exc_info=True)
+        async def _cmd_stop(message: Message) -> None:
+            await self.cmd_stop(message, None)
 
         @self.dp.message(Command("model"))
-        async def cmd_model(message: Message) -> None:
-            """Handle /model <name> command — switch model."""
-            user_id = message.from_user.id
-            args = message.text.split(maxsplit=1)
-            if len(args) < 2:
-                await message.answer("Usage: /model <model_name>")
-                return
-
-            model_name = args[1].strip()
-            self._user_models[user_id] = model_name
-
-            # If there's an active session, switch its model
-            if user_id in self._user_sessions and self.session_manager:
-                session_id = self._user_sessions[user_id]
-                try:
-                    session = await self.session_manager.get_session(session_id)
-                    if session:
-                        session.model = model_name
-                except Exception as exc:
-                    log.warning(f"Failed to switch model: {exc}")
-
-            await message.answer(f"✅ Model set to: {model_name}")
+        async def _cmd_model(message: Message) -> None:
+            await self.cmd_model(message, None)
 
         @self.dp.message(Command("status"))
-        async def cmd_status(message: Message) -> None:
-            """Handle /status command — show session status."""
-            user_id = message.from_user.id
-            if user_id not in self._user_sessions:
-                await message.answer("❌ No active session.")
-                return
-
-            session_id = self._user_sessions[user_id]
-            try:
-                if self.session_manager:
-                    session = await self.session_manager.get_session(session_id)
-                    if session:
-                        await message.answer(
-                            f"📊 *Session Status*\n\n"
-                            f"ID: `{session.id[:8]}`\n"
-                            f"Model: {session.model}\n"
-                            f"Status: {session.status}\n"
-                            f"CWD: {session.cwd}\n"
-                            f"Updated: {session.updated_at:.0f}s ago",
-                            parse_mode="Markdown",
-                        )
-            except Exception as exc:
-                await message.answer(f"❌ Failed to get status: {exc}")
-                log.error(f"Failed to get status: {exc}", exc_info=True)
+        async def _cmd_status(message: Message) -> None:
+            await self.cmd_status(message, None)
 
         @self.dp.message(Command("admin"))
-        async def cmd_admin(message: Message) -> None:
-            """Handle /admin command — admin panel (admin only)."""
-            if self.admin_chat_id is not None and message.from_user.id != self.admin_chat_id:
-                await message.answer("❌ Admin access denied.")
-                return
-
-            try:
-                # Gather system info
-                health_data = {
-                    "sessions_active": len(self.session_manager._sessions) if self.session_manager else 0,
-                    "users_connected": len(self._user_sessions),
-                    "bot_token_set": bool(self.bot_token),
-                    "webhook_url": self.webhook_url or "Polling",
-                }
-
-                text = "🛠️ *Admin Panel*\n\n"
-                for key, value in health_data.items():
-                    text += f"{key}: `{value}`\n"
-
-                text += "\n*Quick Actions:*\n"
-                text += "/health — Check system health\n"
-                text += "/stats — Show system statistics\n"
-                text += "/logs — Show recent logs\n"
-
-                await message.answer(text, parse_mode="Markdown")
-            except Exception as exc:
-                await message.answer(f"❌ Admin error: {exc}")
-                log.error(f"Admin error: {exc}", exc_info=True)
+        async def _cmd_admin(message: Message) -> None:
+            await self.cmd_admin(message, None)
 
         @self.dp.message(Command("health"))
-        async def cmd_health(message: Message) -> None:
-            """Handle /health command — check system health."""
-            if self.admin_chat_id is not None and message.from_user.id != self.admin_chat_id:
-                await message.answer("❌ Admin access denied.")
-                return
-
-            try:
-                if self.runtime_sdk:
-                    await message.answer("✅ System healthy.")
-                else:
-                    await message.answer("⚠️ System not fully initialized.")
-            except Exception as exc:
-                await message.answer(f"❌ Health check failed: {exc}")
-                log.error(f"Health check failed: {exc}", exc_info=True)
+        async def _cmd_health(message: Message) -> None:
+            await self.cmd_health(message, None)
 
         @self.dp.message(Command("stats"))
-        async def cmd_stats(message: Message) -> None:
-            """Handle /stats command — show system statistics."""
-            if self.admin_chat_id is not None and message.from_user.id != self.admin_chat_id:
-                await message.answer("❌ Admin access denied.")
-                return
-
-            try:
-                if self.session_manager:
-                    sessions = await self.session_manager.list_sessions()
-                    active = len([s for s in sessions if not s.is_archived])
-                    archived = len([s for s in sessions if s.is_archived])
-
-                    await message.answer(
-                        f"📊 *System Statistics*\n\n"
-                        f"Total sessions: {len(sessions)}\n"
-                        f"Active: {active}\n"
-                        f"Archived: {archived}\n"
-                        f"Connected users: {len(self._user_sessions)}",
-                        parse_mode="Markdown",
-                    )
-            except Exception as exc:
-                await message.answer(f"❌ Stats error: {exc}")
-                log.error(f"Stats error: {exc}", exc_info=True)
+        async def _cmd_stats(message: Message) -> None:
+            await self.cmd_stats(message, None)
 
         # --- Text messages (prompts) ---
         @self.dp.message()
@@ -479,21 +533,23 @@ class TelegramGateway:
 
         try:
             # Build on_event callback for streaming
+            thinking_msg_ref = [thinking_msg]
+
             async def on_event(event: dict[str, Any]) -> None:
                 """Stream Tektos events back to Telegram."""
                 event_type = event.get("type", "")
 
                 try:
                     # Delete thinking message after first event
-                    if thinking_msg:
+                    if thinking_msg_ref[0]:
                         try:
                             await self.bot.delete_message(
                                 chat_id=user_id,
-                                message_id=thinking_msg.message_id,
+                                message_id=thinking_msg_ref[0].message_id,
                             )
                         except Exception:
                             pass
-                        thinking_msg = None
+                        thinking_msg_ref[0] = None
 
                     if event_type == "assistant.delta":
                         content = event.get("payload", {}).get("content", "")
@@ -564,7 +620,7 @@ class TelegramGateway:
         except TelegramRetryAfter as e:
             log.warning(f"Telegram rate limit: {e}")
             await _asyncio.sleep(e.retry_after)
-        except BotBlocked:
+        except _BotBlocked:
             log.warning(f"User {user_id} blocked the bot")
 
     async def _send_message(self, user_id: int, text: str) -> None:
@@ -574,7 +630,7 @@ class TelegramGateway:
         except TelegramRetryAfter as e:
             log.warning(f"Telegram rate limit: {e}")
             await _asyncio.sleep(e.retry_after)
-        except BotBlocked:
+        except _BotBlocked:
             log.warning(f"User {user_id} blocked the bot")
 
     async def _send_permission_request(
@@ -589,8 +645,8 @@ class TelegramGateway:
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton("✅ Approve", callback_data=f"approve:{tool_id}"),
-                InlineKeyboardButton("❌ Reject", callback_data=f"reject:{tool_id}"),
+                InlineKeyboardButton(text="✅ Approve", callback_data=f"approve:{tool_id}"),
+                InlineKeyboardButton(text="❌ Reject", callback_data=f"reject:{tool_id}"),
             ]
         ])
 
@@ -599,7 +655,7 @@ class TelegramGateway:
             text=(
                 f"⚠️ *Permission Request*\n\n"
                 f"Tool: `{tool_name}`\n"
-                f"Input: `{json.dumps(tool_input, default=str)[:200]}`\n\n"
+                f"Input: `{_json.dumps(tool_input, default=str)[:200]}`\n"
                 f"Approve or reject this tool call."
             ),
             parse_mode="Markdown",

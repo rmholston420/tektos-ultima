@@ -48,7 +48,8 @@ def _get_all_session_ids() -> list[str]:
         logger.warning("Failed to get session IDs: %s", e)
         return []
     finally:
-        conn.close()
+        if "conn" in locals():
+            conn.close()
 
 logger = logging.getLogger(__name__)
 

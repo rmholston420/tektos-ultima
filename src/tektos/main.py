@@ -66,6 +66,7 @@ runtime_sdk: RuntimeSDK
 ws_manager: WebSocketManager
 schema_engine: SchemaEvolutionEngine
 self_improvement: SelfImprovementAdapter
+vision_client: Any = None
 telegram_gateway: Any = None
 state_managers: dict[str, SessionStateManager] = {}
 
@@ -117,7 +118,26 @@ async def lifespan(app: _FastAPI):
     # 8. Start runtime SDK
     await runtime_sdk.start()
 
-    # 9. Initialize Telegram gateway (optional — only if bot token is set)
+    # 9. Initialize vision client (optional — only if VISION_LLM_URL is set)
+    vision_url = _os.getenv("TEKTOS_VISION_LLM_URL")
+    vision_model = _os.getenv("TEKTOS_VISION_MODEL", "Qwen2.5-VL-3B-Instruct-Q4_K_M")
+    if vision_url:
+        global vision_client
+        try:
+            from tektos.providers.vision_client import VisionClient
+            vision_client = VisionClient(
+                base_url=f"{vision_url.rstrip('/')}/v1",
+                model=vision_model,
+            )
+            await vision_client.start()
+            log.info("Vision client initialized: %s (model: %s)", vision_url, vision_model)
+        except Exception as exc:
+            log.warning("Failed to initialize vision client: %s", exc)
+            vision_client = None
+    else:
+        log.info("Vision client skipped (TEKTOS_VISION_LLM_URL not set)")
+
+    # 10. Initialize Telegram gateway (optional — only if bot token is set)
     telegram_bot_token = _os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN")
     telegram_admin_chat_id = _os.getenv("TEKTOS_TELEGRAM_ADMIN_CHAT_ID")
     telegram_admin_chat_id_int = int(telegram_admin_chat_id) if telegram_admin_chat_id else None
@@ -168,7 +188,7 @@ app = _FastAPI(
 # Middleware: CORS (applied after TrustedHost in reverse order — correct)
 app.add_middleware(
     _CORSMiddleware,
-    allow_origins=["http://localhost:3003", "http://localhost:5555"],  # Frontend URLs
+    allow_origins=["http://localhost:3003", "http://localhost:3006", "http://localhost:5555"],  # Frontend URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -609,6 +629,141 @@ async def search_sessions(query: str, limit: int = 100):
         ],
         "events": events,
     }
+
+
+# ---------------------------------------------------------------------------
+# Vision API
+# ---------------------------------------------------------------------------
+
+class VisionAnalyzeRequest(_BaseModel):
+    """Request body for vision analysis."""
+    session_id: str
+    image_base64: str
+    prompt: str = "Describe what you see in this image in detail."
+    system_prompt: str | None = None
+    model: str | None = None
+
+
+class VisionAnalyzeUrlRequest(_BaseModel):
+    """Request body for vision analysis from URL."""
+    session_id: str
+    image_url: str
+    prompt: str = "Describe what you see in this image in detail."
+    system_prompt: str | None = None
+    model: str | None = None
+
+
+@app.post("/api/vision/analyze")
+async def vision_analyze(req: VisionAnalyzeRequest):
+    """Analyze an image using the vision model.
+
+    Accepts a base64-encoded image and returns the model's text description.
+    """
+    if vision_client is None:
+        raise _HTTPException(
+            status_code=503,
+            detail="Vision client not initialized. Set TEKTOS_VISION_LLM_URL to enable.",
+        )
+
+    try:
+        # Write base64 to temp file
+        import base64 as _base64
+        import tempfile
+        tmp_path = None
+        try:
+            tmp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            tmp_file.write(_base64.b64decode(req.image_base64))
+            tmp_file.close()
+            tmp_path = tmp_file.name
+
+            # Analyze
+            result = await vision_client.analyze(tmp_path, req.prompt, req.system_prompt)
+
+            return {
+                "ok": True,
+                "session_id": req.session_id,
+                "text": result.text,
+                "model": result.model,
+                "usage": {
+                    "prompt_tokens": result.prompt_tokens,
+                    "completion_tokens": result.completion_tokens,
+                    "total_tokens": result.total_tokens,
+                },
+                "timings": result.timings,
+            }
+        finally:
+            if tmp_path:
+                import os
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+    except _HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Vision analyze error: %s", exc, exc_info=True)
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/vision/analyze-url")
+async def vision_analyze_url(req: VisionAnalyzeUrlRequest):
+    """Analyze an image from a URL using the vision model."""
+    if vision_client is None:
+        raise _HTTPException(
+            status_code=503,
+            detail="Vision client not initialized. Set TEKTOS_VISION_LLM_URL to enable.",
+        )
+
+    try:
+        result = await vision_client.analyze_url(req.image_url, req.prompt, req.system_prompt)
+
+        return {
+            "ok": True,
+            "session_id": req.session_id,
+            "text": result.text,
+            "model": result.model,
+            "usage": {
+                "prompt_tokens": result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+                "total_tokens": result.total_tokens,
+            },
+            "timings": result.timings,
+        }
+    except _HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Vision analyze URL error: %s", exc, exc_info=True)
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/vision/status")
+async def vision_status():
+    """Check vision client status."""
+    if vision_client is None:
+        return {
+            "ok": False,
+            "initialized": False,
+            "detail": "Vision client not initialized. Set TEKTOS_VISION_LLM_URL to enable.",
+        }
+
+    try:
+        healthy = await vision_client.health()
+        return {
+            "ok": True,
+            "initialized": True,
+            "healthy": healthy,
+            "model": vision_client.model,
+            "base_url": vision_client.base_url,
+        }
+    except Exception as exc:
+        return {
+            "ok": True,
+            "initialized": True,
+            "healthy": False,
+            "error": str(exc),
+            "model": vision_client.model,
+            "base_url": vision_client.base_url,
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -76,6 +76,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [showWelcome, setShowWelcome] = useState(true);
   const [activeModel, setActiveModel] = useState("qwen3.6-35b-a3b-ud-q4_k_xl");
+  const [visionAvailable, setVisionAvailable] = useState(false);
+  const [visionModel, setVisionModel] = useState("");
 
   const streamBuffer = useRef("");
 
@@ -100,6 +102,23 @@ export default function App() {
     };
     
     checkHealth();
+    
+    // Check vision endpoint availability on mount
+    const checkVision = () => {
+      if (cancelled) return;
+      fetch('http://localhost:8020/api/vision/status', { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((data) => {
+          if (cancelled) return;
+          if (data.initialized) {
+            setVisionAvailable(true);
+            setVisionModel(data.model || "");
+          }
+        })
+        .catch(() => {});
+    };
+    
+    checkVision();
     
     // Periodic health check every 30s to keep UI accurate
     const interval = setInterval(checkHealth, 30000);
@@ -302,6 +321,34 @@ export default function App() {
     }
   }, [activeSession]);
 
+  const handleVisionAnalyze = useCallback(async (imageBase64: string, prompt: string) => {
+    if (!activeSession?.id) return;
+    try {
+      const res = await fetch('http://localhost:8020/api/vision/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: activeSession.id,
+          image_base64: imageBase64.split(',')[1], // strip data:...;base64, prefix
+          prompt: prompt,
+          model: visionModel,
+        }),
+      });
+      if (!res.ok) throw new Error(`Vision analyze failed: ${res.status}`);
+      const data = await res.json();
+      // Add vision response to transcript
+      setTranscriptEvents((prev) => [...prev, {
+        type: "message",
+        session_id: activeSession.id,
+        seq: 0,
+        payload: { text: `[Vision: ${data.model}]\n${data.text}` },
+        timestamp: new Date().toISOString(),
+      }]);
+    } catch (err) {
+      console.error('Vision analyze error:', err);
+    }
+  }, [activeSession, visionModel]);
+
   // -------------------------------------------------------------------
   // Dashboard tab renderer
   // -------------------------------------------------------------------
@@ -443,6 +490,9 @@ export default function App() {
                   onInterrupt={handleInterrupt}
                   onAttach={handleAttachFiles}
                   onModelChange={handleModelChange}
+                  onVisionAnalyze={handleVisionAnalyze}
+                  visionModel={visionModel}
+                  visionAvailable={visionAvailable}
                 />
               </>
             )}

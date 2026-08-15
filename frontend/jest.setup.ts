@@ -1,8 +1,8 @@
 import '@testing-library/jest-dom';
 
 // Mock Next.js dynamic import
-jest.mock('next/dynamic', () => (component) => {
-  const mockComponent = jest.fn((props) => component(props));
+jest.mock('next/dynamic', () => (component: any) => {
+  const mockComponent = jest.fn((props: any) => component(props));
   (mockComponent as any).ssr = false;
   return mockComponent;
 });

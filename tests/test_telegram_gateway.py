@@ -10,6 +10,7 @@ Covers:
 """
 
 import asyncio
+import inspect
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -124,9 +125,9 @@ class TestGatewayInitialization:
         """Test minimal gateway construction."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
-        assert gateway.bot_token == "123456:ABC"
+        assert gateway.bot_token == "123456:ABC-DEF"
         assert gateway.admin_chat_id is None
         assert gateway.runtime_sdk is None
         assert gateway.session_manager is None
@@ -146,7 +147,7 @@ class TestGatewayInitialization:
         wm = MockWebSocketManager()
 
         gateway = TelegramGateway(
-            bot_token="123456:ABC",
+            bot_token="123456:ABC-DEF",
             admin_chat_id=999999,
             runtime_sdk=sdk,
             session_manager=sm,
@@ -154,7 +155,7 @@ class TestGatewayInitialization:
             webhook_url="https://example.com/webhook",
         )
 
-        assert gateway.bot_token == "123456:ABC"
+        assert gateway.bot_token == "123456:ABC-DEF"
         assert gateway.admin_chat_id == 999999
         assert gateway.runtime_sdk is sdk
         assert gateway.session_manager is sm
@@ -165,7 +166,7 @@ class TestGatewayInitialization:
         """Test that Bot and Dispatcher are created."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         assert gateway.bot is not None
         assert gateway.storage is not None
@@ -175,7 +176,7 @@ class TestGatewayInitialization:
         """Test that webhook URL is stored."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC", webhook_url="https://hook.example.com/bot")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF", webhook_url="https://hook.example.com/bot")
 
         assert gateway.webhook_url == "https://hook.example.com/bot"
 
@@ -187,7 +188,7 @@ class TestUserSessionManagement:
         """Test adding a user session."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         user_id = 555555
         gateway._user_sessions[user_id] = "test-session-1"
@@ -199,7 +200,7 @@ class TestUserSessionManagement:
         """Test removing a user session."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         user_id = 555555
         gateway._user_sessions[user_id] = "test-session-1"
@@ -211,7 +212,7 @@ class TestUserSessionManagement:
         """Test setting user model override."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         user_id = 555555
         gateway._user_models[user_id] = "qwen3.6-35b-a3b-ud-q4_k_xl"
@@ -223,7 +224,7 @@ class TestUserSessionManagement:
         """Test managing multiple users."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         gateway._user_sessions[111] = "session-1"
         gateway._user_sessions[222] = "session-2"
@@ -239,7 +240,7 @@ class TestUserSessionManagement:
         """Test permission request tracking."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         user_id = 555555
         gateway._pending_permissions[user_id] = {
@@ -255,7 +256,7 @@ class TestUserSessionManagement:
         """Test clearing pending permission."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         user_id = 555555
         gateway._pending_permissions[user_id] = {
@@ -275,14 +276,14 @@ class TestFactoryFunction:
 
     def test_create_with_env_vars(self, monkeypatch):
         """Test factory reads from environment variables."""
-        monkeypatch.setenv("TEKTOS_TELEGRAM_BOT_TOKEN", "123456:ABC")
+        monkeypatch.setenv("TEKTOS_TELEGRAM_BOT_TOKEN", "123456:ABC-DEF")
         monkeypatch.setenv("TEKTOS_TELEGRAM_ADMIN_CHAT_ID", "999999")
 
         from tektos.telegram_gateway import create_telegram_gateway
 
         gateway = create_telegram_gateway()
 
-        assert gateway.bot_token == "123456:ABC"
+        assert gateway.bot_token == "123456:ABC-DEF"
         assert gateway.admin_chat_id == 999999
 
     def test_create_explicit_params_override_env(self, monkeypatch):
@@ -312,7 +313,7 @@ class TestFactoryFunction:
 
     def test_create_with_runtime_dependencies(self, monkeypatch):
         """Test factory passes dependencies through."""
-        monkeypatch.setenv("TEKTOS_TELEGRAM_BOT_TOKEN", "123456:ABC")
+        monkeypatch.setenv("TEKTOS_TELEGRAM_BOT_TOKEN", "123456:ABC-DEF")
 
         from tektos.telegram_gateway import create_telegram_gateway
 
@@ -332,7 +333,7 @@ class TestFactoryFunction:
 
     def test_create_with_webhook(self, monkeypatch):
         """Test factory passes webhook URL."""
-        monkeypatch.setenv("TEKTOS_TELEGRAM_BOT_TOKEN", "123456:ABC")
+        monkeypatch.setenv("TEKTOS_TELEGRAM_BOT_TOKEN", "123456:ABC-DEF")
 
         from tektos.telegram_gateway import create_telegram_gateway
 
@@ -350,7 +351,7 @@ class TestLifecycle:
         """Test initial is_running state."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         assert gateway.is_running() is False
 
@@ -358,7 +359,7 @@ class TestLifecycle:
         """Test is_running returns True when running."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
         gateway._is_running = True
 
         assert gateway.is_running() is True
@@ -367,25 +368,25 @@ class TestLifecycle:
         """Test that start method exists and is async."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         assert hasattr(gateway, "start")
-        assert asyncio.iscoroutinefunction(gateway.start)
+        assert inspect.iscoroutinefunction(gateway.start)
 
     def test_stop_method_exists(self):
         """Test that stop method exists and is async."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
 
         assert hasattr(gateway, "stop")
-        assert asyncio.iscoroutinefunction(gateway.stop)
+        assert inspect.iscoroutinefunction(gateway.stop)
 
     def test_start_sets_running_flag(self):
         """Test that start sets _is_running to True."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
         gateway._is_running = True
 
         assert gateway._is_running is True
@@ -394,7 +395,7 @@ class TestLifecycle:
         """Test that stop sets _is_running to False."""
         from tektos.telegram_gateway import TelegramGateway
 
-        gateway = TelegramGateway(bot_token="123456:ABC")
+        gateway = TelegramGateway(bot_token="123456:ABC-DEF")
         gateway._is_running = False
 
         assert gateway._is_running is False

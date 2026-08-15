@@ -14,6 +14,7 @@ Uses httpx.AsyncClient for OpenAI-compatible llama.cpp API (:8081/v1).
 from __future__ import annotations
 
 import asyncio as _asyncio
+import inspect
 import json as _json
 import logging as _log
 import time as _time
@@ -153,6 +154,22 @@ TOOLS_SCHEMA = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vision_analyze",
+            "description": "Analyze an image using a vision LLM. Pass an image path or base64-encoded image data to get a text description. Useful for reading screenshots, diagrams, or any visual content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {"type": "string", "description": "Path to the image file to analyze"},
+                    "prompt": {"type": "string", "description": "What to look for in the image. Default: 'Describe what you see in this image in detail.'"},
+                    "image_base64": {"type": "string", "description": "Base64-encoded image data (alternative to image_path). Use when you have image data inline."}
+                },
+                "required": []
+            }
+        }
     }
 ]
 
@@ -190,7 +207,7 @@ class HookRegistry:
         """Run all hooks for an event. Errors are caught per-hook (PlexClaw bug #23 fix)."""
         for fn in self._hooks.get(event_type, []):
             try:
-                if _asyncio.iscoroutinefunction(fn):
+                if inspect.iscoroutinefunction(fn):
                     await fn(ctx)
                 else:
                     fn(ctx)
@@ -330,7 +347,7 @@ class RuntimeSDK:
                 log.warning(
                     f"Loop safety triggered in {session.id[:8]}: "
                     f"state={safety_report.state.value} "
-                    f"reason={safety_report.stop_reason.value} "
+                    f"reason={safety_report.stop_reason.value if safety_report.stop_reason else None} "
                     f"turns={safety_report.current_turn}/{safety_report.max_turns} "
                     f"tokens={safety_report.tokens_used}/{safety_report.tokens_total} "
                     f"warnings={safety_report.warnings}"
@@ -339,12 +356,14 @@ class RuntimeSDK:
                     await on_event(loop_safety_warning(
                         session.id,
                         safety_report.state.value,
-                        safety_report.stop_reason.value if safety_report.stop_reason else None,
-                        safety_report.current_turn,
-                        safety_report.max_turns,
-                        safety_report.tokens_used,
-                        safety_report.tokens_total,
-                        safety_report.warnings,
+                        {
+                            "stop_reason": safety_report.stop_reason.value if safety_report.stop_reason else None,
+                            "current_turn": safety_report.current_turn,
+                            "max_turns": safety_report.max_turns,
+                            "tokens_used": safety_report.tokens_used,
+                            "tokens_total": safety_report.tokens_total,
+                            "warnings": safety_report.warnings,
+                        },
                     ))
                 # Break out of the loop — safety mechanism activated
                 break

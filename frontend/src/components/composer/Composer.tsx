@@ -18,6 +18,7 @@ import {
   StopIcon,
   ArrowUpOnSquareIcon,
   SparklesIcon,
+  EyeIcon,
 } from "@heroicons/react/24/outline";
 import { ModelPicker } from "./ModelPicker";
 
@@ -35,6 +36,9 @@ interface ComposerProps {
   onInterrupt: () => void;
   onAttach?: (files: File[]) => void;
   onModelChange?: (modelId: string) => void;
+  onVisionAnalyze?: (imageBase64: string, prompt: string) => void;
+  visionModel?: string;
+  visionAvailable?: boolean;
 }
 
 export function Composer({
@@ -47,14 +51,21 @@ export function Composer({
   onInterrupt,
   onAttach,
   onModelChange,
+  onVisionAnalyze,
+  visionModel,
+  visionAvailable = false,
 }: ComposerProps) {
   const [value, setValue] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [lineCount, setLineCount] = useState(1);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [showMetrics, setShowMetrics] = useState(false);
+  const [visionPrompt, setVisionPrompt] = useState("");
+  const [isVisionMode, setIsVisionMode] = useState(false);
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const visionInputRef = useRef<HTMLInputElement>(null);
   
   // Prompt history for up/down arrow navigation
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
@@ -176,6 +187,45 @@ export function Composer({
     e.target.value = "";
   };
 
+  // Vision mode: select image and send to vision LLM
+  const handleVisionImageClick = () => {
+    visionInputRef.current?.click();
+  };
+
+  const handleVisionImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const file = files[0];
+    if (!file.type.startsWith("image/")) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result as string;
+      setAttachedImage(base64);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const handleVisionAnalyze = () => {
+    if (!attachedImage || !visionPrompt || !onVisionAnalyze) return;
+
+    onVisionAnalyze(attachedImage, visionPrompt);
+    setVisionPrompt("");
+    setAttachedImage(null);
+  };
+
+  const toggleVisionMode = () => {
+    setIsVisionMode(!isVisionMode);
+    setAttachedImage(null);
+    setVisionPrompt("");
+  };
+
+  const clearAttachedImage = () => {
+    setAttachedImage(null);
+  };
+
   // Metrics
   const charCount = value.length;
   const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
@@ -259,9 +309,92 @@ export function Composer({
                        ${!value && !isFocused ? "pt-6" : ""}`}
           />
 
+          {/* Vision mode input */}
+          {isVisionMode && (
+            <div className="px-4 py-3 border-b border-text-muted/10">
+              {/* Image preview */}
+              {attachedImage && (
+                <div className="relative inline-block mb-2">
+                  <img
+                    src={attachedImage}
+                    alt="Attached image"
+                    className="max-h-32 rounded-lg border border-text-muted/20"
+                  />
+                  <button
+                    onClick={clearAttachedImage}
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-status-error text-white
+                               flex items-center justify-center text-xs hover:bg-status-error/80
+                               transition-colors"
+                    title="Remove image"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+
+              {/* Vision prompt input */}
+              <input
+                ref={visionInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleVisionImageChange}
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleVisionImageClick}
+                  className="px-3 py-1.5 rounded-md bg-surface border border-border
+                             text-xs text-text-primary hover:bg-surface-hover/50
+                             transition-colors flex items-center gap-1"
+                >
+                  <EyeIcon className="w-3.5 h-3.5" />
+                  {attachedImage ? "Change image" : "Select image"}
+                </button>
+                <input
+                  value={visionPrompt}
+                  onChange={(e) => setVisionPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && attachedImage) {
+                      handleVisionAnalyze();
+                    }
+                  }}
+                  placeholder="What do you want to know about this image?"
+                  className="flex-1 bg-transparent border-none text-sm
+                             focus:ring-0 placeholder-text-muted
+                             px-2 py-1.5"
+                />
+                <button
+                  onClick={handleVisionAnalyze}
+                  disabled={!attachedImage || !visionPrompt.trim()}
+                  className="px-3 py-1.5 rounded-md bg-accent text-white
+                             hover:bg-accent-hover disabled:opacity-30 disabled:cursor-not-allowed
+                             transition-colors text-sm"
+                >
+                  Analyze
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Bottom bar */}
           <div className="flex items-center justify-between px-3 py-2 border-t border-text-muted/10">
             <div className="flex items-center gap-2">
+              {/* Vision mode toggle */}
+              {visionAvailable && onVisionAnalyze && (
+                <button
+                  onClick={toggleVisionMode}
+                  className={`w-7 h-7 rounded-md flex items-center justify-center
+                             transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                               isVisionMode
+                                 ? "bg-accent text-white"
+                                 : "text-text-muted hover:text-text-primary hover:bg-surface-hover/50"
+                             }`}
+                  title={isVisionMode ? "Exit vision mode" : "Vision mode (analyze images)"}
+                >
+                  <EyeIcon className="w-4 h-4" />
+                </button>
+              )}
+
               {/* File attachment */}
               {onAttach && (
                 <button
