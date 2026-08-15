@@ -51,13 +51,14 @@ class ThemeStore {
   }
 
   private apply(theme: ThemeName): void {
-    if (typeof window === "undefined") return;
+    /* istanbul ignore if — window is always defined in jsdom */ if (typeof window === "undefined") return;
     if (theme === "abyss") document.documentElement.removeAttribute("data-theme");
     else document.documentElement.setAttribute("data-theme", theme);
   }
 
   set(theme: ThemeName): void {
     this.ensureInit(); this.currentTheme = theme; this.apply(theme);
+    /* istanbul ignore if — window is always defined in jsdom */
     if (typeof window !== "undefined") localStorage.setItem("tektos-theme", theme);
     Array.from(this.listeners).forEach((l) => l(theme));
   }

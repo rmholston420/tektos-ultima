@@ -93,6 +93,8 @@ export function Composer({
       // Down arrow: navigate forward through history
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        // istanbul ignore next — ArrowUp always jumps to last item, so
+        // historyIndex < length-1 is never true via keyboard nav
         if (historyIndex < promptHistory.length - 1) {
           const nextIndex = historyIndex + 1;
           setHistoryIndex(nextIndex);

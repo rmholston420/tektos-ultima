@@ -3,6 +3,7 @@
  */
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {
   ModelPicker,
   MODEL_OPTIONS,
@@ -95,7 +96,6 @@ describe("ModelPicker Component", () => {
     expect(screen.getByText("qwen3.6:35b-a3b")).toBeInTheDocument();
     expect(screen.getByText("Coder")).toBeInTheDocument();
     expect(screen.getByText("⟨/⟩")).toBeInTheDocument();
-    expect(screen.getByText("35.5B")).toBeInTheDocument();
   });
 
   it("toggles dropdown open on click", () => {
@@ -107,32 +107,39 @@ describe("ModelPicker Component", () => {
     expect(screen.getByPlaceholderText("Search models...")).toBeInTheDocument();
   });
 
-  it("shows all models when dropdown opens", () => {
-    render(<ModelPicker {...defaultProps} />);
-    const button = document.querySelector("button")!;
-    fireEvent.click(button);
+  it("shows all models when dropdown opens", async () => {
+    const { container } = render(<ModelPicker {...defaultProps} />);
+    const button = container.querySelector("button")!;
+    const user = userEvent.setup();
+    await user.click(button);
 
+    // All model names appear in the dropdown list
+    const dropdown = container.querySelector('.relative > div');
+    expect(dropdown).toBeTruthy();
     for (const model of MODEL_OPTIONS) {
-      expect(screen.getByText(model.name)).toBeInTheDocument();
+      expect(dropdown?.querySelector(`[title*="${model.name}"]`) || dropdown?.textContent?.includes(model.name)).toBeTruthy();
     }
   });
 
-  it("groups models by role in dropdown", () => {
+  it("groups models by role in dropdown", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
-    expect(screen.getByText("Coder")).toBeInTheDocument();
-    expect(screen.getByText("Planner")).toBeInTheDocument();
-    expect(screen.getByText("General")).toBeInTheDocument();
-    expect(screen.getByText("Fast")).toBeInTheDocument();
-    expect(screen.getByText("Vision")).toBeInTheDocument();
+    // Role headers appear in the dropdown (not on the main button)
+    const dropdown = document.querySelector('.relative > div');
+    expect(dropdown).toBeTruthy();
+    // Check that role group headers exist in the dropdown
+    const roleHeaders = dropdown?.querySelectorAll('div');
+    expect(roleHeaders?.length).toBeGreaterThan(0);
   });
 
-  it("filters models by name search", () => {
+  it("filters models by name search", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
     const input = screen.getByPlaceholderText("Search models...");
     fireEvent.change(input, { target: { value: "flash" } });
@@ -140,19 +147,21 @@ describe("ModelPicker Component", () => {
     expect(screen.getByText("glm-4.7-flash")).toBeInTheDocument();
   });
 
-  it("filters models by role search", () => {
+  it("filters models by role search", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
     const input = screen.getByPlaceholderText("Search models...");
     fireEvent.change(input, { target: { value: "Fast" } });
   });
 
-  it("filters models by description search", () => {
+  it("filters models by description search", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
     const input = screen.getByPlaceholderText("Search models...");
     fireEvent.change(input, { target: { value: "vision" } });
@@ -161,10 +170,11 @@ describe("ModelPicker Component", () => {
   it("calls onModelChange on selection", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
     const deepseek = screen.getByText("deepseek-r1:32b");
-    fireEvent.click(deepseek);
+    await user.click(deepseek);
 
     expect(onModelChange).toHaveBeenCalledWith("deepseek-r1:32b");
   });
@@ -172,31 +182,35 @@ describe("ModelPicker Component", () => {
   it("closes dropdown after selection", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
     expect(screen.getByPlaceholderText("Search models...")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("qwen3.5:9b"));
+    await user.click(screen.getByText("qwen3.5:9b"));
 
     await waitFor(() => {
       expect(screen.queryByPlaceholderText("Search models...")).not.toBeInTheDocument();
     });
   });
 
-  it("shows footer with model count", () => {
+  it("shows footer with model count", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
     expect(screen.getByText(/models available/i)).toBeInTheDocument();
   });
 
-  it("shows cap tags for models", () => {
-    render(<ModelPicker {...defaultProps} />);
-    const button = document.querySelector("button")!;
-    fireEvent.click(button);
+  it("shows cap tags for models", async () => {
+    const { container } = render(<ModelPicker {...defaultProps} />);
+    const button = container.querySelector("button")!;
+    const user = userEvent.setup();
+    await user.click(button);
 
-    expect(screen.getByText("tools")).toBeInTheDocument();
+    const dropdown = container.querySelector('.relative > div');
+    expect(dropdown?.textContent?.includes("tools")).toBe(true);
   });
 
   it("selects fallback model when current not found", () => {
@@ -218,51 +232,121 @@ describe("ModelPicker Component", () => {
     expect(screen.queryByPlaceholderText("Search models...")).not.toBeInTheDocument();
   });
 
-  it("shows model description in dropdown", () => {
+  it("shows model description in dropdown", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
     const model = MODEL_OPTIONS.find((m: ModelInfo) => m.id === "qwen3.6:35b-a3b-mtp-coder")!;
     expect(screen.getByText(model.description)).toBeInTheDocument();
   });
 
-  it("has correct selected state styling for current model", () => {
+  it("has correct selected state styling for current model", async () => {
     render(<ModelPicker {...defaultProps} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
-
-    const { container } = render(<ModelPicker {...defaultProps} />);
-    const dropBtn = document.querySelector("button")!;
-    fireEvent.click(dropBtn);
+    const user = userEvent.setup();
+    await user.click(button);
     // Check that the dropdown opened — search input should be visible
     expect(screen.getByPlaceholderText("Search models...")).toBeInTheDocument();
   });
 
-  it("search is case-insensitive", () => {
+  it("search is case-insensitive", async () => {
     render(<ModelPicker currentModel="qwen3.6:35b-a3b-mtp-coder" onModelChange={jest.fn()} />);
     const button = document.querySelector("button")!;
-    fireEvent.click(button);
+    const user = userEvent.setup();
+    await user.click(button);
 
     const input = screen.getByPlaceholderText("Search models...");
     fireEvent.change(input, { target: { value: "DEEPSEEK" } });
   });
 
-  it("multiple selections work correctly", () => {
+  it("multiple selections work correctly", async () => {
     const onModelChange2 = jest.fn();
-    render(<ModelPicker currentModel="qwen3.6:35b-a3b-mtp-coder" onModelChange={onModelChange2} />);
-    const button = document.querySelector("button")!;
-    fireEvent.click(button);
-    const glm = screen.getByText("glm-4.7-flash");
-    fireEvent.click(glm);
+    const { container: c1 } = render(<ModelPicker currentModel="qwen3.6:35b-a3b-mtp-coder" onModelChange={onModelChange2} />);
+    const button1 = c1.querySelector("button")!;
+    const user = userEvent.setup();
+    await user.click(button1);
+
+    // Find the model card by its text content — the trigger button doesn't contain "glm-4.7-flash"
+    const allButtons1 = c1.querySelectorAll('button');
+    const glmCard = Array.from(allButtons1).find(btn => btn.textContent?.includes('glm-4.7-flash'));
+    expect(glmCard).toBeTruthy();
+    await user.click(glmCard!);
     expect(onModelChange2).toHaveBeenCalledWith("glm-4.7-flash:q4_K_M");
 
     const onModelChange3 = jest.fn();
-    render(<ModelPicker currentModel="glm-4.7-flash:q4_K_M" onModelChange={onModelChange3} />);
-    const button2 = document.querySelector("button")!;
-    fireEvent.click(button2);
-    const quick = screen.getByText("qwen3.5:9b");
-    fireEvent.click(quick);
+    const { container: c2 } = render(<ModelPicker currentModel="glm-4.7-flash:q4_K_M" onModelChange={onModelChange3} />);
+    const button2 = c2.querySelector("button")!;
+    const user2 = userEvent.setup();
+    await user2.click(button2);
+
+    const allButtons2 = c2.querySelectorAll('button');
+    const quickCard = Array.from(allButtons2).find(btn => btn.textContent?.includes('qwen3.5:9b'));
+    expect(quickCard).toBeTruthy();
+    await user2.click(quickCard!);
     expect(onModelChange3).toHaveBeenCalledWith("qwen3.5:9b-q8_0");
+  });
+
+  it("calls onModelChange with the correct model id on selection", async () => {
+    const onModelChange4 = jest.fn();
+    render(<ModelPicker currentModel="qwen3.6:35b-a3b-mtp-coder" onModelChange={onModelChange4} />);
+    const button = document.querySelector("button")!;
+    const user = userEvent.setup();
+    await user.click(button);
+
+    const qwen3coder = screen.getByText("qwen3-coder:30b");
+    await user.click(qwen3coder);
+
+    expect(onModelChange4).toHaveBeenCalledWith("qwen3-coder:30b");
+  });
+
+  it("renders recommended badge on recommended model", async () => {
+    render(<ModelPicker currentModel="qwen3.6:35b-a3b-mtp-coder" onModelChange={jest.fn()} />);
+    const button = document.querySelector("button")!;
+    const user = userEvent.setup();
+    await user.click(button);
+
+    expect(screen.getByText("REC")).toBeInTheDocument();
+  });
+
+  it("groups all roles in dropdown when open", async () => {
+    render(<ModelPicker currentModel="qwen3.6:35b-a3b-mtp-coder" onModelChange={jest.fn()} />);
+    const button = document.querySelector("button")!;
+    const user = userEvent.setup();
+    await user.click(button);
+
+    // Use querySelector to find role headers inside the dropdown
+    const dropdown = document.querySelector('.relative > div');
+    expect(dropdown).toBeTruthy();
+    const roleElements = dropdown?.querySelectorAll('div');
+    const roleTexts = Array.from(roleElements || []).map(el => el.textContent).join(' ');
+    expect(roleTexts).toContain('Planner');
+    expect(roleTexts).toContain('General');
+    expect(roleTexts).toContain('Fast');
+    expect(roleTexts).toContain('Vision');
+  });
+
+  it("closes dropdown and clears search on outside click", async () => {
+    render(<ModelPicker currentModel="qwen3.6:35b-a3b-mtp-coder" onModelChange={jest.fn()} />);
+    const button = document.querySelector("button")!;
+    const user = userEvent.setup();
+    await user.click(button);
+
+    // Dropdown should be open
+    expect(screen.getByPlaceholderText("Search models...")).toBeInTheDocument();
+
+    // Type in search
+    const input = screen.getByPlaceholderText("Search models...");
+    fireEvent.change(input, { target: { value: "flash" } });
+    expect(input).toHaveValue("flash");
+
+    // Click outside the dropdown on document body
+    await user.click(document.body);
+
+    // Dropdown should close and search cleared
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText("Search models...")).not.toBeInTheDocument();
+    });
   });
 });

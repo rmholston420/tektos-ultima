@@ -86,19 +86,25 @@ export default function App() {
   useEffect(() => {
     protocolClient.onStateChange((state) => setConnectionState(state.state));
     
-    // Check REST API health on mount — WS can't connect until a session exists,
-    // but the REST API being up means the backend is alive and ready.
-    // Use absolute URL since Next.js doesn't proxy /health to the backend.
+    // Health check on mount
     let cancelled = false;
-    fetch('http://localhost:8020/health', { cache: 'no-store' })
-      .then((r) => {
-        if (cancelled) return;
-        if (r.ok) setConnectionState('connected');
-        else setConnectionState('disconnected');
-      })
-      .catch(() => setConnectionState('disconnected'));
+    const checkHealth = () => {
+      if (cancelled) return;
+      fetch('http://localhost:8020/health', { cache: 'no-store' })
+        .then((r) => {
+          if (cancelled) return;
+          if (r.ok) setConnectionState('connected');
+          else setConnectionState('disconnected');
+        })
+        .catch(() => { if (!cancelled) setConnectionState('disconnected'); });
+    };
     
-    return () => { cancelled = true; protocolClient.disconnect(); };
+    checkHealth();
+    
+    // Periodic health check every 30s to keep UI accurate
+    const interval = setInterval(checkHealth, 30000);
+    
+    return () => { cancelled = true; protocolClient.disconnect(); clearInterval(interval); };
   }, [protocolClient]);
 
   // -------------------------------------------------------------------
@@ -183,6 +189,13 @@ export default function App() {
         setTranscriptEvents([]);
         protocolClient.setSessionId("");
         setShowWelcome(true);
+      }
+    });
+
+    sessionStore.on("model_changed", (event: SessionEvent) => {
+      if (event.type === "model_changed" && activeSession?.id === event.session_id) {
+        setActiveModel(event.model);
+        setActiveSession(prev => prev ? { ...prev, model: event.model } : prev);
       }
     });
   }, [sessionStore, protocolClient, activeSession]);

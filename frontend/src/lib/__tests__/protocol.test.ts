@@ -227,7 +227,6 @@ describe('WebSocket Protocol', () => {
     test('does not send when no WebSocket', () => {
       const client = new ProtocolClient();
       client.sendPrompt('Hello');
-      // Should not throw
       expect(mockWebSocket).not.toHaveBeenCalled();
     });
   });
@@ -257,8 +256,6 @@ describe('WebSocket Protocol', () => {
   describe('sendResume', () => {
     test('sendResume is stubbed — backend does not handle resume type', () => {
       const client = new ProtocolClient();
-      // sendResume was stubbed out because backend has no 'resume' message handler
-      // The method exists but does nothing
       expect(() => client.sendResume(42)).not.toThrow();
     });
   });
@@ -294,8 +291,6 @@ describe('WebSocket Protocol', () => {
         protocol_version: '1',
       };
 
-      // Trigger via dispatch (internal method)
-      // We test via on/off since dispatch is private
       expect(client).toBeDefined();
     });
   });
@@ -394,5 +389,306 @@ describe('WebSocket Protocol', () => {
 
       expect(envelope.timestamp).toBe('2026-01-01');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleCloseEvent
+// ---------------------------------------------------------------------------
+
+describe("ProtocolClient — handleCloseEvent", () => {
+  let mockWS: any;
+  let mockInstance: any;
+
+  beforeEach(() => {
+    mockInstance = {
+      readyState: 1, send: jest.fn(), close: jest.fn(),
+      onopen: null, onmessage: null, onclose: null, onerror: null, url: '',
+    };
+    mockWS = jest.fn().mockImplementation((url: string) => {
+      mockInstance.url = url;
+      return mockInstance;
+    });
+    mockWS.CONNECTING = 0; mockWS.OPEN = 1;
+    mockWS.CLOSING = 2; mockWS.CLOSED = 3;
+    global.WebSocket = mockWS as any;
+  });
+
+  it("does not schedule reconnect when code is 1000", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    const spy = jest.spyOn(client as any, "scheduleReconnect");
+    client.handleCloseEvent(new CloseEvent("close", { code: 1000, reason: "Normal" }));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("schedules reconnect when code is not 1000", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    const spy = jest.spyOn(client as any, "scheduleReconnect");
+    client.handleCloseEvent(new CloseEvent("close", { code: 4000, reason: "Error" }));
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("does not schedule reconnect if reconnectAttempts >= 10", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    (client as any).reconnectAttempts = 10;
+    const spy = jest.spyOn(client as any, "scheduleReconnect");
+    client.handleCloseEvent(new CloseEvent("close", { code: 4000, reason: "Error" }));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dispatch handler errors → notifyError
+// ---------------------------------------------------------------------------
+
+describe("ProtocolClient — dispatch handler errors", () => {
+  let mockWS: any;
+  let mockInstance: any;
+
+  beforeEach(() => {
+    mockInstance = {
+      readyState: 1, send: jest.fn(), close: jest.fn(),
+      onopen: null, onmessage: null, onclose: null, onerror: null, url: '',
+    };
+    mockWS = jest.fn().mockImplementation((url: string) => {
+      mockInstance.url = url;
+      return mockInstance;
+    });
+    mockWS.CONNECTING = 0; mockWS.OPEN = 1;
+    mockWS.CLOSING = 2; mockWS.CLOSED = 3;
+    global.WebSocket = mockWS as any;
+  });
+
+  it("specific handler error triggers notifyError", () => {
+    const client = new ProtocolClient();
+    const errorHandler = jest.fn();
+    client.onError(errorHandler);
+    const badHandler = jest.fn(() => { throw new Error("boom"); });
+    client.on(EventType.SESSION_CREATED, badHandler);
+    client.setSessionId("s1");
+    client.connect();
+    mockInstance.onopen?.();
+    mockInstance.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ session_id: "s1", event_type: EventType.SESSION_CREATED, payload: {}, seq: 0, protocol_version: "1.0" }),
+    }));
+    expect(errorHandler).toHaveBeenCalled();
+  });
+
+  it("wildcard handler error triggers notifyError", () => {
+    const client = new ProtocolClient();
+    const errorHandler = jest.fn();
+    client.onError(errorHandler);
+    const badHandler = jest.fn(() => { throw new Error("boom"); });
+    client.on("*", badHandler);
+    client.setSessionId("s1");
+    client.connect();
+    mockInstance.onopen?.();
+    mockInstance.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ session_id: "s1", event_type: EventType.SESSION_READY, payload: {}, seq: 0, protocol_version: "1.0" }),
+    }));
+    expect(errorHandler).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// notifyError with handler that throws
+// ---------------------------------------------------------------------------
+
+describe("ProtocolClient — notifyError with throwing handler", () => {
+  it("catches handler exceptions without crashing", () => {
+    const client = new ProtocolClient();
+    const badHandler = () => { throw new Error("handler error"); };
+    const goodHandler = jest.fn();
+    client.onError(badHandler);
+    client.onError(goodHandler);
+    expect(() => { (client as any).notifyError(new Error("test error")); }).not.toThrow();
+    expect(goodHandler).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// connect with existing open WS connection
+// ---------------------------------------------------------------------------
+
+describe("ProtocolClient — connect with existing connection", () => {
+  let mockWS: any;
+  let mockInstance1: any;
+  let mockInstance2: any;
+
+  beforeEach(() => {
+    let callCount = 0;
+    mockInstance1 = {
+      readyState: 1, send: jest.fn(), close: jest.fn(),
+      onopen: null, onmessage: null, onclose: null, onerror: null, url: '',
+    };
+    mockInstance2 = { ...mockInstance1 };
+    mockWS = jest.fn().mockImplementation((url: string) => {
+      callCount++;
+      return callCount === 1 ? mockInstance1 : mockInstance2;
+    });
+    mockWS.CONNECTING = 0; mockWS.OPEN = 1;
+    mockWS.CLOSING = 2; mockWS.CLOSED = 3;
+    global.WebSocket = mockWS as any;
+  });
+
+  it("closes existing open WS connection on new connect", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    client.connect();
+    mockInstance1.onopen?.();
+    client.setSessionId("s2");
+    client.connect();
+    expect(mockInstance1.close).toHaveBeenCalled();
+    expect(mockWS).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles WS error via onerror handler", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    client.connect();
+    const handler = jest.fn();
+    client.onStateChange(handler);
+    mockInstance1.onerror?.();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ state: "disconnected" }));
+  });
+
+  it("handles WS parse error via notifyError", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    client.connect();
+    const errorHandler = jest.fn();
+    client.onError(errorHandler);
+    mockInstance1.onopen?.();
+    mockInstance1.onmessage?.(new MessageEvent("message", { data: "not valid json" }));
+    expect(errorHandler).toHaveBeenCalled();
+    expect(errorHandler.mock.calls[0][0].message).toContain("Parse error");
+  });
+
+  it("handles connect error via notifyError", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    const errorHandler = jest.fn();
+    client.onError(errorHandler);
+    (global.WebSocket as any) = jest.fn(() => { throw new Error("WS creation failed"); });
+    client.connect();
+    expect(errorHandler).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// disconnect/send when no WS connection
+// ---------------------------------------------------------------------------
+
+describe("ProtocolClient — safe when no WS connection", () => {
+  it("disconnect is safe when no WS connection", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    expect(() => client.disconnect()).not.toThrow();
+  });
+
+  it("sendPrompt is safe when no WS connection", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    expect(() => client.sendPrompt("test")).not.toThrow();
+  });
+
+  it("sendInterrupt is safe when no WS connection", () => {
+    const client = new ProtocolClient();
+    expect(() => client.sendInterrupt()).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// off handlers when not registered
+// ---------------------------------------------------------------------------
+
+describe("ProtocolClient — off handlers when not registered", () => {
+  it("off is safe when handler not registered", () => {
+    const client = new ProtocolClient();
+    const handler = jest.fn();
+    expect(() => client.off(EventType.SESSION_CREATED, handler)).not.toThrow();
+  });
+
+  it("offError is safe when handler not registered", () => {
+    const client = new ProtocolClient();
+    const handler = jest.fn();
+    expect(() => client.offError(handler)).not.toThrow();
+  });
+
+  it("offStateChange is safe when handler not registered", () => {
+    const client = new ProtocolClient();
+    const handler = jest.fn();
+    expect(() => client.offStateChange(handler)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// heartbeat tests
+// ---------------------------------------------------------------------------
+// heartbeat tests
+// ---------------------------------------------------------------------------
+
+describe("ProtocolClient — heartbeat", () => {
+  let mockWS: any;
+  let mockInstance: any;
+
+  beforeEach(() => {
+    mockInstance = {
+      readyState: 1, send: jest.fn(), close: jest.fn(),
+      onopen: null, onmessage: null, onclose: null, onerror: null, url: '',
+    };
+    mockWS = jest.fn().mockImplementation((url: string) => {
+      mockInstance.url = url;
+      return mockInstance;
+    });
+    mockWS.CONNECTING = 0; mockWS.OPEN = 1;
+    mockWS.CLOSING = 2; mockWS.CLOSED = 3;
+    global.WebSocket = mockWS as any;
+  });
+
+  it("startHeartbeat sets up interval", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    client.connect();
+    mockInstance.onopen?.();
+    expect((client as any).heartbeatInterval).not.toBeNull();
+  });
+
+  it("stopHeartbeat clears interval", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    client.connect();
+    mockInstance.onopen?.();
+    (client as any).stopHeartbeat();
+    expect((client as any).heartbeatInterval).toBeNull();
+  });
+
+  it("onclose triggers handleCloseEvent which schedules reconnect", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    client.connect();
+    mockInstance.onopen?.();
+    const spy = jest.spyOn(client as any, "handleCloseEvent");
+    mockInstance.onclose?.(new CloseEvent("close", { code: 4000, reason: "Error" }));
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("onclose calls stopHeartbeat", () => {
+    const client = new ProtocolClient();
+    client.setSessionId("s1");
+    client.connect();
+    mockInstance.onopen?.();
+    (client as any).reconnectAttempts = 10; // prevent scheduleReconnect
+    const spyStop = jest.spyOn(client as any, "stopHeartbeat");
+    mockInstance.onclose?.(new CloseEvent("close", { code: 4000, reason: "Error" }));
+    expect(spyStop).toHaveBeenCalled();
+    spyStop.mockRestore();
   });
 });

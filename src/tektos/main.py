@@ -759,8 +759,10 @@ async def _emit_schema_event(session_id: str, event_type: str, payload: dict[str
         for ws in list(ws_manager._sessions.get(session_id, set())):
             await ws.send_text(_json.dumps({
                 "type": event_type,
+                "session_id": session_id,
                 "payload": payload,
                 "protocol_version": PROTOCOL_VERSION,
+                "timestamp": _datetime.now(_timezone.utc).isoformat(),
             }))
     except Exception as exc:
         log.error(f"Error emitting {event_type}: {exc}")

@@ -77,20 +77,28 @@ test.describe("Message Send Flow", () => {
 
     // Create session
     await page.getByRole("button", { name: /new session/i }).first().click();
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
+
+    // Verify session is active (textarea should be visible and enabled)
+    const textarea = page.locator("textarea").first();
+    await expect(textarea).toBeVisible();
+    await expect(textarea).toBeEnabled();
 
     // Type a message
-    const textarea = page.locator("textarea").first();
     await textarea.click();
     await textarea.fill("Hello, test message");
+
+    // Verify the message is in the textarea
+    let value = await textarea.inputValue();
+    expect(value).toBe("Hello, test message");
 
     // Press Enter to send
     await textarea.press("Enter");
     await page.waitForTimeout(1000);
 
     // Textarea should be cleared (or at least the message should have been submitted)
-    const currentValue = await textarea.inputValue();
-    expect(currentValue).not.toBe("Hello, test message");
+    value = await textarea.inputValue();
+    expect(value).not.toBe("Hello, test message");
   });
 
   test("sending a message while streaming shows interrupt button", async ({

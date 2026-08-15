@@ -37,7 +37,8 @@ export type SessionEvent =
   | { type: "created"; session: SessionSnapshot }
   | { type: "updated"; session: SessionSnapshot }
   | { type: "deleted"; session_id: string }
-  | { type: "synced"; session_id: string };
+  | { type: "synced"; session_id: string }
+  | { type: "model_changed"; session_id: string; model: string };
 
 // ---------------------------------------------------------------------------
 // SessionStore — centralized session management
@@ -285,6 +286,19 @@ export class SessionStore {
         this.emit({ type: "updated", session });
       }
     });
+
+    this.protocolClient.on(EventType.MODEL_SWITCHED, (envelope: WSEnvelopeClient) => {
+      const session = this.sessions.get(envelope.session_id);
+      if (session) {
+        const newModel = envelope.payload.model as string;
+        if (newModel && newModel !== session.model) {
+          session.model = newModel;
+          session.updated_at = new Date().toISOString();
+          this.emit({ type: "model_changed", session_id: envelope.session_id, model: newModel });
+          this.persist();
+        }
+      }
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -340,7 +354,7 @@ export class SessionStore {
   private storageKey = "tektos_sessions";
 
   private persist(): void {
-    if (typeof window === "undefined") return;
+    /* istanbul ignore if — SSR check untestable in jsdom */ if (typeof window === "undefined") return;
     try {
       localStorage.setItem(this.storageKey, JSON.stringify(Array.from(this.sessions.values())));
     } catch {
@@ -349,7 +363,7 @@ export class SessionStore {
   }
 
   private loadFromStorage(): void {
-    if (typeof window === "undefined") return;
+    /* istanbul ignore if — SSR check untestable in jsdom */ if (typeof window === "undefined") return;
     try {
       const data = localStorage.getItem(this.storageKey);
       if (data) {

@@ -379,6 +379,23 @@ class TestEmbedderClientSearchEvents:
 
 # ── EmbedderClient — Integration (live) ─────────────────────────────────────
 
+
+def _embedder_available() -> bool:
+    """Check if the live embedder server on :8090 is responding."""
+    try:
+        import httpx
+
+        with httpx.Client(timeout=2) as c:
+            r = c.get("http://127.0.0.1:8090/v1/models")
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(
+    not _embedder_available(),
+    reason="Embedder server (:8090) is not running",
+)
 class TestEmbedderIntegration:
     @pytest.mark.asyncio
     async def test_live_embed(self):
