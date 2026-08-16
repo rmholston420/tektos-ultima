@@ -34,19 +34,33 @@ export interface SessionEvent {
   timestamp: string;
 }
 
-export interface TelemetryData {
-  gpu_temp: number;
-  gpu_util: number;
-  cpu_temp: number;
-  cpu_util: number;
-  ram_used: number;
-  ram_total: number;
-  ram_util: number;
-  disk_used: number;
-  disk_total: number;
-  fan_speed: number;
+export interface GPUTelemetryData {
+  temperature: number;
+  utilization: number;
+  memory_used: number;
+  memory_total: number;
   power_draw: number;
-  timestamp: string;
+  power_limit: number;
+  fan_speed: number;
+  clocks_graphics: number;
+  clocks_memory: number;
+  memory_utilization: number;
+}
+
+export interface SystemMetricsData {
+  cpu_util: number;
+  mem_used_gb: number;
+  mem_total_gb: number;
+  mem_percent: number;
+  disk_used_gb: number;
+  disk_total_gb: number;
+  disk_percent: number;
+}
+
+export interface TelemetryData {
+  gpu: GPUTelemetryData;
+  system: SystemMetricsData;
+  timestamp: number;
 }
 
 export interface ModelProfile {
@@ -114,6 +128,40 @@ export interface MemorySystemStats {
   working: { size: number; capacity: number };
   longterm: { size: number; capacity: number };
   procedural: { size: number; capacity: number };
+}
+
+export interface ArchiveSession {
+  id: string;
+  title: string;
+  model: string;
+  created_at: string;
+  archived_at: string;
+}
+
+export interface ArchiveMessage {
+  id: string;
+  role: string;
+  content: string;
+  timestamp: string;
+}
+
+export interface SchemaEvolution {
+  current_version: number;
+  migrations: string[];
+  last_applied: string;
+}
+
+export interface VisionStatus {
+  available: boolean;
+  model: string;
+  max_image_size_mb: number;
+}
+
+export interface SessionState {
+  session_id: string;
+  state: Record<string, unknown>;
+  version: number;
+  updated_at: string;
 }
 
 // ─── API Client ──────────────────────────────────────────────────────────────
@@ -187,7 +235,7 @@ class ApiClient {
 
   // Telemetry
   async getHealth(): Promise<{ status: string; uptime: number }> {
-    return this.request("/health");
+    return this.request("/api/health");
   }
 
   // Routing
@@ -281,6 +329,105 @@ class ApiClient {
     const params = new URLSearchParams({ q: query });
     if (scope) params.set("scope", scope);
     return this.request(`/api/search?${params}`);
+  }
+
+  // Archive
+  async getArchiveSessions(): Promise<ArchiveSession[]> {
+    return this.request("/api/archive/sessions");
+  }
+
+  async getArchiveSession(id: string): Promise<ArchiveSession> {
+    return this.request(`/api/archive/sessions/${id}`);
+  }
+
+  async getArchiveMessages(id: string): Promise<ArchiveMessage[]> {
+    return this.request(`/api/archive/sessions/${id}/messages`);
+  }
+
+  async renameArchiveSession(id: string, title: string): Promise<void> {
+    await this.request(`/api/archive/sessions/${id}/rename`, {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    });
+  }
+
+  async tagArchiveSession(id: string, tag: string): Promise<void> {
+    await this.request(`/api/archive/sessions/${id}/tag`, {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    });
+  }
+
+  // Session State
+  async getSessionState(id: string): Promise<SessionState> {
+    return this.request(`/api/state/${id}`);
+  }
+
+  async saveSessionState(id: string, state: Record<string, unknown>): Promise<void> {
+    await this.request(`/api/state/${id}/save`, {
+      method: "POST",
+      body: JSON.stringify({ state }),
+    });
+  }
+
+  async createSessionSnapshot(id: string): Promise<void> {
+    await this.request(`/api/state/${id}/snapshot`, {
+      method: "POST",
+    });
+  }
+
+  // Vision
+  async getVisionStatus(): Promise<VisionStatus> {
+    return this.request("/api/vision/status");
+  }
+
+  async analyzeImage(file: File): Promise<any> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/api/vision/analyze", {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      throw new Error(`Vision analyze error: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async analyzeImageUrl(url: string): Promise<any> {
+    return this.request("/api/vision/analyze-url", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+  }
+
+  // Session interruption & model switching
+  async interruptSession(id: string): Promise<void> {
+    await this.request(`/api/sessions/${id}/interrupt`, {
+      method: "POST",
+    });
+  }
+
+  async changeSessionModel(id: string, model: string): Promise<void> {
+    await this.request(`/api/sessions/${id}/model`, {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    });
+  }
+
+  async getSessionReplay(id: string): Promise<SessionEvent[]> {
+    const data = await this.request<{ events?: SessionEvent[] }>(`/api/sessions/${id}/replay`);
+    return data.events || [];
+  }
+
+  // Schema evolution
+  async getSchema(): Promise<SchemaEvolution> {
+    return this.request("/api/schema");
+  }
+
+  // Models (direct)
+  async getModelsDirect(): Promise<ModelProfile[]> {
+    return this.request("/api/models");
   }
 }
 

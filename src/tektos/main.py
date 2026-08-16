@@ -905,6 +905,444 @@ async def snapshot_session_state(session_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Telemetry API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/telemetry")
+async def get_telemetry():
+    """Real GPU/CPU/memory/disk telemetry from live hardware sensors.
+    
+    Primary path: NVML (pynvml) for GPU metrics.
+    Fallback: nvidia-smi CLI for GPU, /proc for CPU/memory.
+    """
+    import subprocess
+
+    def _get_gpu_via_nvidia_smi() -> dict:
+        """Fallback GPU metrics via nvidia-smi CLI (always available on NVIDIA systems).
+        
+        Queries only valid fields for RTX 5090 / driver 570+:
+        temperature.gpu, utilization.gpu, memory.used, memory.total,
+        power.draw, power.limit, fan.speed
+        Additional fields queried separately for compatibility.
+        """
+        result = subprocess.run(
+            [
+                "nvidia-smi", "--query-gpu="
+                "temperature.gpu,utilization.gpu,memory.used,memory.total,"
+                "power.draw,power.limit,fan.speed",
+                "--format=csv,noheader,nounits"
+            ],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return {
+                "temperature": 0, "utilization": 0,
+                "memory_used": 0, "memory_total": 0,
+                "power_draw": 0, "power_limit": 400,
+                "fan_speed": 0, "clocks_graphics": 0,
+                "clocks_memory": 0, "memory_utilization": 0,
+            }
+        vals = [v.strip() for v in result.stdout.strip().split(",")]
+        base = {
+            "temperature": float(vals[0]) if len(vals) > 0 else 0,
+            "utilization": float(vals[1]) if len(vals) > 1 else 0,
+            "memory_used": float(vals[2]) if len(vals) > 2 else 0,
+            "memory_total": float(vals[3]) if len(vals) > 3 else 0,
+            "power_draw": float(vals[4]) if len(vals) > 4 else 0,
+            "power_limit": float(vals[5]) if len(vals) > 5 else 400,
+            "fan_speed": int(float(vals[6])) if len(vals) > 6 else 0,
+        }
+        # Try additional fields that may not exist on all GPUs/drivers
+        clocks_result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=clocks.current.graphics,clocks.current.memory", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10
+        )
+        if clocks_result.returncode == 0:
+            cv = [v.strip() for v in clocks_result.stdout.strip().split(",")]
+            base["clocks_graphics"] = int(float(cv[0])) if len(cv) > 0 else 0
+            base["clocks_memory"] = int(float(cv[1])) if len(cv) > 1 else 0
+        else:
+            base["clocks_graphics"] = 0
+            base["clocks_memory"] = 0
+        # Memory utilization (separate field in newer nvidia-smi)
+        memutil_result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.memory", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10
+        )
+        if memutil_result.returncode == 0:
+            base["memory_utilization"] = float(memutil_result.stdout.strip())
+        else:
+            base["memory_utilization"] = 0
+        return base
+
+    def _get_system_metrics() -> dict:
+        """CPU/memory/disk without psutil — uses /proc and subprocess."""
+        import os
+        # CPU utilization from /proc/stat
+        try:
+            with open("/proc/stat", "r") as f:
+                line = f.readline()
+                parts = line.split()
+                # user, nice, system, idle, iowait, irq, softirq, steal
+                idle = float(parts[4]) if len(parts) > 4 else 0
+                total = sum(float(x) for x in parts[1:])
+            cpu_util = ((total - idle) / total) * 100 if total > 0 else 0
+        except Exception:
+            cpu_util = 0
+
+        # Memory from /proc/meminfo
+        try:
+            meminfo = {}
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    key, val = line.split(":")[0], line.split(":")[1].strip().split()[0]
+                    meminfo[key] = int(val) * 1024  # kB → bytes
+            mem_used = meminfo.get("MemTotal", 0) - meminfo.get("MemFree", 0) - meminfo.get("Buffers", 0) - meminfo.get("Cached", 0)
+            mem_total = meminfo.get("MemTotal", 1)
+            mem_percent = (mem_used / mem_total) * 100 if mem_total > 0 else 0
+        except Exception:
+            mem_used, mem_total, mem_percent = 0, 1, 0
+
+        # Disk from /proc/diskstats or shutil
+        try:
+            import shutil
+            disk = shutil.disk_usage("/")
+            disk_used = disk.used
+            disk_total = disk.total
+        except Exception:
+            disk_used, disk_total = 0, 1
+
+        return {
+            "cpu_util": round(cpu_util, 1),
+            "mem_used_gb": round(mem_used / (1024**3), 1),
+            "mem_total_gb": round(mem_total / (1024**3), 1),
+            "mem_percent": round(mem_percent, 1),
+            "disk_used_gb": round(disk_used / (1024**3), 1),
+            "disk_total_gb": round(disk_total / (1024**3), 1),
+            "disk_percent": round((disk_used / disk_total) * 100, 1) if disk_total > 0 else 0,
+        }
+
+    # Primary: try NVML
+    try:
+        from tektos.agents.manager.telemetry import TelemetryCollector
+        gpu_tel = TelemetryCollector.collect()
+        data = TelemetryCollector.to_dict(gpu_tel)
+        # Normalize to frontend-friendly keys
+        data["timestamp"] = gpu_tel.timestamp
+        return data
+    except Exception as exc:
+        log.warning("NVML telemetry collection failed: %s", exc)
+
+    # Fallback: nvidia-smi + /proc
+    gpu = _get_gpu_via_nvidia_smi()
+    system = _get_system_metrics()
+
+    return {
+        "gpu": gpu,
+        "system": system,
+        "timestamp": _time.time(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Hooks API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/hooks")
+async def list_hooks():
+    """List all registered hooks with their metadata."""
+    try:
+        from tektos.runtime.hooks import HookRegistry
+        registry = HookRegistry()
+        hooks = registry.list_hooks()
+        return [
+            {
+                "name": h.get("name", "unknown"),
+                "priority": h.get("priority", 0),
+                "handler": h.get("handler", ""),
+                "registered_at": h.get("registered_at", ""),
+            }
+            for h in hooks
+        ]
+    except Exception as exc:
+        log.warning("Hook listing failed: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Config API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/config")
+async def get_config():
+    """Return runtime configuration as a list of key-value pairs."""
+    import os
+    return {
+        "config": [
+            {"key": "llm_base_url", "value": runtime_sdk._llm_base_url, "type": "string", "description": "LLM server URL", "sensitive": False},
+            {"key": "llm_model", "value": runtime_sdk._llm_model, "type": "string", "description": "Active LLM model", "sensitive": False},
+            {"key": "protocol_version", "value": PROTOCOL_VERSION, "type": "string", "description": "Protocol version", "sensitive": False},
+            {"key": "active_sessions", "value": str(len(session_manager._sessions)), "type": "number", "description": "Active session count", "sensitive": False},
+            {"key": "gpu_power_limit", "value": os.getenv("GPU_POWER_LIMIT", "400"), "type": "number", "description": "GPU power limit in watts", "sensitive": False},
+            {"key": "log_level", "value": os.getenv("TEKTOS_LOG_LEVEL", "INFO"), "type": "string", "description": "Logging verbosity", "sensitive": False},
+            {"key": "vision_url", "value": os.getenv("TEKTOS_VISION_LLM_URL", "not set"), "type": "string", "description": "Vision LLM URL", "sensitive": False},
+            {"key": "telegram_bot_token", "value": "••••••••" if os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN") else "not set", "type": "string", "description": "Telegram bot token", "sensitive": True},
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# Schedule/Scheduler API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/schedule")
+async def list_scheduled_tasks():
+    """List scheduled tasks from the backup scheduler."""
+    try:
+        from tektos.memory.backup_scheduler import BackupScheduler
+        scheduler = BackupScheduler()
+        backups = scheduler.list_backups()
+        return [
+            {
+                "id": str(i),
+                "name": b.get("name", "backup"),
+                "type": b.get("type", "unknown"),
+                "status": "completed",
+                "last_run": b.get("timestamp", ""),
+                "next_run": "",
+                "interval": "daily",
+                "enabled": True,
+            }
+            for i, b in enumerate(backups)
+        ]
+    except Exception as exc:
+        log.warning("Schedule listing failed: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Routing API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/routing/decide")
+async def route_task(task: str = "", category: str = "general"):
+    """Route a task to the best model based on category and complexity."""
+    try:
+        from tektos.routing import ModelRouter
+        router = ModelRouter()
+        decision = router.route(task=task, category=category)
+        return {
+            "task": task,
+            "category": category,
+            "recommended_model": decision.get("model", runtime_sdk._llm_model),
+            "confidence": decision.get("confidence", 0.8),
+            "fallback_models": decision.get("fallbacks", []),
+            "estimated_cost": decision.get("cost_estimate", 0.0),
+        }
+    except Exception as exc:
+        log.warning("Routing decision failed: %s", exc)
+        return {
+            "task": task,
+            "category": category,
+            "recommended_model": runtime_sdk._llm_model,
+            "confidence": 0.5,
+            "fallback_models": [],
+            "estimated_cost": 0.0,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Keys API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/keys")
+async def list_api_keys():
+    """List configured API keys (values masked)."""
+    import os
+    keys = []
+    sensitive_vars = [
+        "TEKTOS_LLM_API_KEY",
+        "TEKTOS_TELEGRAM_BOT_TOKEN",
+        "TEKTOS_VISION_LLM_API_KEY",
+        "TEKTOS_HUGGINGFACE_TOKEN",
+        "DATABASE_URL",
+    ]
+    for var in sensitive_vars:
+        value = os.getenv(var)
+        keys.append({
+            "name": var.replace("TEKTOS_", "").replace("_", " ").title(),
+            "key": var,
+            "value": "••••••••" if value else "not configured",
+            "configured": bool(value),
+        })
+    return {"keys": keys}
+
+
+# ---------------------------------------------------------------------------
+# Telemetry API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/telemetry")
+async def get_telemetry():
+    """Real GPU/CPU/memory telemetry."""
+    import psutil
+    import os
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        gpu = {
+            "temperature": pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU),
+            "utilization": pynvml.nvmlDeviceGetUtilizationRates(handle).gpu,
+            "memory_used": pynvml.nvmlDeviceGetMemoryInfo(handle).used,
+            "memory_total": pynvml.nvmlDeviceGetMemoryInfo(handle).total,
+            "power_draw": pynvml.nvmlDeviceGetPowerUsage(handle),
+            "power_limit": pynvml.nvmlDeviceGetPowerManagementLimit(handle) // 1000,
+        }
+        pynvml.nvmlShutdown()
+    except Exception:
+        gpu = {"temperature": 0, "utilization": 0, "memory_used": 0, "memory_total": 0, "power_draw": 0, "power_limit": 400}
+    
+    return {
+        "gpu": gpu,
+        "cpu": {
+            "utilization": psutil.cpu_percent(interval=0.1),
+            "cores": psutil.cpu_count(logical=True),
+            "load_avg": list(psutil.getloadavg()),
+        },
+        "memory": {
+            "used": psutil.virtual_memory().used,
+            "total": psutil.virtual_memory().total,
+            "percent": psutil.virtual_memory().percent,
+        },
+        "timestamp": _time.time(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Hooks API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/hooks")
+async def list_hooks():
+    """List all registered hooks."""
+    from tektos.runtime.hooks import BuiltinHooks, HookRegistry
+    hooks = []
+    for name, hook_fn in BuiltinHooks._hooks.items():
+        hooks.append({
+            "name": name,
+            "handler": hook_fn.__name__ if hasattr(hook_fn, "__name__") else str(hook_fn),
+            "category": "builtin",
+        })
+    return hooks
+
+
+# ---------------------------------------------------------------------------
+# Config API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/config")
+async def get_config():
+    """Return runtime configuration."""
+    import os
+    config = [
+        {"key": "llm_base_url", "value": runtime_sdk._llm_base_url, "type": "string", "description": "LLM server base URL", "sensitive": False},
+        {"key": "llm_model", "value": runtime_sdk._llm_model, "type": "string", "description": "Active LLM model", "sensitive": False},
+        {"key": "protocol_version", "value": PROTOCOL_VERSION, "type": "string", "description": "Protocol version", "sensitive": False},
+        {"key": "gpu_power_limit", "value": os.getenv("GPU_POWER_LIMIT", "400"), "type": "string", "description": "GPU power limit (watts)", "sensitive": False},
+        {"key": "log_level", "value": os.getenv("TEKTOS_LOG_LEVEL", "INFO"), "type": "string", "description": "Logging level", "sensitive": False},
+        {"key": "vision_llm_url", "value": os.getenv("TEKTOS_VISION_LLM_URL", ""), "type": "string", "description": "Vision LLM URL", "sensitive": False},
+        {"key": "vision_model", "value": os.getenv("TEKTOS_VISION_MODEL", ""), "type": "string", "description": "Vision model", "sensitive": False},
+        {"key": "telegram_bot_token", "value": "••••••••" if os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN") else "(not set)", "type": "string", "description": "Telegram bot token", "sensitive": True},
+    ]
+    return {"config": config}
+
+
+# ---------------------------------------------------------------------------
+# Schedule API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/schedule")
+async def list_schedule():
+    """List scheduled tasks from backup scheduler."""
+    from tektos.memory.backup_scheduler import BackupScheduler
+    scheduler = BackupScheduler()
+    backups = scheduler.list_backups()
+    tasks = []
+    for i, b in enumerate(backups):
+        tasks.append({
+            "id": str(i),
+            "name": b.get("name", "backup"),
+            "type": b.get("type", "unknown"),
+            "status": "completed",
+            "last_run": b.get("timestamp", ""),
+            "next_run": "",
+            "interval": "daily",
+            "enabled": True,
+        })
+    return tasks
+
+
+# ---------------------------------------------------------------------------
+# Skills/Plugins API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/skills")
+async def list_skills():
+    """List all registered plugins as skills."""
+    from tektos.plugin import PluginRegistry
+    registry = PluginRegistry()
+    plugins = registry.list_plugins()
+    skills = []
+    for p in plugins:
+        skills.append({
+            "name": p.name,
+            "version": p.version,
+            "category": p.config.get("category", "general"),
+            "description": p.config.get("description", ""),
+            "enabled": True,
+        })
+    return skills
+
+
+# ---------------------------------------------------------------------------
+# Keys API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/keys")
+async def list_keys():
+    """List configured API keys (masked values)."""
+    import os
+    keys = []
+    for var in ["TEKTOS_LLM_API_KEY", "TEKTOS_VISION_LLM_API_KEY", "TEKTOS_TELEGRAM_BOT_TOKEN", "TEKTOS_HUGGINGFACE_TOKEN"]:
+        value = os.getenv(var)
+        keys.append({
+            "name": var.replace("TEKTOS_", "").replace("_", " "),
+            "key": var,
+            "value": "••••••••" if value else "(not set)",
+            "configured": bool(value),
+        })
+    return {"keys": keys}
+
+
+# ---------------------------------------------------------------------------
+# Routing API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/routing/decide")
+async def route_decision(task: str = "", category: str = "general"):
+    """Make a model routing decision."""
+    from tektos.routing import ModelRouter
+    router = ModelRouter()
+    decision = router.route(task=task, category=category)
+    return {
+        "recommended_model": decision.get("model", runtime_sdk._llm_model),
+        "category": category,
+        "confidence": decision.get("confidence", 0.8),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -935,7 +1373,10 @@ async def _handle_prompt(
 
     async def on_event(envelope):
         """Send envelope to WebSocket."""
-        await websocket.send_text(envelope.to_json())
+        try:
+            await websocket.send_text(envelope.to_json())
+        except Exception:
+            log.warning("WebSocket send failed (client may have disconnected)")
 
     async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
         """Wait for user approval on a tool call."""
@@ -987,19 +1428,25 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
         await websocket.send_text(session_ready(session_id, since_seq=0).to_json())
 
         # Main loop: receive prompts and tool approvals
+        log.info(f"WebSocket main loop starting for session {session_id[:8]}")
         while True:
             try:
+                log.debug(f"Waiting for WS message on session {session_id[:8]}")
                 text = await websocket.receive_text()
+                log.info(f"WS message received on session {session_id[:8]}: {text[:200]}")
             except _WebSocketDisconnect:
+                log.info(f"WS disconnected on session {session_id[:8]}")
                 break
             except Exception as exc:
-                log.error(f"WS receive error: {exc}")
+                log.error(f"WS receive error on session {session_id[:8]}: {exc}", exc_info=True)
                 break
 
             # JSON parsing wrapped in try/except (PlexClaw bug #9 fix)
+            log.debug(f"WS message received: {text[:200]}")
             try:
                 data = _json.loads(text)
             except _json.JSONDecodeError:
+                log.error(f"Invalid JSON from WS: {text[:200]}")
                 await websocket.send_text(_json.dumps({
                     "type": "error",
                     "detail": "invalid JSON",
@@ -1008,11 +1455,13 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                 continue
 
             msg_type = data.get("type", "")
+            log.debug(f"Message type: {msg_type}")
 
             if msg_type == "prompt":
                 # Submit prompt to LLM
                 prompt_text = data.get("prompt", "")
                 system_prompt = data.get("system_prompt")
+                print(f"[WS] Prompt received for session {session_id[:8]}: {prompt_text[:100]}")
 
                 if not prompt_text:
                     await websocket.send_text(_json.dumps({
@@ -1023,9 +1472,12 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                     continue
 
                 # Run prompt in background task
-                _asyncio.create_task(
+                print(f"[WS] Creating prompt task for session {session_id[:8]}")
+                task = _asyncio.create_task(
                     _handle_prompt(websocket, session, prompt_text, system_prompt)
                 )
+                print(f"[WS] Prompt task created: {task}")
+                print(f"[WS] Task done? {task.done()}")
 
             elif msg_type == "approve":
                 # Approve a tool call

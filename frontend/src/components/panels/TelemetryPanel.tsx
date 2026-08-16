@@ -1,11 +1,11 @@
 /**
- * Tektos-Ultima v1 — Telemetry Panel
+ * Tektos-Ultima v1 — Telemetry Panel (Real Data)
  *
- * Real-time GPU/CPU temperature, utilization, power draw, and fan speed.
- * Uses sparkline charts for trend visualization and gauges for current values.
+ * Real-time GPU/CPU temperature, utilization, power draw, fan speed,
+ * RAM, and disk metrics wired to live /api/telemetry endpoint.
  * Color-coded status with amber/red thresholds for thermal warnings.
  *
- * Exemplar pattern: Real-time metrics with trend history.
+ * Exemplar pattern: Real-time metrics with trend history from live hardware.
  */
 
 "use client";
@@ -145,24 +145,13 @@ export function TelemetryPanel() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const health = await api.getHealth();
-        // Simulate telemetry data (replace with actual /api/telemetry endpoint)
-        const telemetry: TelemetryData = {
-          gpu_temp: 65 + Math.random() * 10,
-          gpu_util: 40 + Math.random() * 40,
-          cpu_temp: 55 + Math.random() * 15,
-          cpu_util: 30 + Math.random() * 50,
-          ram_used: 8 + Math.random() * 4,
-          ram_total: 32,
-          ram_util: (8 + Math.random() * 4) / 32 * 100,
-          disk_used: 100 + Math.random() * 50,
-          disk_total: 500,
-          fan_speed: 1500 + Math.random() * 500,
-          power_draw: 350 + Math.random() * 50,
-          timestamp: new Date().toISOString(),
-        };
-        setData(telemetry);
-        setHistory((prev) => [...prev.slice(-maxHistory + 1), telemetry]);
+        const res = await fetch("/api/telemetry");
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        const raw: TelemetryData = await res.json();
+        setData(raw);
+        setHistory((prev) => [...prev.slice(-maxHistory + 1), raw]);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to fetch telemetry");
       }
@@ -185,8 +174,8 @@ export function TelemetryPanel() {
           <h3 className="text-sm font-semibold text-text-primary">System Telemetry</h3>
         </div>
         {data && (
-          <span className="text-xs text-text-muted">
-            {new Date(data.timestamp).toLocaleTimeString()}
+          <span className="text-xs text-text-muted font-mono">
+            {new Date(data.timestamp * 1000).toLocaleTimeString()}
           </span>
         )}
       </div>
@@ -203,7 +192,7 @@ export function TelemetryPanel() {
             <div className="grid grid-cols-2 gap-3">
               <MetricGauge
                 label="Temperature"
-                value={data.gpu_temp}
+                value={data.gpu.temperature}
                 max={100}
                 unit="°C"
                 warningThreshold={75}
@@ -212,7 +201,7 @@ export function TelemetryPanel() {
               />
               <MetricGauge
                 label="Utilization"
-                value={data.gpu_util}
+                value={data.gpu.utilization}
                 max={100}
                 unit="%"
                 warningThreshold={85}
@@ -220,8 +209,48 @@ export function TelemetryPanel() {
                 color="#10b981"
               />
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <MetricGauge
+                label="VRAM Used"
+                value={data.gpu.memory_used}
+                max={data.gpu.memory_total}
+                unit=" MB"
+                warningThreshold={data.gpu.memory_total * 0.85}
+                dangerThreshold={data.gpu.memory_total * 0.95}
+                color="#06b6d4"
+              />
+              <MetricGauge
+                label="Power Draw"
+                value={data.gpu.power_draw}
+                max={data.gpu.power_limit}
+                unit=" W"
+                warningThreshold={data.gpu.power_limit * 0.9}
+                dangerThreshold={data.gpu.power_limit}
+                color="#f97316"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <MetricGauge
+                label="Clocks (GPU)"
+                value={data.gpu.clocks_graphics}
+                max={3000}
+                unit=" MHz"
+                warningThreshold={0}
+                dangerThreshold={0}
+                color="#8b5cf6"
+              />
+              <MetricGauge
+                label="Clocks (Mem)"
+                value={data.gpu.clocks_memory}
+                max={20000}
+                unit=" MHz"
+                warningThreshold={0}
+                dangerThreshold={0}
+                color="#14b8a6"
+              />
+            </div>
             <Sparkline
-              data={history.map((h) => h.gpu_temp)}
+              data={history.map((h) => h.gpu.temperature)}
               width={sparklineWidth}
               height={sparklineHeight}
               color="#3b82f6"
@@ -234,47 +263,56 @@ export function TelemetryPanel() {
             <h4 className="text-xs font-medium text-text-muted uppercase tracking-wider">CPU</h4>
             <div className="grid grid-cols-2 gap-3">
               <MetricGauge
-                label="Temperature"
-                value={data.cpu_temp}
-                max={100}
-                unit="°C"
-                warningThreshold={70}
-                dangerThreshold={80}
-                color="#f59e0b"
-              />
-              <MetricGauge
                 label="Utilization"
-                value={data.cpu_util}
+                value={data.system.cpu_util}
                 max={100}
                 unit="%"
                 warningThreshold={80}
                 dangerThreshold={90}
                 color="#8b5cf6"
               />
+              <MetricGauge
+                label="RAM Used"
+                value={data.system.mem_used_gb}
+                max={data.system.mem_total_gb}
+                unit={` / ${data.system.mem_total_gb} GB`}
+                warningThreshold={data.system.mem_total_gb * 0.8}
+                dangerThreshold={data.system.mem_total_gb * 0.9}
+                color="#06b6d4"
+              />
             </div>
-            <Sparkline
-              data={history.map((h) => h.cpu_util)}
-              width={sparklineWidth}
-              height={sparklineHeight}
-              color="#8b5cf6"
-            />
-          </div>
-
-          {/* Memory & Storage */}
-          <div className="space-y-2">
-            <h4 className="text-xs font-medium text-text-muted uppercase tracking-wider">Memory & Storage</h4>
             <MetricGauge
-              label="RAM"
-              value={data.ram_util}
+              label="RAM Utilization"
+              value={data.system.mem_percent}
               max={100}
               unit="%"
               warningThreshold={80}
               dangerThreshold={90}
               color="#06b6d4"
             />
+            <Sparkline
+              data={history.map((h) => h.system.cpu_util)}
+              width={sparklineWidth}
+              height={sparklineHeight}
+              color="#8b5cf6"
+            />
+          </div>
+
+          {/* Storage */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-medium text-text-muted uppercase tracking-wider">Storage</h4>
             <MetricGauge
-              label="Disk"
-              value={(data.disk_used / data.disk_total) * 100}
+              label="Disk Used"
+              value={data.system.disk_used_gb}
+              max={data.system.disk_total_gb}
+              unit={` / ${data.system.disk_total_gb.toFixed(0)} GB`}
+              warningThreshold={data.system.disk_total_gb * 0.8}
+              dangerThreshold={data.system.disk_total_gb * 0.9}
+              color="#ec4899"
+            />
+            <MetricGauge
+              label="Disk Utilization"
+              value={data.system.disk_percent}
               max={100}
               unit="%"
               warningThreshold={80}
@@ -283,24 +321,16 @@ export function TelemetryPanel() {
             />
           </div>
 
-          {/* Power & Fans */}
-          <div className="grid grid-cols-2 gap-3">
-            <MetricGauge
-              label="Power Draw"
-              value={data.power_draw}
-              max={450}
-              unit="W"
-              warningThreshold={380}
-              dangerThreshold={420}
-              color="#f97316"
-            />
+          {/* Fan Speed */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-medium text-text-muted uppercase tracking-wider">Cooling</h4>
             <MetricGauge
               label="Fan Speed"
-              value={data.fan_speed}
-              max={3000}
-              unit=" RPM"
-              warningThreshold={2500}
-              dangerThreshold={2800}
+              value={data.gpu.fan_speed}
+              max={100}
+              unit="%"
+              warningThreshold={80}
+              dangerThreshold={95}
               color="#14b8a6"
             />
           </div>

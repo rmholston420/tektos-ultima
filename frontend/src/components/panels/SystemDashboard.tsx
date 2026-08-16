@@ -13,12 +13,14 @@ interface TelemetryPoint {
   time: number;
   gpuTemp: number;
   gpuUtil: number;
-  cpuTemp: number;
+  gpuMemUsed: number;
+  gpuMemTotal: number;
+  powerDraw: number;
   cpuUtil: number;
   ramUsed: number;
   ramTotal: number;
   fanSpeed: number;
-  powerDraw: number;
+  diskPercent: number;
 }
 
 interface SystemHealth {
@@ -241,56 +243,38 @@ export function SystemDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch telemetry from backend
+  // Fetch telemetry from /api/telemetry (replaces simulation)
   useEffect(() => {
-    const fetchTelemetry = async () => {
+    const fetchData = async () => {
       try {
-        const res = await fetch("/api/health");
+        const res = await fetch("/api/telemetry");
         if (res.ok) {
-          const data = await res.json();
-          setSystemHealth(data as SystemHealth);
+          const raw = await res.json();
+          const gpu = raw.gpu || {};
+          const system = raw.system || {};
+          const now = Date.now();
+          const newPoint: TelemetryPoint = {
+            time: now,
+            gpuTemp: gpu.temperature || 0,
+            gpuUtil: gpu.utilization || 0,
+            gpuMemUsed: gpu.memory_used || 0,
+            gpuMemTotal: gpu.memory_total || 1,
+            powerDraw: gpu.power_draw || 0,
+            cpuUtil: system.cpu_util || 0,
+            ramUsed: system.mem_used_gb || 0,
+            ramTotal: system.mem_total_gb || 1,
+            fanSpeed: gpu.fan_speed || 0,
+            diskPercent: system.disk_percent || 0,
+          };
+
+          setTelemetryData((prev) => {
+            const updated = [...prev, newPoint];
+            return updated.slice(-maxHistory);
+          });
         }
       } catch {
-        // Backend may not have health endpoint yet — use simulated data
-        setSystemHealth({
-          status: "running",
-          uptime: "--:--:--",
-          sessionsActive: 0,
-          sessionsTotal: 0,
-          model: "Qwen3.6-35B",
-          gpuModel: "NVIDIA RTX 4090",
-          cpuModel: "AMD Ryzen 9 7950X",
-          ramTotal: 32,
-          ramUsed: 0,
-        });
+        // Backend unavailable — keep last known data
       }
-    };
-
-    fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 10000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Simulated telemetry data (until backend /api/telemetry endpoint exists)
-  useEffect(() => {
-    const fetchData = () => {
-      const now = Date.now();
-      const newPoint: TelemetryPoint = {
-        time: now,
-        gpuTemp: 62 + Math.sin(now / 30000) * 8 + Math.random() * 4,
-        gpuUtil: 45 + Math.sin(now / 20000) * 25 + Math.random() * 10,
-        cpuTemp: 52 + Math.sin(now / 40000) * 10 + Math.random() * 5,
-        cpuUtil: 35 + Math.sin(now / 25000) * 30 + Math.random() * 10,
-        ramUsed: 12 + Math.random() * 3,
-        ramTotal: 32,
-        fanSpeed: 1800 + Math.sin(now / 35000) * 300 + Math.random() * 100,
-        powerDraw: 360 + Math.sin(now / 22000) * 40 + Math.random() * 20,
-      };
-
-      setTelemetryData((prev) => {
-        const updated = [...prev, newPoint];
-        return updated.slice(-maxHistory);
-      });
     };
 
     fetchData();
@@ -300,8 +284,8 @@ export function SystemDashboard() {
   }, []);
 
   const latest = telemetryData[telemetryData.length - 1] || {
-    gpuTemp: 0, gpuUtil: 0, cpuTemp: 0, cpuUtil: 0,
-    ramUsed: 0, ramTotal: 32, fanSpeed: 0, powerDraw: 0,
+    gpuTemp: 0, gpuUtil: 0, gpuMemUsed: 0, gpuMemTotal: 1,
+    cpuUtil: 0, ramUsed: 0, ramTotal: 1, fanSpeed: 0, powerDraw: 0, diskPercent: 0,
   };
 
   if (loading) return <LoadingSkeleton />;
@@ -363,8 +347,8 @@ export function SystemDashboard() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
           <GaugeRing value={latest.gpuTemp} max={100} color="#3b82f6" label="GPU Temp" unit="°C" />
           <GaugeRing value={latest.gpuUtil} max={100} color="#10b981" label="GPU Util" unit="%" />
-          <GaugeRing value={latest.cpuTemp} max={100} color="#f59e0b" label="CPU Temp" unit="°C" />
-          <GaugeRing value={latest.cpuUtil} max={100} color="#8b5cf6" label="CPU Util" unit="%" />
+          <GaugeRing value={latest.cpuUtil} max={100} color="#f59e0b" label="CPU Util" unit="%" />
+          <GaugeRing value={latest.diskPercent} max={100} color="#8b5cf6" label="Disk" unit="%" />
         </div>
       </GlassPanel>
 
