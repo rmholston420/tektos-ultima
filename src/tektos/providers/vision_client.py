@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import os
 import pathlib
 from dataclasses import dataclass, field
 from typing import Any
@@ -45,7 +46,7 @@ class VisionClient:
 
     def __init__(
         self,
-        base_url: str = "http://127.0.0.1:8083/v1",
+        base_url: str = os.getenv("TEKTOS_VISION_URL", "http://127.0.0.1:8083/v1"),
         model: str = "Qwen2.5-VL-3B-Instruct-Q4_K_M",
         temperature: float = 0.3,
         max_tokens: int = 2048,

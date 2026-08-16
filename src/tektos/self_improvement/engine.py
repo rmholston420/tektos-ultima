@@ -328,7 +328,7 @@ class SelfImprovementAdapter:
             content = "\n".join(parts)
             
             client = HindsightClient(
-                config=HindsightConfig(base_url="http://127.0.0.1:9177")
+                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177"))
             )
             client.retain(
                 content=content,

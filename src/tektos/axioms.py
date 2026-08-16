@@ -7,7 +7,7 @@ Usage:
     from tektos.axioms import load_axioms, axiom_get, axiom_has
     axioms = load_axioms()  # loads from filesystem
     if axiom_has(axioms, 'phase.6.10.complete'):
-        print("GUI testing committed")
+        log.info("GUI testing committed")
 
 Axiom format (YAML in .axiom files):
     id: phase.6.10.complete

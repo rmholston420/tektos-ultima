@@ -337,7 +337,7 @@ class StateManager:
                 HindsightConfig,
             )
             client = HindsightClient(
-                config=HindsightConfig(base_url="http://127.0.0.1:9177")
+                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177"))
             )
             results = client.recall(
                 query=f"LAST_KNOWN_STATE project:{self.project} progress",
@@ -383,7 +383,7 @@ class StateManager:
             summary = "\n".join(summary_lines)
             
             client = HindsightClient(
-                config=HindsightConfig(base_url="http://127.0.0.1:9177")
+                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177"))
             )
             client.retain(
                 content=md,

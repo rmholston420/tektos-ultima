@@ -1829,7 +1829,7 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                 # Submit prompt to LLM
                 prompt_text = data.get("prompt", "")
                 system_prompt = data.get("system_prompt")
-                print(f"[WS] Prompt received for session {session_id[:8]}: {prompt_text[:100]}")
+                log.info(f"[WS] Prompt received for session {session_id[:8]}: {prompt_text[:100]}")
 
                 if not prompt_text:
                     await websocket.send_text(_json.dumps({
@@ -1840,12 +1840,12 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                     continue
 
                 # Run prompt in background task
-                print(f"[WS] Creating prompt task for session {session_id[:8]}")
+                log.info(f"[WS] Creating prompt task for session {session_id[:8]}")
                 task = _asyncio.create_task(
                     _handle_prompt(websocket, session, prompt_text, system_prompt)
                 )
-                print(f"[WS] Prompt task created: {task}")
-                print(f"[WS] Task done? {task.done()}")
+                log.info(f"[WS] Prompt task created: {task}")
+                log.info(f"[WS] Task done? {task.done()}")
 
             elif msg_type == "approve":
                 # Approve a tool call

@@ -74,7 +74,7 @@ class SelfImprovementLoop:
 
         # Check synthesis
         for synth in cycle.syntheses:
-            print(synth.synthesis)
+            logger.info("Synthesis: %s", synth.synthesis[:200])
 
         # Run next cycle (automatically includes synthesis guidance)
         cycle2 = loop.run("Create a math library with trig functions")

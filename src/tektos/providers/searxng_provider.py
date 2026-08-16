@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import time
 from datetime import datetime, timezone
@@ -53,8 +54,8 @@ class SearXNGConfig(BaseModel):
 
     host: str = "localhost"
     port: int = 8888
-    base_url: str = "http://localhost:8888/search"
-    json_endpoint: str = "http://localhost:8888/search"
+    base_url: str = os.getenv("TEKTOS_SEARXNG_URL", "http://localhost:8888/search")
+    json_endpoint: str = os.getenv("TEKTOS_SEARXNG_URL", "http://localhost:8888/search")
 
     # Search settings
     max_results: int = 10
