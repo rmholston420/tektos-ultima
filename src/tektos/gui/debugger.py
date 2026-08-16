@@ -410,8 +410,8 @@ class ChromeDebugger:
                         entry.status_text = response.status_text
                         try:
                             entry.response_time_ms = response.elapsed_time_ms
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.warning("Debugger operation failed: %s", e)
                         break
 
             self._page.on("console", on_console)

@@ -554,8 +554,8 @@ class TelegramGateway:
                                 chat_id=user_id,
                                 message_id=thinking_msg_ref[0].message_id,
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.warning("Telegram operation failed: %s", e)
                         thinking_msg_ref[0] = None
 
                     if event_type == "assistant.delta":

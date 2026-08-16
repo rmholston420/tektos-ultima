@@ -168,8 +168,8 @@ class SessionManager:
         _sm = get_state_machine()
         try:
             _sm.transition(session_id, State.READY, "WS connected")
-        except Exception:
-            pass  # Already in valid state
+        except Exception as e:
+            log.warning("Session state already valid: %s", e)
 
         # Emit session.ready with since_seq
         await append_event(
@@ -204,8 +204,8 @@ class SessionManager:
             _sm = get_state_machine()
             try:
                 _sm.transition(session_id, State.IDLE, "no WS connections")
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Session transition failed: %s", e)
 
     async def interrupt_session(self, session_id: str) -> None:
         """Interrupt a running session. Sets status to interrupted."""
@@ -270,8 +270,8 @@ class SessionManager:
             _sm = get_state_machine()
             try:
                 _sm.transition(session_id, State.READY, "completed normally")
-            except Exception:
-                pass  # Already valid
+            except Exception as e:
+                log.warning("State already valid: %s", e)
 
             await append_event(
                 session_id,
@@ -298,8 +298,8 @@ class SessionManager:
         _sm = get_state_machine()
         try:
             _sm.transition(session_id, "archived", "archived")
-        except Exception:
-            pass  # archived is not in FSM, that's fine
+        except Exception as e:
+            log.debug("Session already archived (expected): %s", e)
 
         await append_event(
             session_id,

@@ -148,8 +148,8 @@ class EmailGateway:
         if self._imap:
             try:
                 self._imap.logout()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Email polling failed: %s", e, exc_info=True)
             self._imap = None
 
         logger.info("Email gateway shut down")

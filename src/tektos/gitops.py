@@ -378,8 +378,8 @@ class GitOpsEngine:
         try:
             if current == name:
                 self._git(["checkout", "HEAD"])  # detach HEAD or switch to another
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Git operation failed: %s", e)
         args = ["branch", "-D", name] if force else ["branch", "-d", name]
         return self._git_check(args)
 

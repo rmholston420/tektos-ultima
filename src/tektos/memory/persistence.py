@@ -519,8 +519,8 @@ class MemoryPersistence:
     def __del__(self) -> None:
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Persistence operation failed: %s", e)
 
     # ── Helpers ──────────────────────────────────────────────────────────
 

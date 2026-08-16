@@ -199,7 +199,7 @@ class NVMLDriver:
                 "hw_thermal_slowdown": False,
             }
         except pynvml.NVMLError:
-            pass
+            logger.warning("NVML query failed")
         return reasons
 
     @classmethod

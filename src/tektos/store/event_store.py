@@ -300,8 +300,8 @@ def _check_fts5_sync(conn) -> bool:
     try:
         conn.execute("DROP TABLE IF EXISTS _fts5_probe")
         conn.commit()
-    except Exception:
-        pass  # best effort cleanup
+    except Exception as e:
+        log.warning("Event store cleanup failed: %s", e)
 
     return _fts_available
 

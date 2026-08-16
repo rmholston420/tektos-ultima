@@ -174,7 +174,9 @@ class SchemaMigrationEngine:
             ).fetchall()
 
             for (table_name,) in tables:
-                columns = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+                from tektos.utils.db_utils import escape_sql_identifier
+                safe_name = escape_sql_identifier(table_name)
+                columns = conn.execute(f"PRAGMA table_info({safe_name})").fetchall()
                 schema["tables"][table_name] = {
                     "columns": [
                         {

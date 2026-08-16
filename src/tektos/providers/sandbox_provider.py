@@ -293,8 +293,8 @@ class SandboxProvider:
                     matches.append((str(file_path), i, line))
                     if len(matches) >= limit:
                         break
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Sandbox operation failed: %s", e)
         return matches
 
     # ------------------------------------------------------------------
