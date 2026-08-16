@@ -141,16 +141,17 @@ class GitOpsEngine:
                 text=True,
                 timeout=30,
             )
-            if check and result.returncode != 0:
-                log.error(f"git {' '.join(args)} failed: {result.stderr}")
-                raise RuntimeError(result.stderr)
-            return result.stdout.strip()
         except subprocess.TimeoutExpired:
             log.error(f"git {' '.join(args)} timed out")
             return ""
         except Exception as e:
             log.error(f"git {' '.join(args)} error: {e}")
             return ""
+
+        if check and result.returncode != 0:
+            log.error(f"git {' '.join(args)} failed: {result.stderr}")
+            raise RuntimeError(result.stderr) from None
+        return result.stdout.strip()
 
     def _git_check(self, args: list[str]) -> bool:
         """Run a git command and return True if successful."""
