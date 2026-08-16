@@ -25,7 +25,7 @@ const DynamicSystemDashboard = dynamic(() => import("@/components/panels/SystemD
 const DynamicTelemetryPanel = dynamic(() => import("@/components/panels/TelemetryPanel").then((m) => m.TelemetryPanel), { ssr: false });
 const DynamicModelRouterPanel = dynamic(() => import("@/components/panels/ModelRouterPanel").then((m) => m.ModelRouterPanel), { ssr: false });
 const DynamicAxiomsPanel = dynamic(() => import("@/components/panels/AxiomsPanel").then((m) => m.AxiomsPanel), { ssr: false });
-const DynamicMemorySystemPanel = dynamic(() => import("@/components/panels/MemorySystemPanel").then((m) => m.MemorySystemPanel), { ssr: false });
+const DynamicMemorySystemPanel = dynamic(() => import("@/components/panels/MemoryPanel").then((m) => m.MemoryPanel), { ssr: false });
 const DynamicSkillsPanel = dynamic(() => import("@/components/panels/SkillsPanel").then((m) => m.SkillsPanel), { ssr: false });
 const DynamicConfigPanel = dynamic(() => import("@/components/panels/ConfigPanel").then((m) => m.ConfigPanel), { ssr: false });
 const DynamicKeysPanel = dynamic(() => import("@/components/panels/KeysPanel").then((m) => m.KeysPanel), { ssr: false });

@@ -41,6 +41,8 @@ log = _log.getLogger("tektos.main")
 # Globals — initialized in lifespan
 # ---------------------------------------------------------------------------
 
+memory_system: Any = None
+
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
 from tektos.protocol.envelope import (
     PROTOCOL_VERSION,
@@ -155,7 +157,15 @@ async def lifespan(app: _FastAPI):
     else:
         log.info("Vision client skipped (TEKTOS_VISION_LLM_URL not set)")
 
-    # 10. Initialize Telegram gateway (optional — only if bot token is set)
+    # 10. Initialize memory persistence layer
+    global memory_system
+    from tektos.memory.memory_system import MemorySystem
+    memory_system = MemorySystem()
+    if memory_system.persistence:
+        memory_system.persistence.start_decay_scheduler(interval=60.0)
+    log.info("Memory persistence initialized (SQLite-backed 4-tier)")
+
+    # 11. Initialize Telegram gateway (optional — only if bot token is set)
     telegram_bot_token = _os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN")
     telegram_admin_chat_id = _os.getenv("TEKTOS_TELEGRAM_ADMIN_CHAT_ID")
     telegram_admin_chat_id_int = int(telegram_admin_chat_id) if telegram_admin_chat_id else None
@@ -266,6 +276,65 @@ async def health_check():
         "event_bus": _event_bus.get_stats(),
         "state_machine": _state_machine.get_stats(),
     }
+
+
+@app.get("/api/memory")
+async def get_memory(tier: str | None = None, search: str | None = None):
+    """Get memory entries. Optional tier filter and FTS5 search."""
+    if not memory_system or not memory_system.persistence:
+        return {"error": "Memory persistence not initialized"}
+
+    if search and tier == "long_term":
+        results = memory_system.persistence.search_long_term(search)
+    elif search and tier == "procedural":
+        results = memory_system.persistence.search_procedural(search)
+    elif tier:
+        results = memory_system.persistence.export_entries(tier)
+    else:
+        stats = memory_system.persistence.get_stats()
+        stats["summary"] = memory_system.get_summary()
+        return stats
+
+    return results
+
+
+@app.get("/api/memory/stats")
+async def get_memory_stats():
+    """Get memory system statistics."""
+    if not memory_system or not memory_system.persistence:
+        return {"error": "Memory persistence not initialized"}
+    stats = memory_system.persistence.get_stats()
+    stats["summary"] = memory_system.get_summary()
+    return stats
+
+
+@app.post("/api/memory/decay")
+async def trigger_decay():
+    """Manually trigger decay on all memory tiers."""
+    if not memory_system or not memory_system.persistence:
+        return {"error": "Memory persistence not initialized"}
+    removed = memory_system.persistence.decay_all()
+    return removed
+
+
+@app.delete("/api/memory/{tier}/{entry_id}")
+async def delete_memory(tier: str, entry_id: str):
+    """Delete a memory entry from the specified tier."""
+    if not memory_system or not memory_system.persistence:
+        return {"error": "Memory persistence not initialized"}
+
+    delete_map = {
+        "working": memory_system.persistence.delete_working,
+        "long_term": memory_system.persistence.delete_long_term,
+        "procedural": memory_system.persistence.delete_procedural,
+    }
+
+    fn = delete_map.get(tier)
+    if not fn:
+        raise _HTTPException(status_code=400, detail=f"Unknown tier: {tier}")
+
+    deleted = fn(entry_id)
+    return {"deleted": deleted}
 
 
 @app.get("/api/models")

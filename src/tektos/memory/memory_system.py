@@ -59,7 +59,17 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
+import logging
 from pydantic import BaseModel, Field
+
+
+# Import persistence layer here to avoid circular deps
+try:
+    from .persistence import MemoryPersistence as _MemoryPersistence  # noqa: F401
+except ImportError:
+    _MemoryPersistence = None  # type: ignore
+
+log = logging.getLogger("tektos.memory")
 
 
 # ── Memory Tier Types ─────────────────────────────────────────────────────
@@ -198,7 +208,7 @@ class MemorySystem:
         ),
     }
 
-    def __init__(self) -> None:
+    def __init__(self, persistence: Any | None = None) -> None:
         self.tiers: dict[MemoryTier, list[MemoryEntry]] = {
             tier: [] for tier in MemoryTier
         }
@@ -207,8 +217,142 @@ class MemorySystem:
         self.configs = copy.deepcopy(self.DEFAULT_CONFIGS)
         self.transfer_history: list[dict[str, Any]] = []
         self.novelty_count: int = 0
+        # Persistence layer
+        if persistence is not None:
+            self.persistence = persistence
+        else:
+            if _MemoryPersistence is not None:
+                self.persistence = _MemoryPersistence()
+            else:
+                self.persistence = None  # type: ignore
+        # Load persisted entries into memory on init
+        self._load_from_persistence()
+        # Start background decay scheduler
+        if self.persistence:
+            self.persistence.start_decay_scheduler(interval=30.0)
         # Dreamtime engine (passive reflection) — initialized last to avoid circular deps
         self.dreamtime: DreamtimeEngine = DreamtimeEngine(self)
+
+    def _load_from_persistence(self) -> None:
+        """Load all persistent tiers from SQLite into memory."""
+        if not self.persistence:
+            return
+        try:
+            # Working memory (up to capacity)
+            working = self.persistence.load_working(limit=self.configs[MemoryTier.WORKING].capacity)
+            for w in working:
+                self.tiers[MemoryTier.WORKING].append(self._dict_to_entry(w))
+
+            # Long-term memory (recent entries)
+            long_term = self.persistence.load_long_term(limit=100)
+            for lt in long_term:
+                self.tiers[MemoryTier.LONG_TERM].append(self._dict_to_entry(lt))
+
+            # Procedural memory
+            procedural = self.persistence.load_procedural()
+            for p in procedural:
+                self.tiers[MemoryTier.PROCEDURAL].append(self._dict_to_entry(p))
+
+            # Count novel entries
+            for tier in self.tiers.values():
+                self.novelty_count += sum(1 for e in tier if e.is_novel)
+
+            # Load transfer history
+            transfers = self.persistence.get_transfer_history(limit=200)
+            self.transfer_history = transfers
+
+            log.info(f"Loaded {len(working)} working, {len(long_term)} long-term, {len(procedural)} procedural memories")
+        except Exception as e:
+            log.warning(f"Failed to load persisted memory: {e}")
+
+    @staticmethod
+    def _dict_to_entry(d: dict[str, Any]) -> MemoryEntry:
+        """Convert a persisted dict back to MemoryEntry."""
+        return MemoryEntry(
+            id=d["id"],
+            content=d["content"],
+            tier=d.get("tier", MemoryTier.LONG_TERM),
+            hemisphere=d.get("hemisphere", "left"),
+            is_novel=d.get("is_novel", False),
+            novelty_score=d.get("novelty_score", 0.0),
+            timestamp=d.get("timestamp", ""),
+            expires_at=d.get("expires_at"),
+            source_tier=d.get("source_tier"),
+            destination_tier=d.get("destination_tier"),
+            who=d.get("who", ""),
+            what=d.get("what", ""),
+            where=d.get("where", ""),
+            when=d.get("when", ""),
+            why=d.get("why", ""),
+            how=d.get("how", ""),
+            metadata=d.get("metadata", {}),
+        )
+
+    def _save_to_persistence(self, entry: MemoryEntry) -> None:
+        """Save an entry to the SQLite persistence layer."""
+        if not self.persistence:
+            return
+        try:
+            if entry.tier == MemoryTier.WORKING:
+                self.persistence.save_working({
+                    "id": entry.id,
+                    "content": entry.content,
+                    "hemisphere": entry.hemisphere.value,
+                    "is_novel": entry.is_novel,
+                    "novelty_score": entry.novelty_score,
+                    "timestamp": entry.timestamp,
+                    "expires_at": entry.expires_at,
+                    "source_tier": entry.source_tier.value if entry.source_tier else None,
+                    "destination_tier": entry.destination_tier.value if entry.destination_tier else None,
+                    "who": entry.who,
+                    "what": entry.what,
+                    "where": entry.where,
+                    "when": entry.when,
+                    "why": entry.why,
+                    "how": entry.how,
+                    "metadata": entry.metadata,
+                })
+            elif entry.tier == MemoryTier.LONG_TERM:
+                self.persistence.save_long_term({
+                    "id": entry.id,
+                    "content": entry.content,
+                    "hemisphere": entry.hemisphere.value,
+                    "is_novel": entry.is_novel,
+                    "novelty_score": entry.novelty_score,
+                    "timestamp": entry.timestamp,
+                    "expires_at": entry.expires_at,
+                    "source_tier": entry.source_tier.value if entry.source_tier else None,
+                    "destination_tier": entry.destination_tier.value if entry.destination_tier else None,
+                    "who": entry.who,
+                    "what": entry.what,
+                    "where": entry.where,
+                    "when": entry.when,
+                    "why": entry.why,
+                    "how": entry.how,
+                    "metadata": entry.metadata,
+                })
+            elif entry.tier == MemoryTier.PROCEDURAL:
+                self.persistence.save_procedural({
+                    "id": entry.id,
+                    "content": entry.content,
+                    "hemisphere": entry.hemisphere.value,
+                    "is_novel": entry.is_novel,
+                    "novelty_score": entry.novelty_score,
+                    "timestamp": entry.timestamp,
+                    "expires_at": entry.expires_at,
+                    "source_tier": entry.source_tier.value if entry.source_tier else None,
+                    "destination_tier": entry.destination_tier.value if entry.destination_tier else None,
+                    "who": entry.who,
+                    "what": entry.what,
+                    "where": entry.where,
+                    "when": entry.when,
+                    "why": entry.why,
+                    "how": entry.how,
+                    "metadata": entry.metadata,
+                })
+            # SENSORY is ephemeral — not persisted
+        except Exception as e:
+            log.warning(f"Failed to persist memory entry {entry.id}: {e}")
 
     def add(
         self,
@@ -259,6 +403,9 @@ class MemorySystem:
             entry.expires_at = expiry.isoformat()
 
         self.tiers[tier].append(entry)
+
+        # Persist to SQLite
+        self._save_to_persistence(entry)
 
         # Track novelty
         if is_novel:
