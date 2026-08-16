@@ -1,10 +1,12 @@
-"""Tests for Tektos auth module — covers verify_api_key and get_api_key_status."""
+"""Tests for Tektos auth module — covers verify_api_key, APIKeyMiddleware, and get_api_key_status."""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
-from tektos.auth import verify_api_key, get_api_key_status
+from tektos.auth import verify_api_key, get_api_key_status, APIKeyMiddleware
 
 
 class TestVerifyAPIKey:
@@ -154,3 +156,107 @@ class TestGetAPIKeyStatus:
         """Status should always return a dict."""
         status = get_api_key_status()
         assert isinstance(status, dict)
+
+
+# ── APIKeyMiddleware Tests ──────────────────────────────────────────────────
+
+
+class TestAPIKeyMiddleware:
+    """Test the APIKeyMiddleware dispatch method."""
+
+    def _make_app(self, middleware=None):
+        app = FastAPI()
+        if middleware:
+            app.add_middleware(middleware)
+
+        @app.get("/health")
+        async def health():
+            return {"status": "ok"}
+
+        @app.get("/protected")
+        async def protected():
+            return {"data": "secret"}
+
+        return app
+
+    def test_middleware_disabled_passes_request(self):
+        """When auth disabled, all requests pass through."""
+        with patch("tektos.auth._API_KEY_ENABLED", False):
+            app = self._make_app(APIKeyMiddleware)
+            client = TestClient(app)
+            resp = client.get("/health")
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "ok"}
+
+    def test_middleware_no_key_allows_request(self):
+        """When auth enabled but no key provided, request still passes (optional auth)."""
+        with patch("tektos.auth._API_KEY_ENABLED", True):
+            with patch("tektos.auth._API_KEY", "secret-key"):
+                app = self._make_app(APIKeyMiddleware)
+                client = TestClient(app)
+                resp = client.get("/health")
+                assert resp.status_code == 200
+
+    def test_middleware_valid_header_key_passes(self):
+        """Valid API key in header should allow request."""
+        with patch("tektos.auth._API_KEY_ENABLED", True):
+            with patch("tektos.auth._API_KEY", "secret-key"):
+                app = self._make_app(APIKeyMiddleware)
+                client = TestClient(app)
+                resp = client.get("/health", headers={"X-API-Key": "secret-key"})
+                assert resp.status_code == 200
+
+    def test_middleware_valid_query_key_passes(self):
+        """Valid API key in query param should allow request."""
+        with patch("tektos.auth._API_KEY_ENABLED", True):
+            with patch("tektos.auth._API_KEY", "secret-key"):
+                app = self._make_app(APIKeyMiddleware)
+                client = TestClient(app)
+                resp = client.get("/health", params={"api_key": "secret-key"})
+                assert resp.status_code == 200
+
+    def test_middleware_wrong_key_still_passes(self):
+        """Wrong key still passes — auth is optional (not required)."""
+        with patch("tektos.auth._API_KEY_ENABLED", True):
+            with patch("tektos.auth._API_KEY", "correct-key"):
+                app = self._make_app(APIKeyMiddleware)
+                client = TestClient(app)
+                resp = client.get("/health", headers={"X-API-Key": "wrong-key"})
+                assert resp.status_code == 200
+
+    def test_middleware_empty_key_still_passes(self):
+        """Empty key still passes — auth is optional."""
+        with patch("tektos.auth._API_KEY_ENABLED", True):
+            with patch("tektos.auth._API_KEY", "secret-key"):
+                app = self._make_app(APIKeyMiddleware)
+                client = TestClient(app)
+                resp = client.get("/health", headers={"X-API-Key": ""})
+                assert resp.status_code == 200
+
+    def test_middleware_passes_to_protected_endpoint(self):
+        """Middleware should allow access to protected endpoint with valid key."""
+        with patch("tektos.auth._API_KEY_ENABLED", True):
+            with patch("tektos.auth._API_KEY", "secret-key"):
+                app = self._make_app(APIKeyMiddleware)
+                client = TestClient(app)
+                resp = client.get("/protected", headers={"X-API-Key": "secret-key"})
+                assert resp.status_code == 200
+                assert resp.json() == {"data": "secret"}
+
+    def test_middleware_preserves_request_path(self):
+        """Middleware should not alter the request path."""
+        with patch("tektos.auth._API_KEY_ENABLED", False):
+            app = self._make_app(APIKeyMiddleware)
+            client = TestClient(app)
+            resp = client.get("/health")
+            assert resp.status_code == 200
+            assert resp.json()["status"] == "ok"
+
+    def test_middleware_multiple_requests(self):
+        """Middleware should work across multiple requests."""
+        with patch("tektos.auth._API_KEY_ENABLED", False):
+            app = self._make_app(APIKeyMiddleware)
+            client = TestClient(app)
+            for i in range(3):
+                resp = client.get("/health")
+                assert resp.status_code == 200
