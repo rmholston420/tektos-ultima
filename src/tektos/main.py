@@ -376,17 +376,23 @@ async def get_tools_schema():
     return {"tools": _tool_registry.to_tools_schema()}
 
 
+class _RegisterToolBody(_BaseModel):
+    name: str = _Field(description="Tool name")
+    description: str = _Field(description="Tool description")
+    parameters: dict = _Field(default_factory=dict, description="Tool parameters schema")
+
+
 @app.post("/api/tools/register")
-async def register_tool(req: dict):
+async def register_tool(body: _RegisterToolBody):
     """Register a new tool at runtime."""
     if not _tool_registry:
         return {"error": "Tool registry not initialized"}
     from tektos.tools.registry import ToolDefinition
     tool = ToolDefinition(
-        name=req["name"],
-        description=req["description"],
-        parameters=req["parameters"],
-        handler=lambda p: f"Tool {req['name']} executed",  # placeholder
+        name=body.name,
+        description=body.description,
+        parameters=body.parameters,
+        handler=lambda p: f"Tool {body.name} executed",  # placeholder
     )
     _tool_registry.register(tool)
     return {"status": "registered", "name": tool.name}
@@ -416,12 +422,16 @@ async def disable_tool(tool_name: str):
     return {"status": "disabled", "name": tool_name}
 
 
+class _ExecuteToolBody(_BaseModel):
+    parameters: dict = _Field(default_factory=dict, description="Tool execution parameters")
+
+
 @app.post("/api/tools/{tool_name}/execute")
-async def execute_tool(tool_name: str, req: dict):
+async def execute_tool(tool_name: str, body: _ExecuteToolBody):
     """Execute a tool with given parameters."""
     if not _tool_registry:
         return {"error": "Tool registry not initialized"}
-    result = _tool_registry.execute(tool_name, req)
+    result = _tool_registry.execute(tool_name, body.parameters)
     return {"result": result}
 
 
@@ -437,12 +447,17 @@ async def get_mcp_status():
     }
 
 
+class _ConnectMCPServer(_BaseModel):
+    url: str = _Field(default="", description="MCP server URL")
+    transport: str = _Field(default="http", description="Transport protocol")
+
+
 @app.post("/api/mcp/connect")
-async def connect_mcp(req: dict):
+async def connect_mcp(body: _ConnectMCPServer):
     """Connect to an MCP server and import its tools."""
     if not _mcp_client:
         return {"error": "MCP client not initialized"}
-    result = _mcp_client.connect(req.get("url", ""), req.get("transport", "http"))
+    result = _mcp_client.connect(body.url, body.transport)
     return result
 
 
@@ -516,23 +531,35 @@ async def detect_schema_patterns(table: str = "sessions", top_k: int = 10):
     ]
 
 
+class _ProposeSchemaChangeBody(_BaseModel):
+    field_name: str = _Field(description="Field name to add")
+    table: str = _Field(default="sessions", description="Target table")
+    pattern_type: str = _Field(default="repeated_metadata", description="Pattern type")
+    evidence_count: int = _Field(default=10, description="Evidence count")
+    total_records: int = _Field(default=100, description="Total records")
+    percentage: float = _Field(default=0.5, description="Percentage")
+    suggested_type: str = _Field(default="TEXT", description="Suggested column type")
+    example_values: list = _Field(default_factory=list, description="Example values")
+    confidence: float = _Field(default=0.8, description="Confidence score")
+
+
 @app.post("/api/schema/propose")
-async def propose_schema_change(req: dict):
+async def propose_schema_change(body: _ProposeSchemaChangeBody):
     """Propose a schema change from detected patterns."""
     if not schema_engine:
         return {"error": "Schema evolution engine not initialized"}
     from tektos.migrations.schema_evolution import FieldPattern
     pattern = FieldPattern(
-        table=req.get("table", "sessions"),
-        field_name=req["field_name"],
-        pattern_type=req.get("pattern_type", "repeated_metadata"),
-        evidence_count=req.get("evidence_count", 10),
-        total_records=req.get("total_records", 100),
-        percentage=req.get("percentage", 0.5),
-        suggested_column=req["field_name"],
-        suggested_type=req.get("suggested_type", "TEXT"),
-        example_values=req.get("example_values", []),
-        confidence=req.get("confidence", 0.8),
+        table=body.table,
+        field_name=body.field_name,
+        pattern_type=body.pattern_type,
+        evidence_count=body.evidence_count,
+        total_records=body.total_records,
+        percentage=body.percentage,
+        suggested_column=body.field_name,
+        suggested_type=body.suggested_type,
+        example_values=body.example_values,
+        confidence=body.confidence,
     )
     proposal = schema_engine.propose_from_pattern(pattern)
     valid = proposal.validate(schema_engine)
@@ -544,20 +571,30 @@ async def propose_schema_change(req: dict):
     }
 
 
+class _ApplySchemaProposalBody(_BaseModel):
+    reason: str = _Field(default="Manual schema evolution", description="Reason for change")
+    action: str = _Field(default="add_column", description="Action type")
+    table: str = _Field(default="sessions", description="Target table")
+    column: str | None = _Field(default=None, description="Column name")
+    column_type: str = _Field(default="TEXT", description="Column type")
+    column_default: str | None = _Field(default=None, description="Column default")
+    proposed_sql: str | None = _Field(default=None, description="Custom SQL")
+
+
 @app.post("/api/schema/apply")
-async def apply_schema_proposal(req: dict):
+async def apply_schema_proposal(body: _ApplySchemaProposalBody):
     """Apply a validated schema change."""
     if not schema_engine:
         return {"error": "Schema evolution engine not initialized"}
     from tektos.migrations.schema_evolution import SchemaProposal
     proposal = SchemaProposal(
-        reason=req.get("reason", "Manual schema evolution"),
-        action=req.get("action", "add_column"),
-        table=req.get("table", "sessions"),
-        column=req.get("column"),
-        column_type=req.get("column_type", "TEXT"),
-        column_default=req.get("column_default"),
-        proposed_sql=req.get("proposed_sql"),
+        reason=body.reason,
+        action=body.action,
+        table=body.table,
+        column=body.column,
+        column_type=body.column_type,
+        column_default=body.column_default,
+        proposed_sql=body.proposed_sql or "ALTER TABLE placeholder",
     )
     if not proposal.proposed_sql:
         proposal.proposed_sql = f"ALTER TABLE {proposal.table} ADD COLUMN {proposal.column} {proposal.column_type}"
@@ -730,23 +767,24 @@ async def create_session(req: CreateSessionRequest):
     }
 
 
+class _UpdateSessionBody(_BaseModel):
+    title: str | None = None
+    status: str | None = None
+
+
 @app.patch("/api/sessions/{session_id}")
-async def update_session(session_id: str, req: dict):
-    """Update a session (rename, archive, etc)."""
+async def update_session(session_id: str, body: _UpdateSessionBody):
+    """Update a session (rename, status change, etc)."""
     try:
         session = await session_manager.get_session(session_id)
         if not session:
             raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        if "title" in req:
-            session.title = req["title"]
-        if "tag" in req:
-            session.tag = req["tag"]
-        if "is_archived" in req:
-            session.is_archived = req["is_archived"]
-            if req["is_archived"]:
-                session.status = "created"
+        if body.title is not None:
+            session.title = body.title
+        if body.status is not None:
+            session.status = body.status
         session.updated_at = _time.time()
-        await append_event(session_id, "session.updated", {"changes": req})
+        await append_event(session_id, "session.updated", {"status": session.status, "title": session.title})
         return {
             "id": session.id,
             "title": session.title,
@@ -779,14 +817,19 @@ async def archive_session(session_id: str):
         raise _HTTPException(status_code=500, detail=str(exc))
 
 
+class _ForkSessionBody(_BaseModel):
+    model: str | None = _Field(default=None, description="Model for forked session")
+    cwd: str | None = _Field(default=None, description="Working directory")
+
+
 @app.post("/api/sessions/{session_id}/fork")
-async def fork_session(session_id: str, req: dict):
+async def fork_session(session_id: str, body: _ForkSessionBody):
     """Fork a session."""
     try:
         forked = await session_manager.fork_session(
             source_session_id=session_id,
-            model=req.get("model"),
-            cwd=req.get("cwd"),
+            model=body.model or "default",
+            cwd=body.cwd or "./",
         )
         return {
             "id": forked.id,
@@ -1308,7 +1351,8 @@ async def get_telemetry():
                 idle = float(parts[4]) if len(parts) > 4 else 0
                 total = sum(float(x) for x in parts[1:])
             cpu_util = ((total - idle) / total) * 100 if total > 0 else 0
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to read CPU utilization: %s", e)
             cpu_util = 0
 
         # Memory from /proc/meminfo
@@ -1321,7 +1365,8 @@ async def get_telemetry():
             mem_used = meminfo.get("MemTotal", 0) - meminfo.get("MemFree", 0) - meminfo.get("Buffers", 0) - meminfo.get("Cached", 0)
             mem_total = meminfo.get("MemTotal", 1)
             mem_percent = (mem_used / mem_total) * 100 if mem_total > 0 else 0
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to read memory: %s", e)
             mem_used, mem_total, mem_percent = 0, 1, 0
 
         # Disk from /proc/diskstats or shutil
@@ -1330,7 +1375,8 @@ async def get_telemetry():
             disk = shutil.disk_usage("/")
             disk_used = disk.used
             disk_total = disk.total
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to read disk: %s", e)
             disk_used, disk_total = 0, 1
 
         return {
@@ -1521,7 +1567,8 @@ async def get_telemetry():
             "power_limit": pynvml.nvmlDeviceGetPowerManagementLimit(handle) // 1000,
         }
         pynvml.nvmlShutdown()
-    except Exception:
+    except Exception as e:
+        log.warning("Failed to read GPU status: %s", e)
         gpu = {"temperature": 0, "utilization": 0, "memory_used": 0, "memory_total": 0, "power_draw": 0, "power_limit": 400}
     
     return {
@@ -1696,8 +1743,8 @@ async def _handle_prompt(
         """Send envelope to WebSocket."""
         try:
             await websocket.send_text(envelope.to_json())
-        except Exception:
-            log.warning("WebSocket send failed (client may have disconnected)")
+        except Exception as e:
+            log.warning("WebSocket send failed (client may have disconnected): %s", e)
 
     async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
         """Wait for user approval on a tool call."""

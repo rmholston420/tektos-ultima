@@ -50,6 +50,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from tektos.utils.db_utils import escape_sql_identifier
+
 log = logging.getLogger(__name__)
 
 
@@ -258,9 +260,10 @@ class SchemaEvolutionEngine:
             ]
 
             for table_name in table_names:
+                safe_name = escape_sql_identifier(table_name)
                 # Get columns
                 columns = []
-                for col_data in conn.execute(f"PRAGMA table_info({table_name})").fetchall():
+                for col_data in conn.execute(f"PRAGMA table_info({safe_name})").fetchall():
                     columns.append(
                         ColumnInfo(
                             cid=col_data[0],
@@ -274,11 +277,11 @@ class SchemaEvolutionEngine:
 
                 # Get indexes
                 indexes = [
-                    row[1] for row in conn.execute(f"PRAGMA index_list({table_name})").fetchall()
+                    row[1] for row in conn.execute(f"PRAGMA index_list({safe_name})").fetchall()
                 ]
 
                 # Get row count
-                row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                row_count = conn.execute(f"SELECT COUNT(*) FROM {safe_name}").fetchone()[0]
 
                 tables[table_name] = TableInfo(
                     name=table_name,
