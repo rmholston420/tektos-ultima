@@ -327,12 +327,15 @@ class RuntimeSDK:
         - Full agent loop: LLM → tools → LLM → ... until no tool_calls
         """
         _completed_tools: set[str] = set()  # guard against double-emit (bug #3)
+        self._loop_monitor.reset()  # Reset timer for each new prompt
+        print(f"[SDK] Starting _stream_llm for session {session.id[:8]}")
 
         # Build conversation history
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
+        print(f"[SDK] Messages: {len(messages)}, model: {self._llm_model}")
 
         turn = 0  # 1-indexed, checked by loop_safety_monitor
         while True:
@@ -344,6 +347,7 @@ class RuntimeSDK:
             )
 
             if not safety_report.is_safe():
+                print(f"[SDK] Loop safety triggered")
                 log.warning(
                     f"Loop safety triggered in {session.id[:8]}: "
                     f"state={safety_report.state.value} "
@@ -373,6 +377,7 @@ class RuntimeSDK:
 
             try:
                 # Build payload
+                print(f"[SDK] Building payload for session {session.id[:8]}")
                 payload = {
                     "model": self._llm_model,
                     "messages": messages,
@@ -390,7 +395,9 @@ class RuntimeSDK:
                     json=payload,
                     headers={"Content-Type": "application/json"},
                 )
+                # Check status immediately (don't wait for full response for streaming)
                 resp.raise_for_status()
+                print(f"[SDK] LLM request started for session {session.id[:8]}")
 
                 # Parse SSE stream
                 current_text = ""
@@ -400,6 +407,8 @@ class RuntimeSDK:
                 saw_text = False
                 tool_calls_this_turn: list[dict] = []
 
+                print(f"[SDK] Starting SSE stream for session {session.id[:8]}")
+                line_count = 0
                 async for line in resp.aiter_lines():
                     if not line or line == "data: [DONE]":
                         continue
@@ -420,11 +429,21 @@ class RuntimeSDK:
                     content = delta.get("content")
                     tool_calls = delta.get("tool_calls", [])
 
-                    # Handle text content
+                    # Handle text content (regular content)
                     if content:
                         saw_text = True
                         current_text += content
                         await on_event(assistant_delta(session.id, content))
+
+                    # Handle reasoning/thinking content (Qwen3.6, deep thinking models)
+                    # Treat reasoning_content as the main response when no regular content
+                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                    if reasoning:
+                        if not content:
+                            # No regular content — treat reasoning as the main response
+                            saw_text = True
+                            current_text += reasoning
+                        await on_event(assistant_delta(session.id, f"[thinking: {reasoning}]"))
 
                     # Handle tool calls
                     for tc in tool_calls:

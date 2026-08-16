@@ -25,10 +25,10 @@ from tektos.gui.debugger import (
     CDPSessionManager,
     ConsoleEntry,
     DebugSession,
+    GuiTestRecorder,
     NetworkRequest,
     PerformanceMetrics,
     ScreenshotResult,
-    TestRecorder,
 )
 
 # ---------------------------------------------------------------------------
@@ -373,9 +373,9 @@ class TestCDPSessionManager:
 # ---------------------------------------------------------------------------
 
 
-class TestTestRecorder:
+class TestGuiTestRecorder:
     def test_init_creates_dirs(self, tmp_path):
-        recorder = TestRecorder(
+        recorder = GuiTestRecorder(
             output_dir=str(tmp_path / "traces"),
             screenshot_dir=str(tmp_path / "screenshots"),
         )
@@ -383,13 +383,13 @@ class TestTestRecorder:
         assert (tmp_path / "screenshots").is_dir()
 
     def test_init_no_args(self, tmp_path):
-        recorder = TestRecorder(output_dir=str(tmp_path / "o"), screenshot_dir=str(tmp_path / "s"))
+        recorder = GuiTestRecorder(output_dir=str(tmp_path / "o"), screenshot_dir=str(tmp_path / "s"))
         assert recorder.sessions == []
         assert recorder.output_dir == tmp_path / "o"
         assert recorder.screenshot_dir == tmp_path / "s"
 
     def test_record_session(self, tmp_path):
-        recorder = TestRecorder(
+        recorder = GuiTestRecorder(
             output_dir=str(tmp_path / "traces"),
             screenshot_dir=str(tmp_path / "screenshots"),
         )
@@ -399,7 +399,7 @@ class TestTestRecorder:
         assert (tmp_path / "traces" / "session_sess-1.json").exists()
 
     def test_record_multiple_sessions(self, tmp_path):
-        recorder = TestRecorder(
+        recorder = GuiTestRecorder(
             output_dir=str(tmp_path / "traces"),
             screenshot_dir=str(tmp_path / "screenshots"),
         )
@@ -409,7 +409,7 @@ class TestTestRecorder:
         assert len(recorder.sessions) == 3
 
     def test_generate_report_empty(self):
-        recorder = TestRecorder(output_dir="/tmp", screenshot_dir="/tmp")
+        recorder = GuiTestRecorder(output_dir="/tmp", screenshot_dir="/tmp")
         report = recorder.generate_report()
         assert "# GUI Test Report" in report
         assert "**Sessions:** 0" in report
@@ -417,7 +417,7 @@ class TestTestRecorder:
         assert "**Total Errors:** 0" in report
 
     def test_generate_report_with_sessions(self, tmp_path):
-        recorder = TestRecorder(
+        recorder = GuiTestRecorder(
             output_dir=str(tmp_path / "traces"),
             screenshot_dir=str(tmp_path / "screenshots"),
         )
@@ -437,7 +437,7 @@ class TestTestRecorder:
         assert "- error2" in report
 
     def test_save_report(self, tmp_path):
-        recorder = TestRecorder(
+        recorder = GuiTestRecorder(
             output_dir=str(tmp_path / "traces"),
             screenshot_dir=str(tmp_path / "screenshots"),
         )
@@ -449,7 +449,7 @@ class TestTestRecorder:
         assert "GUI Test Report" in content
 
     def test_save_report_custom_name(self, tmp_path):
-        recorder = TestRecorder(
+        recorder = GuiTestRecorder(
             output_dir=str(tmp_path / "traces"),
             screenshot_dir=str(tmp_path / "screenshots"),
         )

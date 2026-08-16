@@ -11,7 +11,7 @@ from src.tektos.plugin import Plugin, PluginConfig, PluginRegistry
 # Test fixtures — concrete plugin implementations
 # ---------------------------------------------------------------------------
 
-class TestPlugin(Plugin):
+class TestPluginImpl(Plugin):
     """Concrete plugin for testing."""
 
     @property
@@ -27,7 +27,7 @@ class TestPlugin(Plugin):
 # PluginConfig
 # ---------------------------------------------------------------------------
 
-class TestPluginConfig:
+class TestPluginImplConfig:
     """Tests for PluginConfig defaults and behavior."""
 
     def test_default_config(self):
@@ -43,38 +43,38 @@ class TestPluginConfig:
 # Plugin base class
 # ---------------------------------------------------------------------------
 
-class TestPluginBase:
+class TestPluginImplBase:
     """Tests for the Plugin ABC."""
 
     def test_concrete_plugin_creation(self):
-        plugin = TestPlugin()
+        plugin = TestPluginImpl()
         assert plugin.name == "test_plugin"
         assert plugin.version == "1.0.0"
 
     def test_plugin_default_config(self):
-        plugin = TestPlugin()
+        plugin = TestPluginImpl()
         assert isinstance(plugin.config, PluginConfig)
         assert plugin.config.enabled is True
 
     def test_plugin_set_config(self):
-        plugin = TestPlugin()
+        plugin = TestPluginImpl()
         plugin.config = PluginConfig(enabled=False)
         assert plugin.config.enabled is False
 
     def test_plugin_repr(self):
-        plugin = TestPlugin()
+        plugin = TestPluginImpl()
         assert repr(plugin) == "<Plugin test_plugin v1.0.0>"
 
     @pytest.mark.asyncio
     async def test_plugin_initialize(self):
         """Default initialize() should be a no-op."""
-        plugin = TestPlugin()
+        plugin = TestPluginImpl()
         await plugin.initialize()  # Should not raise
 
     @pytest.mark.asyncio
     async def test_plugin_shutdown(self):
         """Default shutdown() should be a no-op."""
-        plugin = TestPlugin()
+        plugin = TestPluginImpl()
         await plugin.shutdown()  # Should not raise
 
 
@@ -82,7 +82,7 @@ class TestPluginBase:
 # PluginRegistry
 # ---------------------------------------------------------------------------
 
-class TestPluginRegistry:
+class TestPluginImplRegistry:
     """Tests for PluginRegistry lifecycle."""
 
     def setup_method(self):
@@ -92,16 +92,16 @@ class TestPluginRegistry:
         assert self.registry.list_plugins() == []
 
     def test_register_single_plugin(self):
-        plugin = TestPlugin()
+        plugin = TestPluginImpl()
         self.registry.register(plugin)
         assert len(self.registry.list_plugins()) == 1
         assert self.registry.get("test_plugin") is plugin
 
     def test_register_duplicate_raises(self):
-        plugin = TestPlugin()
+        plugin = TestPluginImpl()
         self.registry.register(plugin)
         with pytest.raises(ValueError, match="already registered"):
-            self.registry.register(TestPlugin())
+            self.registry.register(TestPluginImpl())
 
     def test_get_nonexistent(self):
         assert self.registry.get("nonexistent") is None
@@ -179,7 +179,7 @@ class TestPluginRegistry:
 # Plugin ABC enforcement
 # ---------------------------------------------------------------------------
 
-class TestPluginABCEncforcement:
+class TestPluginImplABCEncforcement:
     """Tests that Plugin cannot be instantiated without abstract methods."""
 
     def test_cannot_instantiate_abstract(self):

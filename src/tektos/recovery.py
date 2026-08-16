@@ -371,8 +371,14 @@ class AutoRecoveryManager:
             raise
 
     async def _load_state(self) -> Optional[dict[str, Any]]:
-        """Load last known state from file or Hindsight."""
-        # 1. Try file first
+        """Load last known state from file or Hindsight.
+        
+        Priority:
+        1. Local file (if available)
+        2. Hindsight recall (cross-session persistence)
+        3. None (no state found)
+        """
+        # 1. Try file first (local, fast)
         if self.state_file and self.state_file.exists():
             try:
                 state_text = self.state_file.read_text()
@@ -389,9 +395,30 @@ class AutoRecoveryManager:
             except Exception as e:
                 logger.warning("Failed to load state from file: %s", e)
 
-        # 2. Try Hindsight (via hindsight_recall)
-        # This would be called from the agent, not from this module directly
-        # The agent injects state into the system prompt
+        # 2. Try Hindsight for cross-session persistence
+        try:
+            from tektos.memory.hindsight_client import (
+                HindsightClient,
+                HindsightConfig,
+            )
+            
+            client = HindsightClient(
+                config=HindsightConfig(base_url="http://127.0.0.1:9177")
+            )
+            results = client.recall(
+                query="LAST_KNOWN_STATE tektos progress objective",
+                limit=1,
+            )
+            
+            if results.get("results"):
+                latest = results["results"][0]
+                md_text = latest.get("text", "")
+                if md_text and "LAST_KNOWN_STATE" in md_text:
+                    from tektos.runtime.state_manager import LastKnownState
+                    state = LastKnownState.from_markdown(md_text, "tektos")
+                    return state.to_dict() | {"source": "hindsight"}
+        except Exception as e:
+            logger.warning("Failed to load state from Hindsight: %s", e)
 
         return None
 

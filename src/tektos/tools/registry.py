@@ -90,8 +90,9 @@ class ToolRegistry:
         self._tools[tool.name] = tool
         log.info(f"Registered tool: {tool.name}")
         if self._event_bus:
-            self._event_bus.emit(
+            self._event_bus.publish(
                 "tool.registered",
+                "tool-registry",
                 {"tool_name": tool.name, "enabled": tool.enabled},
             )
 
@@ -101,7 +102,11 @@ class ToolRegistry:
             del self._tools[tool_name]
             log.info(f"Unregistered tool: {tool_name}")
             if self._event_bus:
-                self._event_bus.emit("tool.unregistered", {"tool_name": tool_name})
+                self._event_bus.publish(
+                    "tool.unregistered",
+                    "tool-registry",
+                    {"tool_name": tool_name},
+                )
             return True
         return False
 
@@ -134,8 +139,9 @@ class ToolRegistry:
             tool.last_call = time.time()
             elapsed = time.time() - start
             if self._event_bus:
-                self._event_bus.emit(
+                self._event_bus.publish(
                     "tool.executed",
+                    "tool-registry",
                     {
                         "tool_name": tool_name,
                         "duration": round(elapsed, 3),
@@ -147,8 +153,9 @@ class ToolRegistry:
             elapsed = time.time() - start
             log.error(f"Tool {tool_name} failed: {exc}", exc_info=True)
             if self._event_bus:
-                self._event_bus.emit(
+                self._event_bus.publish(
                     "tool.executed",
+                    "tool-registry",
                     {
                         "tool_name": tool_name,
                         "duration": round(elapsed, 3),

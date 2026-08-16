@@ -151,7 +151,7 @@ class MockSchemaEngine:
         return []
 
     def introspect(self):
-        return {}
+        return {"version": 1, "schema": {"tables": {}}, "evolution_history": []}
 
 
 class MockSelfImprovementAdapter:

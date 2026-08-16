@@ -501,23 +501,30 @@ class TelegramGateway:
 
         # --- Callback queries (inline buttons) ---
         @self.dp.callback_query()
-        async def handle_callback(callback: CallbackQuery) -> None:
-            """Handle inline button callbacks."""
-            data = callback.data
+        async def _handle_callback_query(callback: CallbackQuery) -> None:
+            """Handle inline button callbacks via the public handle_callback method."""
+            await self.handle_callback(callback)
 
-            # Permission callbacks
-            if data.startswith("permission:"):
-                parts = data.split(":")
-                if len(parts) >= 3:
-                    _, _, tool_id = parts[0], parts[1], parts[2]
-                    action = parts[3] if len(parts) > 3 else ""
+    async def handle_callback(self, callback: CallbackQuery) -> None:
+        """Handle inline button callbacks.
 
-                    if action == "approve":
-                        await self._handle_tool_approval(callback, tool_id, True)
-                    elif action == "reject":
-                        await self._handle_tool_approval(callback, tool_id, False)
+        Routes permission:approve/reject callbacks to _handle_tool_approval.
+        """
+        data = callback.data
 
-            await callback.answer()
+        # Permission callbacks
+        if data.startswith("permission:"):
+            parts = data.split(":")
+            if len(parts) >= 3:
+                tool_id = parts[2]
+                action = parts[3] if len(parts) > 3 else ""
+
+                if action == "approve":
+                    await self._handle_tool_approval(callback, tool_id, True)
+                elif action == "reject":
+                    await self._handle_tool_approval(callback, tool_id, False)
+
+        await callback.answer()
 
     async def _send_prompt_to_session(
         self,

@@ -200,7 +200,9 @@ class TestToolRegistryEventBus:
             received.append((event_type, payload))
 
         registry = ToolRegistry()
-        registry._event_bus = type("FakeBus", (), {"emit": lambda _, et, pl: on_event(et, pl)})()
+        registry._event_bus = type("FakeBus", (), {
+            "publish": lambda _, et, sid, pl: on_event(et, pl),
+        })()
 
         registry.register(ToolDefinition(
             name="event-tool",
@@ -214,7 +216,9 @@ class TestToolRegistryEventBus:
 
     def test_unregister_event_emitted(self, registry):
         received = []
-        registry._event_bus = type("FakeBus", (), {"emit": lambda _, et, pl: received.append((et, pl))})()
+        registry._event_bus = type("FakeBus", (), {
+            "publish": lambda _, et, sid, pl: received.append((et, pl)),
+        })()
         registry.register(ToolDefinition(
             name="unreg-event",
             description="To be unregistered",

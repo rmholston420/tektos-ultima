@@ -262,10 +262,10 @@ class CDPSessionManager:
 
 
 # ---------------------------------------------------------------------------
-# Test Recorder
+# GUI Test Recorder (not a pytest test class — renamed to avoid collection)
 # ---------------------------------------------------------------------------
 
-class TestRecorder:
+class GuiTestRecorder:
     """Records test sessions with screenshots and traces."""
 
     def __init__(self, output_dir: str, screenshot_dir: str):
@@ -353,7 +353,7 @@ class ChromeDebugger:
         self._network_requests: list[NetworkRequest] = []
         self._session_start: Optional[float] = None
         self._current_session: Optional[DebugSession] = None
-        self._recorder = TestRecorder(
+        self._recorder = GuiTestRecorder(
             output_dir=self.config.trace_dir,
             screenshot_dir=self.config.screenshot_dir,
         )

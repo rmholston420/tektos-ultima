@@ -14,6 +14,9 @@ Validates:
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 import time
 from datetime import datetime, timezone
 
@@ -27,8 +30,38 @@ from src.tektos.memory.memory_system import (
     TierConfig,
 )
 
+# ── Isolated DB Fixture ──────────────────────────────────────────────────────
 
-# ── Sensory Memory Tests ─────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _isolated_db(monkeypatch):
+    """Each test gets an isolated SQLite DB to prevent cross-test data pollution."""
+    td = tempfile.mkdtemp()
+    db_path = os.path.join(td, "test.db")
+
+    from src.tektos.memory import memory_system as ms_mod
+    from src.tektos.memory.persistence import MemoryPersistence as RealPersistence
+
+    class IsolatedPersistence:
+        def __init__(self):
+            self._real = RealPersistence(db_path)
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+        def __setattr__(self, name, value):
+            if name.startswith("_real"):
+                object.__setattr__(self, name, value)
+            else:
+                self._real.__setattr__(name, value)
+
+    monkeypatch.setattr(ms_mod, "_MemoryPersistence", IsolatedPersistence)
+    yield
+    try:
+        shutil.rmtree(td, ignore_errors=True)
+    except Exception:
+        pass
+
+
+# ── Sensory Memory Tests ────────────────────────────────────────────────────
 
 
 class TestSensoryMemory:
@@ -46,14 +79,12 @@ class TestSensoryMemory:
         ms = MemorySystem()
         entry = ms.add_sensory("important event", attention_score=0.9)
         assert entry.tier == MemoryTier.SENSORY
-        # Should have been promoted to working
         assert len(ms.tiers[MemoryTier.WORKING]) == 1
 
     def test_sensory_low_attention_stays(self) -> None:
         ms = MemorySystem()
         entry = ms.add_sensory("background noise", attention_score=0.3)
         assert entry.tier == MemoryTier.SENSORY
-        # Should NOT have been promoted to working
         assert len(ms.tiers[MemoryTier.WORKING]) == 0
 
     def test_sensory_capacity_enforced(self) -> None:
@@ -79,7 +110,7 @@ class TestSensoryMemory:
         assert entry.where == "frontend"
 
 
-# ── Working Memory Tests ─────────────────────────────────────────────────
+# ── Working Memory Tests ────────────────────────────────────────────────────
 
 
 class TestWorkingMemory:
@@ -93,21 +124,18 @@ class TestWorkingMemory:
 
     def test_millers_law_capacity(self) -> None:
         ms = MemorySystem()
-        # Default capacity is 7 (Miller's Law)
         assert ms.configs[MemoryTier.WORKING].capacity == 7
 
     def test_working_high_significance_promotes(self) -> None:
         ms = MemorySystem()
         entry = ms.add_working_memory("important decision", significance=0.8)
         assert entry.tier == MemoryTier.WORKING
-        # Should have been promoted to long-term (threshold is 0.6)
         assert len(ms.tiers[MemoryTier.LONG_TERM]) == 1
 
     def test_working_low_significance_stays(self) -> None:
         ms = MemorySystem()
         entry = ms.add_working_memory("temporary thought", significance=0.3)
         assert entry.tier == MemoryTier.WORKING
-        # Should NOT have been promoted to long-term
         assert len(ms.tiers[MemoryTier.LONG_TERM]) == 0
 
     def test_working_capacity_enforced(self) -> None:
@@ -130,7 +158,7 @@ class TestWorkingMemory:
         assert entry.what == "spec_gen"
 
 
-# ── Long-Term Memory Tests ───────────────────────────────────────────────
+# ── Long-Term Memory Tests ──────────────────────────────────────────────────
 
 
 class TestLongTermMemory:
@@ -140,7 +168,7 @@ class TestLongTermMemory:
         ms = MemorySystem()
         entry = ms.add_long_term_memory("system principle")
         assert entry.tier == MemoryTier.LONG_TERM
-        assert entry.expires_at is None  # No expiry
+        assert entry.expires_at is None
         assert len(ms.tiers[MemoryTier.LONG_TERM]) == 1
 
     def test_long_term_no_decay(self) -> None:
@@ -163,7 +191,7 @@ class TestLongTermMemory:
         assert entry.why == "system governance"
 
 
-# ── Procedural Memory Tests ──────────────────────────────────────────────
+# ── Procedural Memory Tests ─────────────────────────────────────────────────
 
 
 class TestProceduralMemory:
@@ -202,7 +230,7 @@ class TestProceduralMemory:
         assert entry.why == "security"
 
 
-# ── Transfer Mechanism Tests ─────────────────────────────────────────────
+# ── Transfer Mechanism Tests ────────────────────────────────────────────────
 
 
 class TestTransferMechanisms:
@@ -248,7 +276,7 @@ class TestTransferMechanisms:
         assert len(ms.transfer_history) == 2
 
 
-# ── Decay Tests ──────────────────────────────────────────────────────────
+# ── Decay Tests ──────────────────────────────────────────────────────────────
 
 
 class TestDecay:
@@ -256,16 +284,16 @@ class TestDecay:
 
     def test_sensory_decay_removes_expired(self) -> None:
         ms = MemorySystem()
-        ms.configs[MemoryTier.SENSORY].decay_seconds = 0.1  # Very fast
+        ms.configs[MemoryTier.SENSORY].decay_seconds = 0.1
         ms.add_sensory("fading memory")
-        time.sleep(0.2)  # Wait for decay
+        time.sleep(0.2)
         removed = ms.decay_sensory()
         assert removed == 1
         assert len(ms.tiers[MemoryTier.SENSORY]) == 0
 
     def test_working_decay_removes_expired(self) -> None:
         ms = MemorySystem()
-        ms.configs[MemoryTier.WORKING].decay_seconds = 0.1  # Very fast
+        ms.configs[MemoryTier.WORKING].decay_seconds = 0.1
         ms.add_working_memory("fading thought")
         time.sleep(0.2)
         removed = ms.decay_working()
@@ -294,14 +322,14 @@ class TestDecay:
         ms.add_sensory("new memory")
         time.sleep(0.2)
         removed = ms.decay_sensory()
-        assert removed >= 1  # At least the old one decayed
-        assert len(ms.tiers[MemoryTier.SENSORY]) >= 0  # May have more
+        assert removed >= 1
+        assert len(ms.tiers[MemoryTier.SENSORY]) >= 0
 
     def test_working_memory_auto_transfers_on_high_significance(self) -> None:
         ms = MemorySystem()
         ms.add_working_memory("important", significance=0.8)
         assert len(ms.tiers[MemoryTier.WORKING]) == 1
-        assert len(ms.tiers[MemoryTier.LONG_TERM]) == 1  # Auto-transferred
+        assert len(ms.tiers[MemoryTier.LONG_TERM]) == 1
         assert len(ms.transfer_history) == 1
 
     def test_working_memory_stays_on_low_significance(self) -> None:
@@ -311,7 +339,7 @@ class TestDecay:
         assert len(ms.tiers[MemoryTier.LONG_TERM]) == 0
 
 
-# ── Novelty Tests ────────────────────────────────────────────────────────
+# ── Novelty Tests ───────────────────────────────────────────────────────────
 
 
 class TestNovelty:
@@ -338,17 +366,9 @@ class TestNovelty:
         assert ms.tiers[MemoryTier.SENSORY][0].is_novel is True
 
     def test_novelty_requires_bicameral_tension(self) -> None:
-        """Novelty generation requires cross-hemispheric tension.
-
-        A system with only left hemisphere (purely operative) cannot
-        generate novelty. A system with only right hemisphere (purely
-        speculative) cannot encode novelty. True creativity emerges
-        from the tension between the two.
-        """
+        """Novelty generation requires cross-hemispheric tension."""
         ms = MemorySystem()
-        # Left hemisphere (operative)
         ms.add_working_memory("execution plan", hemisphere=Hemisphere.LEFT)
-        # Right hemisphere (speculative)
         ms.add_working_memory("creative vision", hemisphere=Hemisphere.RIGHT, is_novel=True, novelty_score=0.9)
         balance = ms.get_hemisphere_balance()
         assert balance["left"] == 1
@@ -366,7 +386,7 @@ class TestNovelty:
         assert min(scores) == 0.3
 
 
-# ── Bicameral Tests ──────────────────────────────────────────────────────
+# ── Bicameral Tests ─────────────────────────────────────────────────────────
 
 
 class TestBicameral:
@@ -401,7 +421,7 @@ class TestBicameral:
         assert balance["right"] == 0
 
 
-# ── Summary Tests ────────────────────────────────────────────────────────
+# ── Summary Tests ───────────────────────────────────────────────────────────
 
 
 class TestSummary:
@@ -410,21 +430,17 @@ class TestSummary:
     def test_get_summary(self) -> None:
         ms = MemorySystem()
         ms.add_sensory("s1")
-        # add_sensory with default attention_score=1.0 auto-transfers to working (>= 0.8 threshold)
-        # So working starts with 1 item from the transfer
         ms.add_working_memory("w1")
         ms.add_long_term_memory("l1")
         ms.add_procedural_memory("p1")
         summary = ms.get_summary()
         assert summary["sensory_count"] == 1
-        # Working has 2: transferred from sensory + explicitly added
         assert summary["working_count"] >= 2
         assert summary["long_term_count"] == 1
         assert summary["procedural_count"] == 1
 
     def test_summary_with_novelty(self) -> None:
         ms = MemorySystem()
-        # Use low attention to avoid auto-transfer to working memory
         ms.add_sensory("novel", attention_score=0.5, is_novel=True, novelty_score=0.8)
         summary = ms.get_summary()
         assert summary["novelty_count"] == 1
@@ -436,7 +452,7 @@ class TestSummary:
         assert summary["transfer_count"] == 1
 
 
-# ── Integration Tests ────────────────────────────────────────────────────
+# ── Integration Tests ───────────────────────────────────────────────────────
 
 
 class TestMemorySystemIntegration:
@@ -446,34 +462,28 @@ class TestMemorySystemIntegration:
         """Sensory → Working → Long-term → Procedural pipeline."""
         ms = MemorySystem()
 
-        # 1. Sensory input (high attention → auto-transfers to working)
         ms.add_sensory("new error pattern: JSON malformed", attention_score=0.95)
         assert len(ms.tiers[MemoryTier.SENSORY]) == 1
-        assert len(ms.tiers[MemoryTier.WORKING]) == 1  # Auto-transferred
+        assert len(ms.tiers[MemoryTier.WORKING]) == 1
 
-        # 2. Working memory (significant) — working now has 2 items
-        # (1 auto-transferred + 1 explicitly added). Promote the explicit one.
         ms.add_working_memory("process error pattern", significance=0.8, hemisphere=Hemisphere.LEFT)
-        assert len(ms.tiers[MemoryTier.LONG_TERM]) == 1  # Auto-promoted
+        assert len(ms.tiers[MemoryTier.LONG_TERM]) == 1
 
-        # 3. Long-term (encoded as skill)
         long_term_content = ms.tiers[MemoryTier.LONG_TERM][0].content
         ms.add_procedural_memory(long_term_content, skill_id="skill-json-robust")
         assert len(ms.tiers[MemoryTier.PROCEDURAL]) == 1
 
-        # 4. Verify full pipeline
         summary = ms.get_summary()
         assert summary["sensory_count"] == 1
-        assert summary["working_count"] >= 1  # At least the auto-transferred one
+        assert summary["working_count"] >= 1
         assert summary["long_term_count"] == 1
         assert summary["procedural_count"] == 1
-        assert len(ms.transfer_history) >= 1  # At least 1 transfer occurred
+        assert len(ms.transfer_history) >= 1
 
     def test_5w1h_full_flow(self) -> None:
         """All W5H1M fields present throughout the pipeline."""
         ms = MemorySystem()
 
-        # Add sensory with full W5H1M
         ms.add_sensory(
             "LLM returned invalid JSON",
             who="S1 Coding Agent",
@@ -493,15 +503,12 @@ class TestMemorySystemIntegration:
         """All tiers enforce their capacity limits."""
         ms = MemorySystem()
 
-        # Sensory capacity
         ms.configs[MemoryTier.SENSORY].capacity = 3
         for i in range(3):
             ms.add_sensory(f"s{i}")
         with pytest.raises(ValueError):
             ms.add_sensory("overflow")
 
-        # Working capacity — clear sensory auto-transfers first
-        # (each add_sensory auto-transfers to working with default attention_score=1.0)
         ms.tiers[MemoryTier.WORKING].clear()
         ms.configs[MemoryTier.WORKING].capacity = 2
         for i in range(2):
@@ -512,10 +519,8 @@ class TestMemorySystemIntegration:
     def test_novelty_requires_attention(self) -> None:
         """Novelty is only detected in high-attention sensory memories."""
         ms = MemorySystem()
-        # Low attention → not novel
         ms.add_sensory("background", attention_score=0.3)
         assert ms.tiers[MemoryTier.SENSORY][0].is_novel is False
-        # High attention → novel
         ms.add_sensory("foreground", attention_score=0.95)
         assert ms.tiers[MemoryTier.SENSORY][1].is_novel is True
 

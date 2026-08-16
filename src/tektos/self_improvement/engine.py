@@ -280,9 +280,65 @@ class SelfImprovementAdapter:
     # ── Experience Buffer ────────────────────────────────────────────────
 
     def _save_experience(self, record: ExperienceRecord) -> None:
-        """Append experience record to JSONL file."""
+        """Append experience record to JSONL file and Hindsight.
+        
+        Dual persistence: local JSONL for fast access + Hindsight for
+        cross-session semantic search.
+        """
+        # 1. Save to local JSONL file (fast, always available)
         with open(self.experience_db, "a") as f:
             f.write(record.to_json() + "\n")
+        
+        # 2. Persist to Hindsight for cross-session persistence
+        self._save_to_hindsight(record)
+
+    def _save_to_hindsight(self, record: ExperienceRecord) -> None:
+        """Persist experience record to Hindsight for cross-session memory.
+        
+        Creates a searchable, semantically indexed fact from the experience
+        that can be recalled by query across sessions.
+        """
+        try:
+            from tektos.memory.hindsight_client import (
+                HindsightClient,
+                HindsightConfig,
+            )
+            
+            # Build searchable text from the experience record
+            parts = [
+                f"Session {record.session_id}: {record.task}",
+                f"Model: {record.model_used}",
+                f"Result: {'SUCCESS' if record.success else 'FAILED'}",
+                f"Tests: {record.tests_passed}/{record.tests_total}",
+                f"Score: {record.evaluation_score:.2f}",
+                f"Time: {record.wall_time_seconds:.0f}s",
+            ]
+            
+            if record.lessons:
+                parts.append(f"Lessons: {'; '.join(record.lessons[:3])}")
+            if record.what_worked:
+                parts.append(f"What worked: {'; '.join(record.what_worked[:3])}")
+            if record.what_failed:
+                parts.append(f"What failed: {'; '.join(record.what_failed[:3])}")
+            if record.what_to_avoid:
+                parts.append(f"Avoid: {'; '.join(record.what_to_avoid[:3])}")
+            if record.recommendations:
+                parts.append(f"Recommendations: {'; '.join(record.recommendations[:3])}")
+            
+            content = "\n".join(parts)
+            
+            client = HindsightClient(
+                config=HindsightConfig(base_url="http://127.0.0.1:9177")
+            )
+            client.retain(
+                content=content,
+                context=f"self-improvement:{record.model_used}:{record.task[:50]}",
+                tags=["tektos", "self-improvement", "experience", 
+                      "success" if record.success else "failure",
+                      record.model_used],
+            )
+        except Exception as e:
+            logger.warning("Failed to persist experience to Hindsight: %s", e)
 
     def get_experience(self, top_k: int = 10) -> list[ExperienceRecord]:
         """Load recent experience records."""

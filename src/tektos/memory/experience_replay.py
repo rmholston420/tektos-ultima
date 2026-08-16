@@ -19,9 +19,12 @@ The spiral staircase.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
@@ -108,6 +111,7 @@ class ExperienceReplay:
         self._max_records = max_records
         self._max_age_hours = max_age_hours
         self._min_confidence = min_confidence_for_storage
+        self._hindsight_enabled = True
 
     def store(
         self,
@@ -151,7 +155,37 @@ class ExperienceReplay:
         while len(self._records) > self._max_records:
             self._records.pop(0)
 
+        # Persist to Hindsight for cross-session persistence
+        self._persist_to_hindsight(record)
+
         return record
+
+    def _persist_to_hindsight(self, record: ExperienceRecord) -> None:
+        """Persist an experience record to Hindsight for cross-session memory."""
+        try:
+            from tektos.memory.hindsight_client import (
+                HindsightClient,
+                HindsightConfig,
+            )
+            
+            insight_label = f"[{record.insight_type}] {record.guidance[:200]}"
+            if record.what_happened:
+                insight_label += f"\nContext: {record.what_happened[:300]}"
+            if record.tags:
+                insight_label += f"\nTags: {', '.join(record.tags)}"
+            if record.cycle_id:
+                insight_label += f"\nCycle: {record.cycle_id}"
+            
+            client = HindsightClient(
+                config=HindsightConfig(base_url="http://127.0.0.1:9177")
+            )
+            client.retain(
+                content=insight_label,
+                context=f"experience-replay:{record.context}",
+                tags=["tektos", "experience-replay", "self-improvement"] + (record.tags or []),
+            )
+        except Exception as e:
+            log.warning("Failed to persist experience to Hindsight: %s", e)
 
     def store_from_synthesis(
         self,

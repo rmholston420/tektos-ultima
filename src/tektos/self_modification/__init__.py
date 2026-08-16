@@ -7,14 +7,13 @@ Modules:
 
 from __future__ import annotations
 
-from .self_test_expander import DiffScope, SelfTestExpander, TestGenerationPlan
-from .self_gui_expander import GUIChange, GUIExpansionPlan, SelfGUIExpander
+from .self_test_expander import DiffScope, SelfTestExpander, TestPlanData
 
 __all__ = [
     "SelfTestExpander",
     "SelfGUIExpander",
     "DiffScope",
-    "TestGenerationPlan",
+    "TestPlanData",
     "GUIChange",
     "GUIExpansionPlan",
 ]

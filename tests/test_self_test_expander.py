@@ -8,7 +8,7 @@ import pytest
 from src.tektos.self_modification.self_test_expander import (
     DiffScope,
     SelfTestExpander,
-    TestGenerationPlan,
+    TestPlanData,
 )
 
 
@@ -60,9 +60,9 @@ class TestDiffScope:
 
 # ── TestGenerationPlan ──────────────────────────────────────────────────────
 
-class TestTestGenerationPlan:
+class TestTestPlanData:
     def test_defaults(self):
-        plan = TestGenerationPlan(
+        plan = TestPlanData(
             module_path="tektos.existing",
             file_path="/path/to/existing.py",
             tests_to_create=["TestNewClass"],
@@ -213,7 +213,7 @@ class TestExistingClass:
 class TestSelfTestExpanderGenerateTestFile:
     def test_generate_basic_test_file(self, expander):
         """Test generation of a basic test file."""
-        plan = TestGenerationPlan(
+        plan = TestPlanData(
             module_path="tektos.embedder",
             file_path="/path/to/embedder.py",
             tests_to_create=["TestEmbedderClient"],
@@ -226,7 +226,7 @@ class TestSelfTestExpanderGenerateTestFile:
 
     def test_generate_multiple_test_classes(self, expander):
         """Test generation with multiple test classes."""
-        plan = TestGenerationPlan(
+        plan = TestPlanData(
             module_path="tektos.embedder",
             file_path="/path/to/embedder.py",
             tests_to_create=["TestEmbedderClient", "TestEmbeddingResult"],

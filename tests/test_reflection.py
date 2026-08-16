@@ -12,12 +12,49 @@ Validates:
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
+
+import pytest
+
 from src.tektos.memory.memory_system import (
     Hemisphere,
     MemorySystem,
     MemoryTier,
 )
 from src.tektos.memory.reflection_engine import ReflectionEngine
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(monkeypatch):
+    """Isolated DB for each test."""
+    td = tempfile.mkdtemp()
+    db_path = os.path.join(td, "test.db")
+
+    from src.tektos.memory import persistence as _persistence_mod
+    from src.tektos.memory.persistence import MemoryPersistence as RealPersistence
+
+    class IsolatedPersistence:
+        def __init__(self):
+            self._real = RealPersistence(db_path)
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+        def __setattr__(self, name, value):
+            if name.startswith("_real"):
+                object.__setattr__(self, name, value)
+            else:
+                self._real.__setattr__(name, value)
+
+    # Patch in both persistence and memory_system modules
+    monkeypatch.setattr(_persistence_mod, "MemoryPersistence", IsolatedPersistence)
+    from src.tektos.memory import memory_system as ms_mod
+    monkeypatch.setattr(ms_mod, "_MemoryPersistence", IsolatedPersistence)
+    yield
+    try:
+        shutil.rmtree(td, ignore_errors=True)
+    except Exception:
+        pass
 
 
 # ── Reflection Engine Tests ────────────────────────────────────────────────

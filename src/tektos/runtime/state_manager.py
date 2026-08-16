@@ -16,10 +16,13 @@ Format:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -327,16 +330,69 @@ class StateManager:
         return state
 
     def _load_from_hindsight(self) -> LastKnownState | None:
-        """Load state from Hindsight memory."""
-        # This will be implemented via hindsight_recall in the agent
-        # For now, return None
-        return None
+        """Load state from Hindsight memory via recall API."""
+        try:
+            from tektos.memory.hindsight_client import (
+                HindsightClient,
+                HindsightConfig,
+            )
+            client = HindsightClient(
+                config=HindsightConfig(base_url="http://127.0.0.1:9177")
+            )
+            results = client.recall(
+                query=f"LAST_KNOWN_STATE project:{self.project} progress",
+                limit=1,
+            )
+            if not results.get("results"):
+                return None
+            # Take the most recent result
+            latest = results["results"][0]
+            md_text = latest.get("text", "")
+            if md_text and "LAST_KNOWN_STATE" in md_text:
+                return LastKnownState.from_markdown(md_text, self.project)
+            return None
+        except Exception as e:
+            log.warning("Failed to load from Hindsight: %s", e)
+            return None
 
     def _save_to_hindsight(self, state: LastKnownState) -> None:
-        """Save state to Hindsight memory."""
-        # This will be implemented via hindsight_retain in the agent
-        # Format: concise summary + full MD as attachment
-        pass
+        """Save state to Hindsight memory via retain API.
+        
+        Saves both a concise summary and full markdown as a single fact
+        with tags for searchability.
+        """
+        try:
+            from tektos.memory.hindsight_client import (
+                HindsightClient,
+                HindsightConfig,
+            )
+            md = state.to_markdown()
+            # Create a concise summary for the retain payload
+            summary_lines = [
+                f"Project: {self.project}",
+                f"Session: {state.session_id or 'N/A'}",
+                f"Objective: {state.objective}",
+                f"Progress: {state.progress} ({state.completion_pct}%)",
+                f"Timestamp: {state.timestamp}",
+            ]
+            if state.next_steps:
+                summary_lines.append(f"Next Steps: {'; '.join(state.next_steps[:3])}")
+            if state.blockers:
+                summary_lines.append(f"Blockers: {'; '.join(state.blockers[:3])}")
+            
+            summary = "\n".join(summary_lines)
+            
+            client = HindsightClient(
+                config=HindsightConfig(base_url="http://127.0.0.1:9177")
+            )
+            client.retain(
+                content=md,
+                context=f"last-known-state:{self.project}",
+                tags=["tektos", "state-persistence", self.project, "auto-save"],
+            )
+            log.info("Saved state to Hindsight for project %s", self.project)
+        except Exception as e:
+            log.warning("Failed to save to Hindsight: %s", e)
 
 
 def create_default_state(project: str) -> LastKnownState:

@@ -39,8 +39,8 @@ class DiffScope:
 
 
 @dataclass
-class TestGenerationPlan:
-    """Plan for test generation/extension."""
+class TestPlanData:
+    """Plan for test generation/extension (renamed from TestGenerationPlan to avoid pytest collection)."""
     module_path: str
     file_path: str
     tests_to_create: list[str] = field(default_factory=list)  # new test class/function names
@@ -97,18 +97,18 @@ class SelfTestExpander:
 
         return scopes
 
-    def generate_plan(self, scopes: list[DiffScope]) -> list[TestGenerationPlan]:
+    def generate_plan(self, scopes: list[DiffScope]) -> list[TestPlanData]:
         """Create a test generation plan for each changed scope."""
-        plans: list[TestGenerationPlan] = []
+        plans: list[TestPlanData] = []
         for scope in scopes:
             plan = self._create_plan_for_scope(scope)
             if plan.tests_to_create or plan.tests_to_expand:
                 plans.append(plan)
         return plans
 
-    def _create_plan_for_scope(self, scope: DiffScope) -> TestGenerationPlan:
+    def _create_plan_for_scope(self, scope: DiffScope) -> TestPlanData:
         """Create a test plan for a specific changed module."""
-        plan = TestGenerationPlan(
+        plan = TestPlanData(
             module_path=scope.module_path,
             file_path=scope.file_path,
         )

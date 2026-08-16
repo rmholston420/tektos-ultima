@@ -484,9 +484,15 @@ async def get_schema():
     """Get current schema version and table structure."""
     if not schema_engine:
         return {"error": "Schema evolution engine not initialized"}
+    introspection = schema_engine.introspect()
+    evolution_history = schema_engine.get_evolution_history()
+    si_metrics = self_improvement.get_learning_metrics() if self_improvement else {"total_tasks": 0}
     return {
         "version": schema_engine.get_current_version(),
         "schema": schema_engine.get_schema(),
+        "evolution_history": evolution_history,
+        "introspection": introspection,
+        "self_improvement": si_metrics,
     }
 
 
