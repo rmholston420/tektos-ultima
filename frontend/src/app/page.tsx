@@ -35,17 +35,21 @@ const DynamicLogsPanel = dynamic(() => import("@/components/panels/LogsPanel").t
 const DynamicSchedulingPanel = dynamic(() => import("@/components/panels/SchedulingPanel").then((m) => m.SchedulingPanel), { ssr: false });
 const DynamicSettingsPanel = dynamic(() => import("@/components/panels/SettingsPanel").then((m) => m.SettingsPanel), { ssr: false });
 const DynamicNervousSystemPanel = dynamic(() => import("@/components/panels/NervousSystemPanel").then((m) => m.NervousSystemPanel), { ssr: false });
+const DynamicToolsPanel = dynamic(() => import("@/components/panels/ToolsPanel").then((m) => m.ToolsPanel), { ssr: false });
+const DynamicMetabolismPanel = dynamic(() => import("@/components/panels/MetabolismPanel").then((m) => m.MetabolismPanel), { ssr: false });
 
 // ---------------------------------------------------------------------------
 // Page types
 // ---------------------------------------------------------------------------
 
 type PageType = "chat" | "dashboard";
-type DashboardTab = "overview" | "nervous" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings";
+type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings";
 
 const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "overview", label: "Overview", icon: "◈" },
   { id: "nervous", label: "Nervous System", icon: "⚡" },
+  { id: "tools", label: "Tools", icon: "🔧" },
+  { id: "metabolism", label: "Metabolism", icon: "♻" },
   { id: "graph", label: "System Graph", icon: "⬡" },
   { id: "telemetry", label: "Telemetry", icon: "◉" },
   { id: "router", label: "Router", icon: "⊘" },
@@ -363,6 +367,8 @@ export default function App() {
     const tabMap: Record<DashboardTab, () => React.ReactNode> = {
       overview: () => <DynamicSystemDashboard />,
       nervous: () => <DynamicNervousSystemPanel />,
+      tools: () => <DynamicToolsPanel />,
+      metabolism: () => <DynamicMetabolismPanel />,
       graph: () => <DynamicBiologicalGraph />,
       telemetry: () => <DynamicTelemetryPanel />,
       router: () => <DynamicModelRouterPanel />,

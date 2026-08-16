@@ -42,6 +42,9 @@ log = _log.getLogger("tektos.main")
 # ---------------------------------------------------------------------------
 
 memory_system: Any = None
+_tool_registry: Any = None
+_mcp_client: Any = None
+_metabolism: Any = None
 
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
 from tektos.protocol.envelope import (
@@ -135,7 +138,23 @@ async def lifespan(app: _FastAPI):
 
     log.info("Event bus + state machine initialized (nervous system)")
 
-    # 9. Start runtime SDK
+    # 9. Initialize tool registry (replaces hardcoded TOOLS_SCHEMA)
+    from tektos.tools.registry import ToolRegistry, MCPClient
+    from tektos.providers.sandbox_provider import SandboxProvider
+    global _tool_registry, _mcp_client
+    _sandbox = SandboxProvider()
+    _tool_registry = ToolRegistry(event_bus=_event_bus)
+    _tool_registry.load_built_in(_sandbox)
+    _mcp_client = MCPClient(registry=_tool_registry)
+    log.info("Tool registry initialized with built-in tools")
+
+    # 10. Initialize metabolism engine (resource monitoring + context budget)
+    from tektos.metabolism import MetabolismEngine
+    global _metabolism
+    _metabolism = MetabolismEngine(event_bus=_event_bus, max_tokens=262144)
+    log.info("Metabolism engine initialized (VRAM + context budget + power)")
+
+    # 11. Start runtime SDK
     await runtime_sdk.start()
 
     # 9. Initialize vision client (optional — only if VISION_LLM_URL is set)
@@ -335,6 +354,125 @@ async def delete_memory(tier: str, entry_id: str):
 
     deleted = fn(entry_id)
     return {"deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# REST API — Tools
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tools")
+async def list_tools(enabled_only: bool = True):
+    """List all registered tools."""
+    if not _tool_registry:
+        return {"error": "Tool registry not initialized"}
+    return _tool_registry.list_tools(enabled_only=enabled_only)
+
+
+@app.get("/api/tools/schema")
+async def get_tools_schema():
+    """Get all enabled tools as OpenAI-compatible function schema."""
+    if not _tool_registry:
+        return {"error": "Tool registry not initialized"}
+    return {"tools": _tool_registry.to_tools_schema()}
+
+
+@app.post("/api/tools/register")
+async def register_tool(req: dict):
+    """Register a new tool at runtime."""
+    if not _tool_registry:
+        return {"error": "Tool registry not initialized"}
+    from tektos.tools.registry import ToolDefinition
+    tool = ToolDefinition(
+        name=req["name"],
+        description=req["description"],
+        parameters=req["parameters"],
+        handler=lambda p: f"Tool {req['name']} executed",  # placeholder
+    )
+    _tool_registry.register(tool)
+    return {"status": "registered", "name": tool.name}
+
+
+@app.post("/api/tools/{tool_name}/enable")
+async def enable_tool(tool_name: str):
+    """Enable a disabled tool."""
+    if not _tool_registry:
+        return {"error": "Tool registry not initialized"}
+    tool = _tool_registry.get(tool_name)
+    if not tool:
+        raise _HTTPException(status_code=404, detail=f"Unknown tool: {tool_name}")
+    tool.enabled = True
+    return {"status": "enabled", "name": tool_name}
+
+
+@app.post("/api/tools/{tool_name}/disable")
+async def disable_tool(tool_name: str):
+    """Disable a tool."""
+    if not _tool_registry:
+        return {"error": "Tool registry not initialized"}
+    tool = _tool_registry.get(tool_name)
+    if not tool:
+        raise _HTTPException(status_code=404, detail=f"Unknown tool: {tool_name}")
+    tool.enabled = False
+    return {"status": "disabled", "name": tool_name}
+
+
+@app.post("/api/tools/{tool_name}/execute")
+async def execute_tool(tool_name: str, req: dict):
+    """Execute a tool with given parameters."""
+    if not _tool_registry:
+        return {"error": "Tool registry not initialized"}
+    result = _tool_registry.execute(tool_name, req)
+    return {"result": result}
+
+
+@app.get("/api/mcp/status")
+async def get_mcp_status():
+    """Get MCP client connection status."""
+    if not _mcp_client:
+        return {"connected": False, "url": None}
+    return {
+        "connected": _mcp_client._server_url is not None,
+        "url": _mcp_client._server_url,
+        "imported_count": _mcp_client._imported_count,
+    }
+
+
+@app.post("/api/mcp/connect")
+async def connect_mcp(req: dict):
+    """Connect to an MCP server and import its tools."""
+    if not _mcp_client:
+        return {"error": "MCP client not initialized"}
+    result = _mcp_client.connect(req.get("url", ""), req.get("transport", "http"))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# REST API — Metabolism
+# ---------------------------------------------------------------------------
+
+@app.get("/api/metabolism")
+async def get_metabolism():
+    """Get full metabolism assessment: GPU, system, context, health."""
+    if not _metabolism:
+        return {"error": "Metabolism engine not initialized"}
+    state = _metabolism.assess_health()
+    return state.to_dict()
+
+
+@app.get("/api/metabolism/context")
+async def get_context_budget():
+    """Get current context budget status."""
+    if not _metabolism:
+        return {"error": "Metabolism engine not initialized"}
+    return _metabolism.get_stats()
+
+
+@app.get("/api/metabolism/history")
+async def get_metabolism_history(limit: int = 100):
+    """Get recent metabolism metrics history."""
+    if not _metabolism:
+        return {"error": "Metabolism engine not initialized"}
+    return _metabolism.get_metrics_history(limit)
 
 
 @app.get("/api/models")

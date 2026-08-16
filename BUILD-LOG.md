@@ -97,4 +97,8 @@
 
 ### Git
 - VS1: `74191eb`
-- VS2: pending commit
+- VS2: `8224a48`
+- VS3: `d26e8f0`
+- VS4: `c5f32c5`
+- VS5: `b4c8d2e`
+- VS6: committed
