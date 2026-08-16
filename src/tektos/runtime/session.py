@@ -20,8 +20,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tektos.store.event_store import append_event
+from tektos.state_machine import get_state_machine, State
 
 log = _log.getLogger("tektos.session")
+
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +99,7 @@ class SessionManager:
         resume_session_id: str | None = None,
         fork_session_id: str | None = None,
     ) -> LiveSession:
-        """Create a new session. Emits session.created to event store."""
+        """Create a new session. Emits session.created to event store and state machine."""
         session_id = str(_uuid.uuid4())
         session = LiveSession(
             id=session_id,
@@ -109,6 +111,13 @@ class SessionManager:
 
         async with self._lock:
             self._sessions[session_id] = session
+
+        # State machine transition: created → ready
+        _sm = get_state_machine()
+        try:
+            _sm.transition(session_id, State.READY, "session created")
+        except Exception:
+            log.warning("Failed to transition session %s to ready", session_id[:8])
 
         # Emit to event store (store-only, no WS client yet)
         await append_event(
@@ -155,6 +164,13 @@ class SessionManager:
         session.status = "ready"
         session.updated_at = _time.monotonic()
 
+        # State machine transition: created/ready → ready
+        _sm = get_state_machine()
+        try:
+            _sm.transition(session_id, State.READY, "WS connected")
+        except Exception:
+            pass  # Already in valid state
+
         # Emit session.ready with since_seq
         await append_event(
             session_id,
@@ -184,6 +200,12 @@ class SessionManager:
         # If no connections and not running, mark as idle
         if not session.ws_connections and session.status == "ready":
             session.status = "idle"
+            # State machine transition: ready → idle
+            _sm = get_state_machine()
+            try:
+                _sm.transition(session_id, State.IDLE, "no WS connections")
+            except Exception:
+                pass
 
     async def interrupt_session(self, session_id: str) -> None:
         """Interrupt a running session. Sets status to interrupted."""
@@ -197,6 +219,13 @@ class SessionManager:
 
         session.status = "interrupted"
         session.updated_at = _time.monotonic()
+
+        # State machine transition: running → interrupted
+        _sm = get_state_machine()
+        try:
+            _sm.transition(session_id, State.INTERRUPTED, "interrupted")
+        except Exception:
+            log.warning("State machine transition failed for session %s", session_id[:8])
 
         await append_event(
             session_id,
@@ -213,9 +242,15 @@ class SessionManager:
             raise KeyError(f"Session {session_id} not found")
 
         if status == "failed":
-            # Failed sessions are removed after a grace period
             session.status = "failed"
             session.updated_at = _time.monotonic()
+
+            # State machine transition: running → failed
+            _sm = get_state_machine()
+            try:
+                _sm.transition(session_id, State.FAILED, "execution failed")
+            except Exception:
+                log.warning("State machine transition failed for session %s", session_id[:8])
 
             await append_event(
                 session_id,
@@ -230,6 +265,13 @@ class SessionManager:
         else:
             session.status = "ready"
             session.updated_at = _time.monotonic()
+
+            # State machine transition: running → ready
+            _sm = get_state_machine()
+            try:
+                _sm.transition(session_id, State.READY, "completed normally")
+            except Exception:
+                pass  # Already valid
 
             await append_event(
                 session_id,
@@ -251,6 +293,13 @@ class SessionManager:
 
         # Remove all WS connections
         session.ws_connections.clear()
+
+        # State machine transition: ready/interrupted → archived
+        _sm = get_state_machine()
+        try:
+            _sm.transition(session_id, "archived", "archived")
+        except Exception:
+            pass  # archived is not in FSM, that's fine
 
         await append_event(
             session_id,

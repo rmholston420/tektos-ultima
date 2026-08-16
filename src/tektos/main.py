@@ -60,6 +60,8 @@ from tektos.store.event_store import (
     search_events,
 )
 from tektos.store.event_store import close as store_close
+from tektos.event_bus import get_event_bus
+from tektos.state_machine import get_state_machine, State
 
 session_manager: SessionManager
 runtime_sdk: RuntimeSDK
@@ -115,7 +117,23 @@ async def lifespan(app: _FastAPI):
         ws_event_emitter=lambda **kw: _emit_schema_event(**kw),
     )
 
-    # 8. Start runtime SDK
+    # 8. Initialize event bus + state machine (nervous system)
+    _event_bus = get_event_bus()
+    _state_machine = get_state_machine()
+
+    # Subscribe VSM layers to event bus
+    # S3 (Manager) monitors all state changes and warnings
+    _event_bus.subscribe("session.*", lambda e: log.debug(f"VSM S3 saw {e.event_type}"), "vsm_manager")
+    _event_bus.subscribe("resource.*", lambda e: log.info(f"VSM S3 resource warning: {e.payload}"), "vsm_manager")
+    _event_bus.subscribe("loop_safety.*", lambda e: log.warning(f"VSM S3 loop safety: {e.payload}"), "vsm_manager")
+    # S4 (Planner) monitors self_improvement events
+    _event_bus.subscribe("self_improvement.*", lambda e: log.debug(f"VSM S4 planning tick: {e.payload}"), "vsm_planner")
+    # S2 (Event Stream) records all events
+    _event_bus.subscribe("*", lambda e: log.debug(f"VSM S2 recorded {e.event_type}"), "vsm_event_stream")
+
+    log.info("Event bus + state machine initialized (nervous system)")
+
+    # 9. Start runtime SDK
     await runtime_sdk.start()
 
     # 9. Initialize vision client (optional — only if VISION_LLM_URL is set)
@@ -237,12 +255,16 @@ class ModelRequest(_BaseModel):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    _event_bus = get_event_bus()
+    _state_machine = get_state_machine()
     return {
         "ok": True,
         "protocol_version": PROTOCOL_VERSION,
         "llm_url": runtime_sdk._llm_base_url,
         "llm_model": runtime_sdk._llm_model,
         "active_sessions": len(session_manager._sessions),
+        "event_bus": _event_bus.get_stats(),
+        "state_machine": _state_machine.get_stats(),
     }
 
 

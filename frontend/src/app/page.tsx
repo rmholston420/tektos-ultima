@@ -34,16 +34,18 @@ const DynamicHooksPanel = dynamic(() => import("@/components/panels/HooksPanel")
 const DynamicLogsPanel = dynamic(() => import("@/components/panels/LogsPanel").then((m) => m.LogsPanel), { ssr: false });
 const DynamicSchedulingPanel = dynamic(() => import("@/components/panels/SchedulingPanel").then((m) => m.SchedulingPanel), { ssr: false });
 const DynamicSettingsPanel = dynamic(() => import("@/components/panels/SettingsPanel").then((m) => m.SettingsPanel), { ssr: false });
+const DynamicNervousSystemPanel = dynamic(() => import("@/components/panels/NervousSystemPanel").then((m) => m.NervousSystemPanel), { ssr: false });
 
 // ---------------------------------------------------------------------------
 // Page types
 // ---------------------------------------------------------------------------
 
 type PageType = "chat" | "dashboard";
-type DashboardTab = "overview" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings";
+type DashboardTab = "overview" | "nervous" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings";
 
 const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "overview", label: "Overview", icon: "◈" },
+  { id: "nervous", label: "Nervous System", icon: "⚡" },
   { id: "graph", label: "System Graph", icon: "⬡" },
   { id: "telemetry", label: "Telemetry", icon: "◉" },
   { id: "router", label: "Router", icon: "⊘" },
@@ -78,16 +80,20 @@ export default function App() {
   const [activeModel, setActiveModel] = useState("qwen3.6-35b-a3b-ud-q4_k_xl");
   const [visionAvailable, setVisionAvailable] = useState(false);
   const [visionModel, setVisionModel] = useState("");
-
   const streamBuffer = useRef("");
+  const hasAutoCreated = useRef(false);
+  const [hasHydrated, setHasHydrated] = useState(false);
 
   // -------------------------------------------------------------------
   // Connection management
   // -------------------------------------------------------------------
 
   useEffect(() => {
+    // Mark hydrated on first client render
+    setHasHydrated(true);
+
     protocolClient.onStateChange((state) => setConnectionState(state.state));
-    
+
     // Health check on mount
     let cancelled = false;
     const checkHealth = () => {
@@ -100,9 +106,9 @@ export default function App() {
         })
         .catch(() => { if (!cancelled) setConnectionState('disconnected'); });
     };
-    
+
     checkHealth();
-    
+
     // Check vision endpoint availability on mount
     const checkVision = () => {
       if (cancelled) return;
@@ -117,14 +123,14 @@ export default function App() {
         })
         .catch(() => {});
     };
-    
+
     checkVision();
-    
+
     // Periodic health check every 30s to keep UI accurate
     const interval = setInterval(checkHealth, 30000);
-    
+
     return () => { cancelled = true; protocolClient.disconnect(); clearInterval(interval); };
-  }, [protocolClient]);
+  }, [protocolClient, sessionStore]);
 
   // -------------------------------------------------------------------
   // Reconnect WS when session changes
@@ -228,7 +234,7 @@ export default function App() {
       if (!activeSession) return;
       setTranscriptEvents((prev) => [...prev, {
         type: "message", session_id: activeSession.id, seq: 0,
-        payload: { text: message }, timestamp: new Date().toISOString(),
+        payload: { text: message, isUserMessage: true }, timestamp: new Date().toISOString(),
       }]);
       protocolClient.sendPrompt(message, { model: activeSession.model, cwd: activeSession.cwd });
     },
@@ -356,6 +362,7 @@ export default function App() {
   const renderDashboardTab = useMemo(() => {
     const tabMap: Record<DashboardTab, () => React.ReactNode> = {
       overview: () => <DynamicSystemDashboard />,
+      nervous: () => <DynamicNervousSystemPanel />,
       graph: () => <DynamicBiologicalGraph />,
       telemetry: () => <DynamicTelemetryPanel />,
       router: () => <DynamicModelRouterPanel />,
@@ -433,7 +440,18 @@ export default function App() {
 
         {activePage === "chat" ? (
           <>
-            {showWelcome || !activeSession ? (
+            {!hasHydrated ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center max-w-lg px-6">
+                  <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-surface border border-border flex items-center justify-center animate-float">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                    </svg>
+                  </div>
+                  <h2 className="text-2xl font-semibold text-text-primary mb-3">Loading Tektos</h2>
+                </div>
+              </div>
+            ) : showWelcome || !activeSession ? (
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center max-w-lg px-6">
                   <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-surface border border-border flex items-center justify-center animate-float">
