@@ -219,12 +219,12 @@ function buildMessages(
         });
       }
     } else if (eventType === "message") {
-      // Generic message event (e.g., vision responses)
       const text = event.payload.text as string;
       if (text) {
+        const isUser = (event.payload as any).isUserMessage === true;
         messages.push({
           id: `msg-${event.seq}`,
-          type: "assistant",
+          type: isUser ? "user" : "assistant",
           content: text,
           timestamp: event.timestamp,
         });

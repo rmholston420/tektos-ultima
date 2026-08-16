@@ -10,7 +10,7 @@
 
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -54,45 +54,8 @@ const RECURRING_PRESETS = [
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export function SchedulingPanel() {
-  const [tasks, setTasks] = useState<ScheduledTask[]>([
-    {
-      id: "task-1",
-      title: "Daily State Backup",
-      message: "Save session state to persistent storage",
-      type: "recurring",
-      cron: "0 */15 * * *",
-      timezone: "UTC",
-      status: "active",
-      nextRun: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-      runsCompleted: 142,
-      createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-      id: "task-2",
-      title: "Weekly Report Generation",
-      message: "Generate system performance report",
-      type: "recurring",
-      cron: "0 9 * * 1",
-      timezone: "America/New_York",
-      status: "pending",
-      nextRun: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-      runsCompleted: 3,
-      createdAt: new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-      id: "task-3",
-      title: "Memory Optimization Run",
-      message: "Optimize working memory and prune old sessions",
-      type: "once",
-      timezone: "UTC",
-      status: "completed",
-      nextRun: undefined,
-      lastRun: new Date(Date.now() - 3600000).toISOString(),
-      runsCompleted: 1,
-      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    },
-  ]);
-
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newTask, setNewTask] = useState<Partial<ScheduledTask>>({
     type: "once",
@@ -103,6 +66,19 @@ export function SchedulingPanel() {
   const [timePreset, setTimePreset] = useState(0);
   const [recurringPreset, setRecurringPreset] = useState("");
   const [showSuccess, setShowSuccess] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/schedule")
+      .then((r) => r.json())
+      .then((data) => {
+        setTasks(Array.isArray(data) ? data : []);
+        setLoading(false);
+      })
+      .catch(() => {
+        setTasks([]);
+        setLoading(false);
+      });
+  }, []);
 
   const handleCreateTask = useCallback(() => {
     const task: ScheduledTask = {

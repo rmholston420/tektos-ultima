@@ -52,7 +52,8 @@ export class SessionStore {
   constructor(protocolClient: ProtocolClient) {
     this.protocolClient = protocolClient;
     this.setupProtocolListeners();
-    this.loadFromStorage();
+    // Don't load from localStorage in constructor — defer until after hydration
+    // to avoid SSR mismatch. Load lazily in getAll() or via syncSessions().
   }
 
   // ---------------------------------------------------------------------
@@ -113,7 +114,9 @@ export class SessionStore {
     }
 
     const data = await response.json();
-    const sessions = data.sessions.map((s: any) => this.normalizeSession(s));
+    // Backend returns an array directly, not { sessions: [...] }
+    const rawSessions = Array.isArray(data) ? data : (data.sessions ?? []);
+    const sessions = rawSessions.map((s: any) => this.normalizeSession(s));
     sessions.forEach((s: SessionSnapshot) => this.sessions.set(s.id, s));
     this.emit({ type: "synced", session_id: sessions[0]?.id });
 
@@ -345,6 +348,23 @@ export class SessionStore {
 
   getActiveSession(): SessionSnapshot | null {
     return this.getActiveSessions()[0] ?? null;
+  }
+
+  // ---------------------------------------------------------------------
+  // Sync from localStorage (call after hydration)
+  // ---------------------------------------------------------------------
+
+  async syncSessions(): Promise<void> {
+    if (typeof window === "undefined") return;
+    try {
+      const data = localStorage.getItem(this.storageKey);
+      if (data) {
+        const sessions: SessionSnapshot[] = JSON.parse(data);
+        sessions.forEach((s) => this.sessions.set(s.id, s));
+      }
+    } catch {
+      console.warn("Failed to sync sessions from localStorage");
+    }
   }
 
   // ---------------------------------------------------------------------

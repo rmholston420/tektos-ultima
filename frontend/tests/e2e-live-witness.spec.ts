@@ -14,7 +14,7 @@
 
 import { test, expect } from '@playwright/test';
 
-const FRONTEND = 'http://localhost:3004';
+const FRONTEND = 'http://localhost:3003';
 
 test.describe('Tektos Live Witness Demo', () => {
   test('witness Tektos solve a programming task end-to-end', async ({ page }) => {

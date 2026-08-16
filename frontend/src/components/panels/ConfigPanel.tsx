@@ -35,18 +35,7 @@ export function ConfigPanel() {
         setLoading(false);
       })
       .catch(() => {
-        setConfig([
-          { key: "default_model", value: "qwen3.6-35b-a3b", type: "string", description: "Default LLM model", sensitive: false },
-          { key: "context_window", value: "32000", type: "number", description: "Context window size in tokens", sensitive: false },
-          { key: "temperature", value: "0.7", type: "number", description: "Sampling temperature", sensitive: false },
-          { key: "max_tokens", value: "4096", type: "number", description: "Maximum generation tokens", sensitive: false },
-          { key: "auto_save", value: "true", type: "boolean", description: "Auto-save session state", sensitive: false },
-          { key: "llama_cpp_port", value: "8081", type: "number", description: "llama.cpp server port", sensitive: false },
-          { key: "embedder_port", value: "8090", type: "number", description: "Embedder server port", sensitive: false },
-          { key: "log_level", value: "INFO", type: "string", description: "Logging verbosity level", sensitive: false },
-          { key: "gpu_power_limit", value: "400", type: "number", description: "GPU power limit in watts", sensitive: false },
-          { key: "api_key_llama", value: "••••••••", type: "string", description: "LLM API key", sensitive: true },
-        ]);
+        setConfig([]);
         setLoading(false);
       });
   }, []);

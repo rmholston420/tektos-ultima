@@ -55,10 +55,16 @@ export function Sidebar({
   activePage,
   onNavigate,
 }: SidebarProps) {
+  const [hasMounted, setHasMounted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [showArchive, setShowArchive] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+
+  // Defer session loading until after hydration to avoid SSR mismatch
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
 
   // Derived state
   const sessions = useMemo(() => {
@@ -88,6 +94,17 @@ export function Sidebar({
       console.error("Failed to create session:", err);
     }
   };
+
+  // Load sessions from localStorage and backend on mount (after hydration)
+  useEffect(() => {
+    if (!hasMounted) return;
+
+    // First sync any sessions that were persisted to localStorage
+    sessionStore.syncSessions().catch(() => {});
+
+    // Then fetch latest from backend
+    sessionStore.getSessions().catch((err) => console.error("Failed to load sessions:", err));
+  }, [hasMounted, sessionStore]);
 
   const handleRename = async (sessionId: string) => {
     if (!renameValue.trim()) {
@@ -221,6 +238,7 @@ export function Sidebar({
           title="New session"
         >
           <PlusIcon className="w-4 h-4" />
+          <span className="sr-only">New Session</span>
         </button>
       </div>
 
@@ -291,54 +309,64 @@ export function Sidebar({
       {/* Session list or Archive */}
       {!showArchive ? (
         <div className="flex-1 overflow-y-auto px-2 py-2">
-          {activeSessions.length > 0 && (
-            <div className="mb-3">
-              <p className="px-2 mb-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">Active</p>
-              {activeSessions.map((session) => (
-                <SessionItem
-                  key={session.id}
-                  session={session}
-                  isActive={session.id === activeSessionId}
-                  renamingId={renamingId}
-                  renameValue={renameValue}
-                  setRenameValue={setRenameValue}
-                  onRenameSubmit={handleRename}
-                  onTag={handleTag}
-                  onFork={handleFork}
-                  onArchive={() => handleArchive(session.id)}
-                  onDelete={() => handleDelete(session.id)}
-                  onSelect={() => onSelectSession(session.id)}
-                />
-              ))}
+          {!hasMounted ? (
+            /* Skeleton placeholder — matches server render (empty state) */
+            <div className="px-4 py-8 text-center text-text-muted text-sm">
+              <div className="animate-pulse space-y-2">
+                <div className="h-4 bg-border rounded w-3/4 mx-auto" />
+                <div className="h-4 bg-border rounded w-1/2 mx-auto" />
+              </div>
             </div>
-          )}
-
-          {inactiveSessions.length > 0 && (
-            <div>
-              <p className="px-2 mb-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">History</p>
-              {inactiveSessions.map((session) => (
-                <SessionItem
-                  key={session.id}
-                  session={session}
-                  isActive={session.id === activeSessionId}
-                  renamingId={renamingId}
-                  renameValue={renameValue}
-                  setRenameValue={setRenameValue}
-                  onRenameSubmit={handleRename}
-                  onTag={handleTag}
-                  onFork={handleFork}
-                  onArchive={() => handleArchive(session.id)}
-                  onDelete={() => handleDelete(session.id)}
-                  onSelect={() => onSelectSession(session.id)}
-                />
-              ))}
-            </div>
-          )}
-
-          {sessions.length === 0 && (
+          ) : sessions.length === 0 ? (
             <div className="px-4 py-8 text-center text-text-muted text-sm">
               {searchQuery ? "No sessions match" : "No sessions yet"}
             </div>
+          ) : (
+            <>
+              {activeSessions.length > 0 && (
+                <div className="mb-3">
+                  <p className="px-2 mb-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">Active</p>
+                  {activeSessions.map((session) => (
+                    <SessionItem
+                      key={session.id}
+                      session={session}
+                      isActive={session.id === activeSessionId}
+                      renamingId={renamingId}
+                      renameValue={renameValue}
+                      setRenameValue={setRenameValue}
+                      onRenameSubmit={handleRename}
+                      onTag={handleTag}
+                      onFork={handleFork}
+                      onArchive={() => handleArchive(session.id)}
+                      onDelete={() => handleDelete(session.id)}
+                      onSelect={() => onSelectSession(session.id)}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {inactiveSessions.length > 0 && (
+                <div>
+                  <p className="px-2 mb-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">History</p>
+                  {inactiveSessions.map((session) => (
+                    <SessionItem
+                      key={session.id}
+                      session={session}
+                      isActive={session.id === activeSessionId}
+                      renamingId={renamingId}
+                      renameValue={renameValue}
+                      setRenameValue={setRenameValue}
+                      onRenameSubmit={handleRename}
+                      onTag={handleTag}
+                      onFork={handleFork}
+                      onArchive={() => handleArchive(session.id)}
+                      onDelete={() => handleDelete(session.id)}
+                      onSelect={() => onSelectSession(session.id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       ) : (
@@ -375,7 +403,9 @@ export function Sidebar({
         </div>
 
         <div className="flex items-center justify-between">
-          <span className="text-xs text-text-muted">{sessions.length} session{sessions.length !== 1 ? "s" : ""}</span>
+          <span className="text-xs text-text-muted">
+            {hasMounted ? `${sessions.length} session${sessions.length !== 1 ? "s" : ""}` : "0 sessions"}
+          </span>
           <button
             onClick={onToggleCollapsed}
             className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-all"
@@ -456,11 +486,11 @@ function SessionItem({
   }
 
   return (
-    <button
+    <div
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => { setIsHovering(false); setShowMenu(false); }}
       onClick={onSelect}
-      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all group"
+      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-all group cursor-pointer"
     >
       <div className={`w-1.5 h-1.5 rounded-full ${statusColor} flex-shrink-0`} />
 
@@ -489,26 +519,14 @@ function SessionItem({
           {session.is_archived ? (
             <ArchiveBoxIcon className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
           ) : (
-            <FolderIcon className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
+            <FolderOpenIcon className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
           )}
           <span className="flex-1 truncate">{session.title}</span>
-          <span className="text-xs text-text-muted">{formatDate(session.updated_at)}</span>
+          <span className="text-xs text-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
+            {formatDate(session.updated_at)}
+          </span>
         </>
       )}
-
-      {isHovering && (
-        <div className="flex-shrink-0 flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => onTag(session.id)} className="w-5 h-5 rounded-md flex items-center justify-center text-text-muted hover:text-accent hover:bg-surface-active transition-all" title="Tag">
-            <TagIcon className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={() => onFork(session)} className="w-5 h-5 rounded-md flex items-center justify-center text-text-muted hover:text-accent hover:bg-surface-active transition-all" title="Fork">
-            <DocumentDuplicateIcon className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={() => onDelete()} className="w-5 h-5 rounded-md flex items-center justify-center text-text-muted hover:text-status-error hover:bg-surface-active transition-all" title="Delete">
-            <TrashIcon className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-    </button>
+    </div>
   );
 }

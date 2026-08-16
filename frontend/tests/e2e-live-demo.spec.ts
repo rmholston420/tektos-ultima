@@ -9,11 +9,12 @@
 
 import { test, expect } from '@playwright/test';
 
-const FRONTEND = 'http://localhost:3004';
+const FRONTEND = 'http://localhost:3003';
 const BACKEND = 'http://localhost:8020';
 
 test.describe('Tektos Live Demo', () => {
-  test('demonstrates Tektos solving a programming task', async ({ page }) => {
+  test('demonstrates Tektos solving a programming task', async ({ page }, testInfo) => {
+    test.setTimeout(180000); // 3 min — LLM response can take a while
     console.log('🎬 Starting Tektos live demo...');
     
     // 1. Navigate to Tektos
@@ -76,14 +77,19 @@ Write the implementation to /home/rmholston/dev/tektos-ultima-v1/test_task_stack
     const startTime = Date.now();
     const maxWait = 120000; // 2 minutes max
     
-    // Poll for response
+    // Poll for response with progress logging
+    let attempts = 0;
     while (Date.now() - startTime < maxWait) {
       // Check for response text
       const bodyText = await page.locator('body').textContent();
-      if (bodyText && bodyText.length > 100 && !bodyText.includes(taskMessage)) {
+      if (bodyText && bodyText.length > 200 && !bodyText.includes(taskMessage)) {
         console.log('✅ Response received!');
         await page.screenshot({ path: 'test-results/tektos-response.png', fullPage: true });
         break;
+      }
+      attempts++;
+      if (attempts % 3 === 0) {
+        console.log(`⏳ Still processing... (${attempts * 5}s elapsed)`);
       }
       await page.waitForTimeout(5000);
     }
@@ -94,7 +100,8 @@ Write the implementation to /home/rmholston/dev/tektos-ultima-v1/test_task_stack
     console.log('🎬 Demo complete! Video recorded.');
   });
   
-  test('verifies task completion on backend', async () => {
+  test('verifies task completion on backend', async ({}, testInfo) => {
+    test.setTimeout(180000); // 3 min - needs time for first test to complete LLM task
     console.log('🔍 Verifying task execution...');
     
     // Give it time to process

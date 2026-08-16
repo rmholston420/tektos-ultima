@@ -35,15 +35,7 @@ export function SkillsPanel() {
         setLoading(false);
       })
       .catch(() => {
-        // Mock data for demo
-        setSkills([
-          { id: "1", name: "agent-loop-troubleshooting", category: "debugging", enabled: true, version: "1.0", description: "Fix agent loop tool execution issues", dependencies: [], usageCount: 47, lastUsed: "2026-08-14" },
-          { id: "2", name: "autonomous-ai-agents", category: "orchestration", enabled: true, version: "2.3", description: "Spawn and orchestrate autonomous coding agents", dependencies: [], usageCount: 128, lastUsed: "2026-08-14" },
-          { id: "3", name: "creative-illustrator", category: "creative", enabled: false, version: "1.1", description: "Generate ASCII art and illustrations", dependencies: [], usageCount: 12, lastUsed: "2026-08-10" },
-          { id: "4", name: "github-code-review", category: "development", enabled: true, version: "3.0", description: "Review PRs with automated analysis", dependencies: ["github-auth"], usageCount: 89, lastUsed: "2026-08-14" },
-          { id: "5", name: "obsidian-notes", category: "productivity", enabled: true, version: "1.5", description: "Read and create Obsidian vault notes", dependencies: [], usageCount: 34, lastUsed: "2026-08-13" },
-          { id: "6", name: "youtube-content", category: "media", enabled: true, version: "2.1", description: "Extract and analyze YouTube content", dependencies: [], usageCount: 56, lastUsed: "2026-08-12" },
-        ]);
+        setSkills([]);
         setLoading(false);
       });
   }, []);

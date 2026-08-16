@@ -37,12 +37,7 @@ export function KeysPanel() {
         setLoading(false);
       })
       .catch(() => {
-        setKeys([
-          { id: "1", name: "llama.cpp API", provider: "Custom", status: "active", created: "2026-08-01", expires: "2027-08-01", lastUsed: "2026-08-14", usageCount: 15847, masked: "sk-llama••••••••••••" },
-          { id: "2", name: "Embedder Service", provider: "Custom", status: "active", created: "2026-08-01", expires: "2027-08-01", lastUsed: "2026-08-14", usageCount: 3421, masked: "sk-emb•••••••••••" },
-          { id: "3", name: "Hindsight Memory", provider: "Custom", status: "active", created: "2026-08-10", expires: "2027-08-10", lastUsed: "2026-08-14", usageCount: 892, masked: "sk-hind•••••••••" },
-          { id: "4", name: "GitHub Token", provider: "GitHub", status: "active", created: "2026-07-15", expires: "2026-12-15", lastUsed: "2026-08-13", usageCount: 234, masked: "ghp•••••••••••••••" },
-        ]);
+        setKeys([]);
         setLoading(false);
       });
   }, []);

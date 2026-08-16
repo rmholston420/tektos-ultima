@@ -35,13 +35,7 @@ export function HooksPanel() {
         setLoading(false);
       })
       .catch(() => {
-        setHooks([
-          { id: "1", name: "auto-commit", trigger: "session.save", action: "git.commit", enabled: true, executions: 342, successRate: 99.1, lastExecution: "2026-08-14 10:30" },
-          { id: "2", name: "health-check", trigger: "timer.5m", action: "system.health", enabled: true, executions: 1247, successRate: 99.9, lastExecution: "2026-08-14 10:30" },
-          { id: "3", name: "backup-state", trigger: "session.save", action: "state.backup", enabled: true, executions: 342, successRate: 100, lastExecution: "2026-08-14 10:25" },
-          { id: "4", name: "notify-error", trigger: "error.critical", action: "telegram.alert", enabled: false, executions: 12, successRate: 100, lastExecution: "2026-08-10 14:22" },
-          { id: "5", name: "update-metrics", trigger: "timer.15m", action: "metrics.update", enabled: true, executions: 892, successRate: 98.5, lastExecution: "2026-08-14 10:15" },
-        ]);
+        setHooks([]);
         setLoading(false);
       });
   }, []);
