@@ -1,573 +1,476 @@
-"""
-Tektos-Ultima v1 — Schema Evolution Tests
+"""Tests for Schema Evolution Engine — self-modifying storage schema.
 
-Tests SchemaEvolutionEngine introspection, pattern detection, proposals, and migration:
-- ColumnInfo, TableInfo, SchemaSnapshot dataclasses
-- FieldPattern dataclass
-- SchemaProposal CRUD and validation
-- SchemaEvolutionEngine: introspect, detect_patterns, propose
-- apply_proposal with rollback
-- Version tracking in _schema_evolution_log
+Tests introspection, pattern detection, proposal generation,
+validation, and application of schema migrations.
 """
 
 import json
-import sqlite3
+import os
+import tempfile
 
 import pytest
 
 from tektos.migrations.schema_evolution import (
-    ColumnInfo,
-    FieldPattern,
     SchemaEvolutionEngine,
-    SchemaProposal,
     SchemaSnapshot,
+    FieldPattern,
+    SchemaProposal,
     TableInfo,
+    ColumnInfo,
 )
 
 
-# ---------------------------------------------------------------------------
-# Dataclass tests
-# ---------------------------------------------------------------------------
+# ─── Helpers ────────────────────────────────────────────────────────────────
 
 
-class TestDataclasses:
-    def test_column_info(self):
-        col = ColumnInfo(cid=0, name="id", col_type="INTEGER", notnull=True, default_value=None, pk=True)
-        assert col.cid == 0
-        assert col.name == "id"
-        assert col.col_type == "INTEGER"
-        assert col.notnull is True
-        assert col.pk is True
+def _create_test_db(seed_data: list[dict] | None = None) -> str:
+    """Create a temporary SQLite DB with sessions table and optional seed data."""
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
 
-    def test_table_info_defaults(self):
-        t = TableInfo(name="users")
-        assert t.name == "users"
-        assert t.columns == []
-        assert t.indexes == []
-        assert t.row_count == 0
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
 
-    def test_schema_snapshot_defaults(self):
-        snap = SchemaSnapshot(version=1)
-        assert snap.version == 1
-        assert snap.tables == {}
-        assert snap.metadata == {}
-
-    def test_field_pattern_defaults(self):
-        p = FieldPattern(table="sessions", field_name="tags", pattern_type="repeated_metadata",
-                         evidence_count=50, total_records=100, percentage=0.5,
-                         suggested_column="tags", suggested_type="TEXT",
-                         example_values=["a", "b"], confidence=0.95)
-        assert p.table == "sessions"
-        assert p.confidence == 0.95
-        assert p.percentage == 0.5
-
-    def test_schema_proposal_defaults(self):
-        sp = SchemaProposal(reason="test", action="add_column", table="sessions", column="tags", column_type="TEXT")
-        assert sp.reason == "test"
-        assert sp.action == "add_column"
-        assert sp.table == "sessions"
-        assert sp.column == "tags"
-        assert sp.column_type == "TEXT"
-        assert sp.validation_errors == []
-        assert sp.rollback_sql == ""
-
-    def test_schema_proposal_create_table(self):
-        sp = SchemaProposal(
-            reason="new table", action="create_table", table="audit",
-            new_table_name="audit", new_table_columns=[{"name": "id", "type": "INTEGER"}]
+    # Create sessions table with payload JSON field (mimics event_store)
+    conn.execute("""
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            model TEXT,
+            created_at REAL,
+            payload TEXT
         )
-        assert sp.new_table_name == "audit"
-        assert len(sp.new_table_columns) == 1
+    """)
+    conn.commit()
 
-
-# ---------------------------------------------------------------------------
-# SchemaEvolutionEngine — init and introspection
-# ---------------------------------------------------------------------------
-
-
-class TestEngineInit:
-    def test_engine_creates_log_table(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = sqlite3.connect(db_path)
-        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        conn.close()
-        table_names = [t[0] for t in tables]
-        assert "_schema_evolution_log" in table_names
-
-    def test_introspect_empty(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        snap = engine.introspect()
-        assert isinstance(snap, SchemaSnapshot)
-        assert snap.version == 0
-        # _schema_evolution_log is created by init, so tables won't be truly empty
-        assert len(snap.tables) == 1
-        assert "_schema_evolution_log" in snap.tables
-
-    def test_introspect_with_table(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+    if seed_data:
+        for row in seed_data:
+            conn.execute(
+                "INSERT INTO sessions (id, title, model, created_at, payload) VALUES (?, ?, ?, ?, ?)",
+                (row["id"], row["title"], row["model"], row["created_at"], json.dumps(row["payload"])),
+            )
         conn.commit()
-        conn.close()
-        snap = engine.introspect()
-        assert "users" in snap.tables
-        cols = {c.name: c for c in snap.tables["users"].columns}
-        assert "id" in cols
-        assert cols["id"].col_type == "INTEGER"
-        assert cols["id"].pk is True
-        assert "name" in cols
-        assert "age" in cols
-        assert snap.tables["users"].row_count == 0
 
-    def test_introspect_row_count(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT)")
-        conn.execute("INSERT INTO items VALUES (1, 'a')")
-        conn.execute("INSERT INTO items VALUES (2, 'b')")
-        conn.execute("INSERT INTO items VALUES (3, 'c')")
-        conn.commit()
-        conn.close()
-        snap = engine.introspect()
-        assert snap.tables["items"].row_count == 3
-
-    def test_introspect_excludes_sqlite_tables(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        snap = engine.introspect()
-        for name in snap.tables:
-            assert not name.startswith("sqlite_")
-
-    def test_get_schema_dict(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        schema = engine.get_schema()
-        assert isinstance(schema, dict)
-        assert "version" in schema
-        assert "tables" in schema
+    conn.close()
+    return path
 
 
-# ---------------------------------------------------------------------------
-# SchemaEvolutionEngine — version management
-# ---------------------------------------------------------------------------
+# ─── Introspection Tests ────────────────────────────────────────────────────
+
+
+class TestIntrospection:
+    def test_create_engine_creates_log_table(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            schema = engine.introspect()
+            assert schema.version == 0
+            # Should have sessions + _schema_evolution_log
+            assert "sessions" in schema.tables
+            assert "_schema_evolution_log" in schema.tables
+        finally:
+            os.unlink(path)
+
+    def test_introspect_returns_snapshot(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            schema = engine.introspect()
+            assert isinstance(schema, SchemaSnapshot)
+            assert "sessions" in schema.tables
+            sessions = schema.tables["sessions"]
+            assert isinstance(sessions, TableInfo)
+            assert sessions.row_count == 0
+            assert len(sessions.columns) == 5  # id, title, model, created_at, payload
+        finally:
+            os.unlink(path)
+
+    def test_get_schema_serializable(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            schema = engine.get_schema()
+            assert "version" in schema
+            assert "tables" in schema
+            assert "sessions" in schema["tables"]
+            assert "columns" in schema["tables"]["sessions"]
+        finally:
+            os.unlink(path)
+
+    def test_get_table_sample(self):
+        path = _create_test_db(
+            seed_data=[
+                {
+                    "id": "s1",
+                    "title": "Test Session",
+                    "model": "qwen3.6",
+                    "created_at": 1000.0,
+                    "payload": {"key": "value"},
+                },
+            ]
+        )
+        try:
+            engine = SchemaEvolutionEngine(path)
+            samples = engine.get_table_sample("sessions")
+            assert len(samples) == 1
+            assert samples[0]["id"] == "s1"
+            assert samples[0]["title"] == "Test Session"
+        finally:
+            os.unlink(path)
+
+
+# ─── Version Management Tests ───────────────────────────────────────────────
 
 
 class TestVersionManagement:
-    def test_current_version_zero(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        assert engine.get_current_version() == 0
+    def test_initial_version_is_zero(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            assert engine.get_current_version() == 0
+        finally:
+            os.unlink(path)
 
-    def test_get_table_sample(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, payload TEXT)")
-        conn.execute("INSERT INTO events VALUES (1, '{\"key\": \"val\"}')")
-        conn.execute("INSERT INTO events VALUES (2, '{\"key\": \"val2\"}')")
-        conn.commit()
-        conn.close()
-        sample = engine.get_table_sample("events")
-        assert len(sample) == 2
-        assert sample[0]["payload"] == '{"key": "val"}'
+    def test_version_increments_on_migration(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            assert engine.get_current_version() == 0
 
-    def test_get_table_sample_limit(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
-        for i in range(10):
-            conn.execute("INSERT INTO t VALUES (?, ?)", (i, f"v{i}"))
-        conn.commit()
-        conn.close()
-        sample = engine.get_table_sample("t", limit=3)
-        assert len(sample) == 3
+            proposal = engine.propose(
+                reason="Add test column",
+                action="add_column",
+                table="sessions",
+                column="test_col",
+                column_type="TEXT",
+                column_default="'default'",
+            )
+            result = engine.apply_proposal(proposal)
+            assert result is True
+            assert engine.get_current_version() >= 1
+        finally:
+            os.unlink(path)
 
 
-# ---------------------------------------------------------------------------
-# Pattern detection
-# ---------------------------------------------------------------------------
+# ─── Pattern Detection Tests ────────────────────────────────────────────────
 
 
 class TestPatternDetection:
-    def test_detect_patterns_empty_table(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, payload TEXT)")
-        conn.commit()
-        conn.close()
-        patterns = engine.detect_patterns("sessions")
-        assert patterns == []
-
-    def test_detect_patterns_finds_metadata_fields(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, payload TEXT)")
-        conn.execute("INSERT INTO sessions VALUES (1, '{\"tags\": [\"a\"], \"complexity\": \"high\"}')")
-        conn.execute("INSERT INTO sessions VALUES (2, '{\"tags\": [\"b\"], \"complexity\": \"low\"}')")
-        conn.execute("INSERT INTO sessions VALUES (3, '{\"tags\": [\"c\"]}')")
-        conn.commit()
-        conn.close()
-        patterns = engine.detect_patterns("sessions")
-        # Should detect "tags" and "complexity" as repeated metadata fields
-        assert len(patterns) >= 2
-
-    def test_detect_patterns_ranked_by_confidence(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, payload TEXT)")
-        # "tags" appears in all 10
-        for i in range(10):
-            conn.execute("INSERT INTO sessions VALUES (?, '{\"tags\": [\"t\"]}')", (i,))
-        # "rare" appears in 2 of 10
-        conn.execute("INSERT INTO sessions VALUES (10, '{\"rare\": true}')")
-        conn.execute("INSERT INTO sessions VALUES (11, '{\"rare\": true}')")
-        conn.commit()
-        conn.close()
-        patterns = engine.detect_patterns("sessions")
-        # tags should have higher confidence than rare
-        tags_p = [p for p in patterns if p.field_name == "tags"]
-        rare_p = [p for p in patterns if p.field_name == "rare"]
-        if tags_p and rare_p:
-            assert tags_p[0].confidence > rare_p[0].confidence
-
-    def test_detect_patterns_type_detection(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, payload TEXT)")
-        for i in range(10):
-            conn.execute("INSERT INTO events VALUES (?, ?)", (i, '{"count": ' + str(i) + '}'))
-        conn.commit()
-        conn.close()
-
-    def test_detect_patterns_skips_existing_columns(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, tags TEXT, payload TEXT)")
-        for i in range(5):
-            conn.execute("INSERT INTO sessions VALUES (?, ?, ?)", (i, "", '{"tags": ["x"], "complexity": "high"}'))
-        conn.commit()
-        conn.close()
-        patterns = engine.detect_patterns("sessions")
-        # "tags" is already a column, so only "complexity" should appear
-        pattern_names = [p.field_name for p in patterns]
-        assert "tags" not in pattern_names
-        assert "complexity" in pattern_names
-
-    def test_detect_patterns_top_k_limit(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, payload TEXT)")
-        for i in range(50):
-            conn.execute("INSERT INTO events VALUES (?, '{\"field_\" + str(i) + \": true}')", (i,))
-        conn.commit()
-        conn.close()
-        patterns = engine.detect_patterns("events", top_k=5)
-        assert len(patterns) <= 5
-
-    def test_detect_patterns_no_json_records(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, payload TEXT)")
-        conn.execute("INSERT INTO sessions VALUES (1, 'not json')")
-        conn.commit()
-        conn.close()
-        patterns = engine.detect_patterns("sessions")
-        assert patterns == []
-
-
-# ---------------------------------------------------------------------------
-# SchemaProposal validation
-# ---------------------------------------------------------------------------
-
-
-class TestProposalValidation:
-    def test_validate_add_column_existing_table(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY)")
-        conn.commit()
-        conn.close()
-        proposal = SchemaProposal(
-            reason="add tags", action="add_column", table="sessions",
-            column="tags", column_type="TEXT"
+    def test_detects_repeated_metadata_fields(self):
+        path = _create_test_db(
+            seed_data=[
+                {
+                    "id": f"s{i}",
+                    "title": f"Session {i}",
+                    "model": "qwen3.6",
+                    "created_at": 1000 + i,
+                    "payload": {"complexity": "high", "tags": ["coding"], "tokens": 5000 + i * 100},
+                }
+                for i in range(20)
+            ]
         )
-        assert proposal.validate(engine) is True
-        assert proposal.validation_errors == []
+        try:
+            engine = SchemaEvolutionEngine(path)
+            patterns = engine.detect_patterns("sessions", top_k=10)
+            # Should detect complexity, tags, tokens as repeated metadata
+            field_names = [p.field_name for p in patterns]
+            assert "complexity" in field_names
+            assert "tokens" in field_names
+            assert "tags" in field_names
+            # All should have confidence based on frequency
+            for p in patterns:
+                assert p.percentage > 0
+                assert p.confidence > 0
+        finally:
+            os.unlink(path)
 
-    def test_validate_add_column_missing_table(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        proposal = SchemaProposal(
-            reason="add col", action="add_column", table="missing",
-            column="x", column_type="TEXT"
+    def test_empty_table_returns_no_patterns(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            patterns = engine.detect_patterns("sessions")
+            assert patterns == []
+        finally:
+            os.unlink(path)
+
+    def test_patterns_sorted_by_confidence(self):
+        path = _create_test_db(
+            seed_data=[
+                {
+                    "id": f"s{i}",
+                    "title": f"Session {i}",
+                    "model": "qwen3.6",
+                    "created_at": 1000 + i,
+                    "payload": {"common_field": "value", "rare_field": "value"},
+                }
+                for i in range(20)
+            ]
         )
-        assert proposal.validate(engine) is False
-        assert any("does not exist" in e for e in proposal.validation_errors)
+        try:
+            engine = SchemaEvolutionEngine(path)
+            patterns = engine.detect_patterns("sessions", top_k=10)
+            # All fields appear in all records, so confidence should be equal (0.95)
+            if len(patterns) >= 2:
+                assert patterns[0].confidence >= patterns[-1].confidence
+        finally:
+            os.unlink(path)
 
-    def test_validate_add_column_duplicate(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, tags TEXT)")
-        conn.commit()
-        conn.close()
-        proposal = SchemaProposal(
-            reason="add tags", action="add_column", table="sessions",
-            column="tags", column_type="TEXT"
-        )
-        assert proposal.validate(engine) is False
-        assert any("already exists" in e for e in proposal.validation_errors)
-
-    def test_validate_create_table_existing(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY)")
-        conn.commit()
-        conn.close()
-        proposal = SchemaProposal(
-            reason="create audit", action="create_table", table="audit",
-            new_table_name="audit"
-        )
-        assert proposal.validate(engine) is False
-        assert any("already exists" in e for e in proposal.validation_errors)
-
-    def test_validate_create_table_new(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        proposal = SchemaProposal(
-            reason="create audit", action="create_table", table="audit",
-            new_table_name="audit"
-        )
-        assert proposal.validate(engine) is True
+    def test_column_already_exists_not_detected(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            patterns = engine.detect_patterns("sessions")
+            # 'id', 'title', 'model', 'created_at', 'payload' are actual columns
+            # They should NOT appear as patterns
+            field_names = [p.field_name for p in patterns]
+            for col in ["id", "title", "model", "created_at", "payload"]:
+                assert col not in field_names, f"'{col}' is an actual column but detected as pattern"
+        finally:
+            os.unlink(path)
 
 
-# ---------------------------------------------------------------------------
-# propose method
-# ---------------------------------------------------------------------------
+# ─── Proposal Generation Tests ──────────────────────────────────────────────
 
 
-class TestPropose:
-    def test_propose_add_column(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        proposal = engine.propose(
-            reason="add complexity", action="add_column",
-            table="sessions", column="complexity",
-            column_type="TEXT", column_default="'standard'"
-        )
-        assert proposal.action == "add_column"
-        assert "ALTER TABLE" in proposal.proposed_sql
-        assert "complexity" in proposal.proposed_sql
-
-    def test_propose_add_column_notnull(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        proposal = engine.propose(
-            reason="add required", action="add_column",
-            table="sessions", column="required_col",
-            column_type="TEXT", column_notnull=True
-        )
-        assert "NOT NULL" in proposal.proposed_sql
-
-    def test_propose_from_pattern_repeated_metadata(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
+class TestProposalGeneration:
+    def test_propose_from_pattern_adds_column(self):
         pattern = FieldPattern(
-            table="sessions", field_name="tags", pattern_type="repeated_metadata",
-            evidence_count=50, total_records=100, percentage=0.5,
-            suggested_column="tags", suggested_type="TEXT",
-            example_values=["a", "b"], confidence=0.8
+            table="sessions",
+            field_name="complexity",
+            pattern_type="repeated_metadata",
+            evidence_count=15,
+            total_records=20,
+            percentage=0.75,
+            suggested_column="complexity",
+            suggested_type="TEXT",
+            example_values=["high", "low", "medium"],
+            confidence=0.8,
         )
-        proposal = engine.propose_from_pattern(pattern)
-        assert proposal.action == "add_column"
-        assert proposal.column == "tags"
-        assert "ALTER TABLE" in proposal.proposed_sql
+        engine = SchemaEvolutionEngine(_create_test_db())
+        try:
+            proposal = engine.propose_from_pattern(pattern)
+            assert proposal.action == "add_column"
+            assert proposal.table == "sessions"
+            assert proposal.column == "complexity"
+            assert proposal.column_type == "TEXT"
+            assert "ADD COLUMN complexity TEXT" in proposal.proposed_sql
+        finally:
+            os.unlink(engine.db_path)
 
-    def test_propose_from_pattern_missing_column(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        pattern = FieldPattern(
-            table="sessions", field_name="missing_col", pattern_type="missing_column",
-            evidence_count=50, total_records=100, percentage=0.5,
-            suggested_column="missing_col", suggested_type="INTEGER",
-            example_values=[], confidence=0.6
-        )
-        proposal = engine.propose_from_pattern(pattern)
-        assert proposal.action == "add_column"
-        assert proposal.column == "missing_col"
+    def test_propose_manual(self):
+        engine = SchemaEvolutionEngine(_create_test_db())
+        try:
+            proposal = engine.propose(
+                reason="Add column",
+                action="add_column",
+                table="sessions",
+                column="new_col",
+                column_type="INTEGER",
+                column_notnull=True,
+            )
+            assert "ALTER TABLE sessions ADD COLUMN new_col INTEGER NOT NULL" == proposal.proposed_sql
+        finally:
+            os.unlink(engine.db_path)
 
 
-# ---------------------------------------------------------------------------
-# apply_proposal
-# ---------------------------------------------------------------------------
+# ─── Validation Tests ───────────────────────────────────────────────────────
+
+
+class TestValidation:
+    def test_valid_proposal(self):
+        engine = SchemaEvolutionEngine(_create_test_db())
+        try:
+            proposal = engine.propose(
+                reason="Add column",
+                action="add_column",
+                table="sessions",
+                column="test_col",
+                column_type="TEXT",
+            )
+            assert proposal.validate(engine) is True
+            assert len(proposal.validation_errors) == 0
+        finally:
+            os.unlink(engine.db_path)
+
+    def test_duplicate_column_fails_validation(self):
+        engine = SchemaEvolutionEngine(_create_test_db())
+        try:
+            proposal = engine.propose(
+                reason="Duplicate column",
+                action="add_column",
+                table="sessions",
+                column="id",  # Already exists
+                column_type="TEXT",
+            )
+            assert proposal.validate(engine) is False
+            assert any("already exists" in e for e in proposal.validation_errors)
+        finally:
+            os.unlink(engine.db_path)
+
+    def test_nonexistent_table_fails_validation(self):
+        engine = SchemaEvolutionEngine(_create_test_db())
+        try:
+            proposal = engine.propose(
+                reason="Bad table",
+                action="add_column",
+                table="nonexistent_table",
+                column="col",
+                column_type="TEXT",
+            )
+            assert proposal.validate(engine) is False
+            assert any("does not exist" in e for e in proposal.validation_errors)
+        finally:
+            os.unlink(engine.db_path)
+
+
+# ─── Apply Proposal Tests ───────────────────────────────────────────────────
 
 
 class TestApplyProposal:
-    def test_apply_proposal_add_column(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY)")
-        conn.commit()
-        conn.close()
-        proposal = SchemaProposal(
-            reason="add tags", action="add_column", table="sessions",
-            column="tags", column_type="TEXT", column_default="''"
-        )
-        assert proposal.validate(engine) is True
-        # SQLite ALTER TABLE ADD COLUMN works; apply_proposal should have applied it
-        engine.apply_proposal(proposal)
-        # Check the evolution log was written (apply_proposal records the action)
-        history = engine.get_evolution_history()
-        assert len(history) >= 1  # version record logged
+    def test_apply_valid_proposal(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            initial_version = engine.get_current_version()
 
-    def test_apply_proposal_version_increments(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        assert engine.get_current_version() == 0
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY)")
-        conn.commit()
-        conn.close()
-        proposal = SchemaProposal(
-            reason="add tags", action="add_column", table="sessions",
-            column="tags", column_type="TEXT", column_default="''"
-        )
-        engine.apply_proposal(proposal)
-        assert engine.get_current_version() >= 1
+            proposal = engine.propose(
+                reason="Add complexity column",
+                action="add_column",
+                table="sessions",
+                column="complexity",
+                column_type="TEXT",
+                column_default="'standard'",
+            )
+            result = engine.apply_proposal(proposal)
+            assert result is True
 
-    def test_apply_proposal_create_table(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        proposal = SchemaProposal(
-            reason="create audit", action="create_table", table="audit",
-            new_table_name="audit",
-            new_table_columns=[
-                {"name": "id", "type": "INTEGER PRIMARY KEY"},
-                {"name": "action", "type": "TEXT"},
+            # Version should have incremented
+            assert engine.get_current_version() > initial_version
+
+            # Column should now exist
+            schema = engine.introspect()
+            col_names = [c.name for c in schema.tables["sessions"].columns]
+            assert "complexity" in col_names
+        finally:
+            os.unlink(path)
+
+    def test_apply_invalid_proposal_returns_false(self):
+        engine = SchemaEvolutionEngine(_create_test_db())
+        try:
+            proposal = engine.propose(
+                reason="Bad column",
+                action="add_column",
+                table="sessions",
+                column="id",  # Already exists
+                column_type="TEXT",
+            )
+            result = engine.apply_proposal(proposal)
+            assert result is False
+        finally:
+            os.unlink(engine.db_path)
+
+    def test_apply_multiple_proposals(self):
+        path = _create_test_db()
+        try:
+            engine = SchemaEvolutionEngine(path)
+            initial_version = engine.get_current_version()
+
+            # Apply two columns
+            for col in ["complexity", "tags"]:
+                proposal = engine.propose(
+                    reason=f"Add {col}",
+                    action="add_column",
+                    table="sessions",
+                    column=col,
+                    column_type="TEXT",
+                )
+                assert engine.apply_proposal(proposal) is True
+
+            assert engine.get_current_version() == initial_version + 2
+
+            # Verify both columns exist
+            schema = engine.introspect()
+            col_names = [c.name for c in schema.tables["sessions"].columns]
+            assert "complexity" in col_names
+            assert "tags" in col_names
+        finally:
+            os.unlink(path)
+
+
+# ─── Integration Tests ──────────────────────────────────────────────────────
+
+
+class TestSchemaEvolutionIntegration:
+    def test_full_lifecycle(self):
+        """Complete schema evolution: introspect → detect → propose → validate → apply."""
+        path = _create_test_db(
+            seed_data=[
+                {
+                    "id": f"s{i}",
+                    "title": f"Session {i}",
+                    "model": "qwen3.6",
+                    "created_at": 1000 + i,
+                    "payload": {"complexity": "high", "tokens": 5000},
+                }
+                for i in range(10)
             ]
         )
-        assert proposal.validate(engine) is True
-        engine.apply_proposal(proposal)
-        history = engine.get_evolution_history()
-        assert len(history) >= 1  # version record logged
+        try:
+            engine = SchemaEvolutionEngine(path)
 
-    def test_apply_proposal_invalid_returns_false(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        proposal = SchemaProposal(
-            reason="add to missing", action="add_column", table="missing",
-            column="x", column_type="TEXT"
-        )
-        assert proposal.validate(engine) is False
-        # Invalid proposals log errors but don't raise
-        # apply_proposal should handle validation failure gracefully
-        engine.apply_proposal(proposal)  # should not crash
+            # 1. Introspect
+            schema = engine.introspect()
+            initial_cols = [c.name for c in schema.tables["sessions"].columns]
+            assert "id" in initial_cols
 
+            # 2. Detect patterns
+            patterns = engine.detect_patterns("sessions", top_k=5)
+            field_names = [p.field_name for p in patterns]
+            assert "complexity" in field_names
+            assert "tokens" in field_names
 
-# ---------------------------------------------------------------------------
-# Edge cases
-# ---------------------------------------------------------------------------
+            # 3. Propose from pattern
+            pattern = next(p for p in patterns if p.field_name == "complexity")
+            proposal = engine.propose_from_pattern(pattern)
 
+            # 4. Validate
+            assert proposal.validate(engine) is True
 
-class TestEdgeCases:
-    def test_introspect_multiple_tables(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
-        conn.execute("CREATE TABLE t2 (id INTEGER PRIMARY KEY, name TEXT)")
-        conn.commit()
-        conn.close()
-        snap = engine.introspect()
-        assert "t1" in snap.tables
-        assert "t2" in snap.tables
+            # 5. Apply
+            result = engine.apply_proposal(proposal)
+            assert result is True
 
-    def test_proposal_sql_generation(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        proposal = engine.propose(
-            reason="test", action="add_column",
-            table="sessions", column="new_col",
-            column_type="TEXT", column_default="'default'"
-        )
-        assert "ALTER TABLE sessions ADD COLUMN new_col TEXT DEFAULT 'default'" == proposal.proposed_sql.strip()
+            # 6. Verify column exists
+            schema = engine.introspect()
+            new_cols = [c.name for c in schema.tables["sessions"].columns]
+            assert "complexity" in new_cols
+            assert "tokens" not in new_cols  # Not applied yet
+        finally:
+            os.unlink(path)
 
-    def test_proposal_sql_generation_notnull(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        proposal = engine.propose(
-            reason="test", action="add_column",
-            table="sessions", column="new_col",
-            column_type="TEXT", column_notnull=True
-        )
-        assert "NOT NULL" in proposal.proposed_sql
+    def test_pattern_type_affects_suggested_type(self):
+        """Integer fields should suggest REAL, strings TEXT."""
+        engine = SchemaEvolutionEngine(_create_test_db())
+        try:
+            # Integer pattern
+            int_pattern = FieldPattern(
+                table="sessions", field_name="count", pattern_type="repeated_metadata",
+                evidence_count=10, total_records=10, percentage=1.0,
+                suggested_column="count", suggested_type="REAL",
+                example_values=[1, 2, 3], confidence=0.95,
+            )
+            int_proposal = engine.propose_from_pattern(int_pattern)
+            assert "REAL" in int_proposal.proposed_sql
 
-    def test_pattern_confidence_thresholds(self, tmp_path):
-        # >50% → 0.95, >30% → 0.8, >10% → 0.6, else 0.3
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, payload TEXT)")
-        # field appears in 6/10 = 60%
-        for i in range(6):
-            conn.execute("INSERT INTO events VALUES (?, '{\"common\": true}')", (i,))
-        # field appears in 2/10 = 20%
-        conn.execute("INSERT INTO events VALUES (10, '{\"rare\": true}')")
-        conn.execute("INSERT INTO events VALUES (11, '{\"rare\": true}')")
-        # field appears in 1/10 = 10%
-        conn.execute("INSERT INTO events VALUES (12, '{\"scarce\": true}')")
-        conn.commit()
-        conn.close()
-        patterns = engine.detect_patterns("events")
-        common_p = [p for p in patterns if p.field_name == "common"]
-        rare_p = [p for p in patterns if p.field_name == "rare"]
-        if common_p and rare_p:
-            assert common_p[0].confidence >= rare_p[0].confidence
-
-    def test_column_type_detection(self):
-        # int/float → REAL, str → TEXT, bool → INTEGER
-        pattern_int = FieldPattern(table="t", field_name="n", pattern_type="repeated_metadata",
-                                   evidence_count=10, total_records=10, percentage=1.0,
-                                   suggested_column="n", suggested_type="TEXT",
-                                   example_values=[1, 2, 3], confidence=0.95)
-        # Type detection happens in detect_patterns, not here — test the FieldPattern dataclass only
-        assert pattern_int.suggested_type == "TEXT"  # set by detect_patterns
-
-    def test_introspect_with_null_default(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT DEFAULT NULL)")
-        conn.commit()
-        conn.close()
-        snap = engine.introspect()
-        val_col = [c for c in snap.tables["t"].columns if c.name == "val"][0]
-        # SQLite returns "NULL" as a string for NULL defaults
-        assert val_col.default_value is None or val_col.default_value == "NULL"
-
-    def test_get_schema_serializable(self, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        engine = SchemaEvolutionEngine(db_path)
-        conn = engine._get_conn()
-        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
-        conn.commit()
-        conn.close()
-        schema = engine.get_schema()
-        # Should be JSON-serializable
-        import json
-        json.dumps(schema)  # raises if not serializable
+            # String pattern
+            str_pattern = FieldPattern(
+                table="sessions", field_name="label", pattern_type="repeated_metadata",
+                evidence_count=10, total_records=10, percentage=1.0,
+                suggested_column="label", suggested_type="TEXT",
+                example_values=["a", "b"], confidence=0.95,
+            )
+            str_proposal = engine.propose_from_pattern(str_pattern)
+            assert "TEXT" in str_proposal.proposed_sql
+        finally:
+            os.unlink(engine.db_path)

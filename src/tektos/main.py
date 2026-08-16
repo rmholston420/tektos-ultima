@@ -475,6 +475,92 @@ async def get_metabolism_history(limit: int = 100):
     return _metabolism.get_metrics_history(limit)
 
 
+# ---------------------------------------------------------------------------
+# REST API — Schema Evolution
+# ---------------------------------------------------------------------------
+
+@app.get("/api/schema")
+async def get_schema():
+    """Get current schema version and table structure."""
+    if not schema_engine:
+        return {"error": "Schema evolution engine not initialized"}
+    return {
+        "version": schema_engine.get_current_version(),
+        "schema": schema_engine.get_schema(),
+    }
+
+
+@app.get("/api/schema/patterns")
+async def detect_schema_patterns(table: str = "sessions", top_k: int = 10):
+    """Detect data patterns that suggest schema changes."""
+    if not schema_engine:
+        return {"error": "Schema evolution engine not initialized"}
+    patterns = schema_engine.detect_patterns(table, top_k=top_k)
+    return [
+        {
+            "field": p.field_name,
+            "table": p.table,
+            "percentage": round(p.percentage, 2),
+            "confidence": p.confidence,
+            "suggested_type": p.suggested_type,
+            "pattern_type": p.pattern_type,
+            "example_values": p.example_values,
+        }
+        for p in patterns
+    ]
+
+
+@app.post("/api/schema/propose")
+async def propose_schema_change(req: dict):
+    """Propose a schema change from detected patterns."""
+    if not schema_engine:
+        return {"error": "Schema evolution engine not initialized"}
+    from tektos.migrations.schema_evolution import FieldPattern
+    pattern = FieldPattern(
+        table=req.get("table", "sessions"),
+        field_name=req["field_name"],
+        pattern_type=req.get("pattern_type", "repeated_metadata"),
+        evidence_count=req.get("evidence_count", 10),
+        total_records=req.get("total_records", 100),
+        percentage=req.get("percentage", 0.5),
+        suggested_column=req["field_name"],
+        suggested_type=req.get("suggested_type", "TEXT"),
+        example_values=req.get("example_values", []),
+        confidence=req.get("confidence", 0.8),
+    )
+    proposal = schema_engine.propose_from_pattern(pattern)
+    valid = proposal.validate(schema_engine)
+    return {
+        "reason": proposal.reason,
+        "proposed_sql": proposal.proposed_sql,
+        "valid": valid,
+        "errors": proposal.validation_errors,
+    }
+
+
+@app.post("/api/schema/apply")
+async def apply_schema_proposal(req: dict):
+    """Apply a validated schema change."""
+    if not schema_engine:
+        return {"error": "Schema evolution engine not initialized"}
+    from tektos.migrations.schema_evolution import SchemaProposal
+    proposal = SchemaProposal(
+        reason=req.get("reason", "Manual schema evolution"),
+        action=req.get("action", "add_column"),
+        table=req.get("table", "sessions"),
+        column=req.get("column"),
+        column_type=req.get("column_type", "TEXT"),
+        column_default=req.get("column_default"),
+        proposed_sql=req.get("proposed_sql"),
+    )
+    if not proposal.proposed_sql:
+        proposal.proposed_sql = f"ALTER TABLE {proposal.table} ADD COLUMN {proposal.column} {proposal.column_type}"
+    if not proposal.validate(schema_engine):
+        return {"success": False, "errors": proposal.validation_errors}
+    result = schema_engine.apply_proposal(proposal)
+    return {"success": result, "version": schema_engine.get_current_version()}
+
+
 @app.get("/api/models")
 async def list_models():
     """List all available models with their roles and descriptions."""

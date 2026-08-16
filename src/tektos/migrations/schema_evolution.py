@@ -497,7 +497,7 @@ class SchemaEvolutionEngine:
                 f"DEFAULT {kwargs.get('column_default')}" if kwargs.get("column_default") else ""
             )
             notnull = "NOT NULL" if kwargs.get("column_notnull") else ""
-            proposal.proposed_sql = f"ALTER TABLE {kwargs['table']} ADD COLUMN {kwargs['column']} {kwargs['column_type']} {default} {notnull}".strip()
+            proposal.proposed_sql = f"ALTER TABLE {kwargs['table']} ADD COLUMN {kwargs['column']} {kwargs['column_type']}{default}{' NOT NULL' if kwargs.get('column_notnull') else ''}".strip()
             proposal.rollback_sql = (
                 f"CREATE TABLE {kwargs['table']}_backup AS SELECT * FROM {kwargs['table']}"
             )

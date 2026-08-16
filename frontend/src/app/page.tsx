@@ -37,19 +37,21 @@ const DynamicSettingsPanel = dynamic(() => import("@/components/panels/SettingsP
 const DynamicNervousSystemPanel = dynamic(() => import("@/components/panels/NervousSystemPanel").then((m) => m.NervousSystemPanel), { ssr: false });
 const DynamicToolsPanel = dynamic(() => import("@/components/panels/ToolsPanel").then((m) => m.ToolsPanel), { ssr: false });
 const DynamicMetabolismPanel = dynamic(() => import("@/components/panels/MetabolismPanel").then((m) => m.MetabolismPanel), { ssr: false });
+const DynamicSchemaEvolutionPanel = dynamic(() => import("@/components/panels/SchemaEvolutionPanel").then((m) => m.SchemaEvolutionPanel), { ssr: false });
 
 // ---------------------------------------------------------------------------
 // Page types
 // ---------------------------------------------------------------------------
 
 type PageType = "chat" | "dashboard";
-type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings";
+type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "schema" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings";
 
 const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "overview", label: "Overview", icon: "◈" },
   { id: "nervous", label: "Nervous System", icon: "⚡" },
   { id: "tools", label: "Tools", icon: "🔧" },
   { id: "metabolism", label: "Metabolism", icon: "♻" },
+  { id: "schema", label: "Schema", icon: "🏗" },
   { id: "graph", label: "System Graph", icon: "⬡" },
   { id: "telemetry", label: "Telemetry", icon: "◉" },
   { id: "router", label: "Router", icon: "⊘" },
@@ -369,6 +371,7 @@ export default function App() {
       nervous: () => <DynamicNervousSystemPanel />,
       tools: () => <DynamicToolsPanel />,
       metabolism: () => <DynamicMetabolismPanel />,
+      schema: () => <DynamicSchemaEvolutionPanel />,
       graph: () => <DynamicBiologicalGraph />,
       telemetry: () => <DynamicTelemetryPanel />,
       router: () => <DynamicModelRouterPanel />,
