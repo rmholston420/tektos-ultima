@@ -144,7 +144,8 @@ class TestRateLimiter:
     def test_create_limiter_returns_none_or_limiter(self):
         # slowapi may not be available, so result can be None
         limiter = create_limiter()
-        assert limiter is None or hasattr(limiter, 'default_limits')
+        # Limiter exposes 'limit' method or _default_limits internally
+        assert limiter is None or hasattr(limiter, 'limit') or hasattr(limiter, '_default_limits')
 
     def test_get_status_defaults(self):
         status = get_status()
