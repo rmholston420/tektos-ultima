@@ -11,6 +11,7 @@ to work correctly.
 import os
 import sys
 from unittest.mock import MagicMock
+import pytest
 
 # Only install mocks unless TELEKTOS_SKIP_MOCKS is set
 _SKIP = os.environ.get("TELEKTOS_SKIP_MOCKS", "").lower() in ("1", "true", "yes")
@@ -90,10 +91,48 @@ if not _SKIP:
     import tektos.memory.redis_memory as _redis_mod
     _redis_mod.REDIS_AVAILABLE = True
 
-    # Export for test files
+    # ═══ Export for test files ═══
     mock_neo4j_session.__test__ = False
     mock_neo4j_driver.__test__ = False
     mock_redis_client.__test__ = False
+
+
+# ─── Test isolation: save main.py globals before each test, restore after ───
+# Several test modules patch main module globals (append_event, _emit_schema_event,
+# session_manager, etc.) which pollute later tests. This fixture saves the
+# original references before each test and restores them after.
+_main_attrs_to_save = [
+    'append_event', 'get_events', 'get_replay', 'search_events',
+    '_emit_schema_event', 'session_manager', 'runtime_sdk',
+    'ws_manager', 'schema_engine', 'memory_system',
+    '_tool_registry', '_mcp_client', '_metabolism',
+    'self_improvement', 'vision_client', 'telegram_gateway',
+    'state_managers',
+]
+
+
+def _save_main_globals():
+    """Save tektos.main module attributes."""
+    import tektos.main as _mod
+    return {attr: getattr(_mod, attr, None) for attr in _main_attrs_to_save if hasattr(_mod, attr)}
+
+
+def _restore_main_globals(saved):
+    """Restore tektos.main module attributes from saved dict."""
+    import tektos.main as _mod
+    for attr, val in saved.items():
+        setattr(_mod, attr, val)
+    # Clear any ad-hoc entries added by tests
+    if hasattr(_mod, 'state_managers') and isinstance(_mod.state_managers, dict):
+        _mod.state_managers.clear()
+
+
+@pytest.fixture(autouse=True)
+def isolate_main_globals():
+    """Save globals before test, restore after."""
+    saved = _save_main_globals()
+    yield
+    _restore_main_globals(saved)
 
 
 def pytest_configure(config):

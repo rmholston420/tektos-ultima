@@ -565,10 +565,10 @@ class TestModelsEndpoint:
 class TestInterruptEndpoint:
     """Test POST /api/sessions/{session_id}/interrupt endpoint contract."""
 
-    def test_interrupt_nonexistent_returns_500(self, client):
-        # Nonexistent session returns 500 (internal error) not 404
+    def test_interrupt_nonexistent_returns_404(self, client):
+        # Nonexistent session returns 404 (proper error, not swallowed 500)
         response = client.post("/api/sessions/nonexistent/interrupt")
-        assert response.status_code == 500
+        assert response.status_code == 404
 
     def test_interrupt_existing_returns_ok(self, client):
         response = client.post("/api/sessions/test-123/interrupt")

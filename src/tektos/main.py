@@ -864,6 +864,8 @@ async def interrupt_session(session_id: str):
         await session_manager.interrupt_session(session_id)
         await runtime_sdk.interrupt(session)
         return {"ok": True}
+    except _HTTPException:
+        raise
     except Exception as exc:
         raise _HTTPException(status_code=500, detail=str(exc))
 
