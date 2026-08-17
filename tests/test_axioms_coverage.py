@@ -164,6 +164,89 @@ class TestAxiomSystemLoad:
         # Should have loaded dict and list docs but not empty file
         assert len(system._axioms) == 3  # phase.1.complete, directive.1, directive.2
 
+    def test_load_list_item_branch(self, tmp_path):
+        """load() should cover the list item branch (line 83)."""
+        axioms_dir = tmp_path / "axioms"
+        axioms_dir.mkdir()
+        list_axiom = axioms_dir / "list_items.axiom"
+        list_axiom.write_text(yaml.dump_all([
+            [{"id": "list.1", "category": "test", "status": "verified", "date": "2026-08-01"}],
+            {"id": "dict.1", "category": "test", "status": "pending", "date": "2026-08-02"},
+        ]))
+        system = AxiomSystem(axioms_dir=axioms_dir)
+        system.load()
+        assert "list.1" in system._axioms  # list branch (line 83)
+        assert "dict.1" in system._axioms  # dict branch (line 85-86)
+
+    def test_load_dict_branch(self, tmp_path):
+        """load() should cover the dict branch (line 85-86)."""
+        axioms_dir = tmp_path / "axioms"
+        axioms_dir.mkdir()
+        dict_axiom = axioms_dir / "dict_doc.axiom"
+        dict_axiom.write_text(yaml.dump({
+            "id": "dict.only",
+            "category": "test",
+            "status": "verified",
+            "date": "2026-08-03",
+        }))
+        system = AxiomSystem(axioms_dir=axioms_dir)
+        system.load()
+        assert "dict.only" in system._axioms
+
+    def test_set_status(self, tmp_path):
+        """set_status should modify and persist status."""
+        import tektos.axioms as axioms_module
+        original = axioms_module._axiom_system
+        axioms_module._axiom_system = None
+        try:
+            axioms_dir = tmp_path / "axioms"
+            axioms_dir.mkdir()
+            axiom_file = axioms_dir / "test.axiom"
+            axiom_file.write_text(yaml.dump({
+                "id": "status.1",
+                "category": "test",
+                "status": "verified",
+                "date": "2026-08-01",
+            }))
+            system = load_axioms(axioms_dir=axioms_dir)
+            result = system.set_status("status.1", "deprecated")
+            assert result is True
+            assert system._axioms["status.1"].status == "deprecated"
+        finally:
+            axioms_module._axiom_system = original
+
+    def test_set_status_missing(self):
+        """set_status on missing id should return False."""
+        system = AxiomSystem()
+        assert system.set_status("nonexistent", "verified") is False
+
+    def test_add_and_persist(self, tmp_path):
+        """add should store and persist an axiom."""
+        axioms_dir = tmp_path / "axioms"
+        system = AxiomSystem(axioms_dir=axioms_dir)
+        axiom = Axiom(id="added.1", category="test", status="pending", date="2026-08-10")
+        system.add(axiom)
+        assert "added.1" in system._axioms
+        assert system._axioms["added.1"].content == ""
+        # Verify it was saved
+        system._save()
+        reloaded = AxiomSystem(axioms_dir=axioms_dir)
+        reloaded.load()
+        assert "added.1" in reloaded._axioms
+
+    def test_add_persists(self, tmp_path):
+        """add should call _save to persist."""
+        axioms_dir = tmp_path / "axioms"
+        system = AxiomSystem(axioms_dir=axioms_dir)
+        axiom = Axiom(id="persist.1", category="test", status="pending", date="2026-08-10")
+        system.add(axiom)
+        assert "persist.1" in system._axioms
+        # Verify persistence via reload
+        system._save()
+        reloaded = AxiomSystem(axioms_dir=axioms_dir)
+        reloaded.load()
+        assert "persist.1" in reloaded._axioms
+
     def test_load_invalid_yaml_logs_error(self, tmp_path):
         """load() should log error and continue on invalid YAML."""
         axioms_dir = tmp_path / "axioms"
@@ -450,6 +533,11 @@ class TestBlockersAndDependents:
         system = AxiomSystem()
         system._axioms["a1"] = Axiom(id="a1", category="test", status="verified", date="2026-08-01")
         assert system.get_dependents("a1") == []
+
+    def test_get_blockers_no_axiom(self):
+        """get_blockers should return [] when axiom doesn't exist (line 161)."""
+        system = AxiomSystem()
+        assert system.get_blockers("nonexistent") == []
 
 
 # ── to_markdown tests ────────────────────────────────────────────────────
