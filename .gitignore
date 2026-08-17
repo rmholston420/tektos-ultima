@@ -52,3 +52,42 @@ test-results/
 
 # Generated data
 data/
+
+# Gui test traces (auto-generated)
+gui-test-traces/
+
+# Frontend coverage
+frontend/coverage/
+
+# Session state files (environment-specific)
+.phase*.json
+.session_state.json
+
+# Estimation / research notes (not part of source)
+ESTIMATION-CALIBRATION.md
+RESEARCH_CDP_WAYLAND.md
+
+# Scratch scripts
+scraper.py
+script.py
+
+# Test scratch files
+test_lru_cache.py
+test_task_stack.py
+
+# Archive exports
+*.zip
+*.tar.gz
+
+# New Tektos modules (not yet committed)
+src/tektos/axioms/
+src/tektos/memory/hindsight_client.py
+
+# Frontend API routes (if generated or auto-generated)
+frontend/src/app/api/
+
+# Frontend test files (generated from Tektos audits)
+frontend/src/__tests__/
+
+# Frontend build artifacts
+tektos-ultima/
