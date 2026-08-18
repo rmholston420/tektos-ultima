@@ -1,11 +1,12 @@
 /**
- * Tektos-Ultima v1 — Main Layout Shell
+ * Tektos-Ultima v1 — Main Layout Shell (Streaming Architecture)
  *
- * Redesigned for workflow-centered UX:
- * 1. Think → Type → Agent Works → Review → Iterate
- * 2. Context is king — session management stays out of the way
- * 3. Dashboard is secondary — chat is primary
- * 4. Fluid, responsive, and accessible
+ * Uses @assistant-ui/react primitives for streaming:
+ * - TektosExternalStoreAdapter bridges WebSocket to the library
+ * - useExternalStoreRuntime creates the runtime from the adapter
+ * - AssistantRuntimeProvider wraps the chat UI
+ * - ThreadPrimitive.Root + Viewport + Messages renders messages
+ * - useAui().thread().state.isRunning for streaming state
  */
 
 "use client";
@@ -14,9 +15,11 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import dynamic from "next/dynamic";
 import { ProtocolClient, EventType, type WSEnvelopeClient } from "@/lib/protocol";
 import { SessionStore, type SessionSnapshot, type SessionEvent } from "@/lib/session-store";
+import { useExternalStoreRuntime, AssistantRuntimeProvider, type ExternalStoreAdapter, type ThreadMessage, type AppendMessage, type ExternalThreadQueueAdapter } from "@assistant-ui/react";
+import { TektosExternalStoreAdapter, TektosExternalStoreAdapterWrapper } from "@/lib/tektos-store-adapter";
 import { Sidebar } from "@/components/sidebar/Sidebar";
-import { Transcript, type TranscriptEvent } from "@/components/transcript/Transcript";
 import { Composer } from "@/components/composer/Composer";
+import { ThreadView } from "@/components/streaming/ThreadView";
 import { themeStore, type ThemeName } from "@/lib/theme-store";
 
 // Dynamic imports for client-only components (SSR-safe)
@@ -75,36 +78,96 @@ export default function App() {
   const [protocolClient] = useState(() => new ProtocolClient());
   const [sessionStore] = useState(() => new SessionStore(protocolClient));
   const [activeSession, setActiveSession] = useState<SessionSnapshot | null>(null);
-  const [transcriptEvents, setTranscriptEvents] = useState<TranscriptEvent[]>([]);
-  const [streamingContent, setStreamingContent] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [connectionState, setConnectionState] = useState<"disconnected" | "connecting" | "connected" | "reconnecting">("disconnected");
   const [activePage, setActivePage] = useState<PageType>("chat");
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
-  const [showWelcome, setShowWelcome] = useState(true);
   const [activeModel, setActiveModel] = useState("qwen3.6-35b-a3b-ud-q4_k_xl");
   const [visionAvailable, setVisionAvailable] = useState(false);
   const [visionModel, setVisionModel] = useState("");
-  const streamBuffer = useRef("");
-  const hasAutoCreated = useRef(false);
   const [hasHydrated, setHasHydrated] = useState(false);
+
+  // Streaming adapter + runtime
+  // Persistent base adapter holds all message data.
+  // A wrapper is memoized and recreated via useMemo keyed on adapterVersion,
+  // giving the runtime a new object reference so __internal_setAdapter
+  // bypasses its === short-circuit and re-reads fresh messages.
+  const adapterRef = useRef(new TektosExternalStoreAdapter());
+  const [adapterVersion, setAdapterVersion] = useState(0);
+  
+  const adapter = useMemo(
+    () => new TektosExternalStoreAdapterWrapper(adapterRef.current),
+    [adapterVersion]
+  );
+  
+  const runtime = useExternalStoreRuntime(adapter);
+
+  // Stream elapsed timer
+  const streamStart = useRef<number | null>(null);
+  const [streamElapsed, setStreamElapsed] = useState(0);
+
+  // Update elapsed timer during streaming
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (streamStart.current) {
+        setStreamElapsed(Math.floor((Date.now() - streamStart.current) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // -------------------------------------------------------------------
   // Connection management
   // -------------------------------------------------------------------
 
   useEffect(() => {
-    // Mark hydrated on first client render
     setHasHydrated(true);
+
+    // Auto-create a session on load — direct API call to backend
+    let cancelled = false;
+    
+    // Create session directly via backend (bypasses Next.js dev proxy)
+    fetch('http://localhost:8020/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then(async (r) => {
+      if (cancelled) return;
+      if (!r.ok) {
+        console.error('Session creation failed:', r.status, r.statusText);
+        return;
+      }
+      const data = await r.json();
+      
+      // Build session snapshot from API response
+      const session: SessionSnapshot = {
+        id: data.id,
+        title: data.title || 'New Session',
+        model: data.model || 'qwen3.6-35b-a3b-ud-q4_k_xl',
+        cwd: data.cwd,
+        status: data.status || 'created',
+        is_active: false,
+        is_archived: false,
+        is_failed: false,
+        current_seq: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      
+      console.log('Auto-session created:', session.id);
+      setActiveSession(session);
+      protocolClient.setSessionId(session.id);
+    }).catch((err) => {
+      if (!cancelled) {
+        console.error('Auto-session creation error:', err);
+      }
+    });
 
     protocolClient.onStateChange((state) => setConnectionState(state.state));
 
-    // Health check on mount
-    let cancelled = false;
     const checkHealth = () => {
       if (cancelled) return;
-      fetch('http://localhost:8020/health', { cache: 'no-store' })
+      fetch('/api/health', { cache: 'no-store' })
         .then((r) => {
           if (cancelled) return;
           if (r.ok) setConnectionState('connected');
@@ -115,7 +178,6 @@ export default function App() {
 
     checkHealth();
 
-    // Check vision endpoint availability on mount
     const checkVision = () => {
       if (cancelled) return;
       fetch('http://localhost:8020/api/vision/status', { cache: 'no-store' })
@@ -132,11 +194,10 @@ export default function App() {
 
     checkVision();
 
-    // Periodic health check every 30s to keep UI accurate
     const interval = setInterval(checkHealth, 30000);
 
     return () => { cancelled = true; protocolClient.disconnect(); clearInterval(interval); };
-  }, [protocolClient, sessionStore]);
+  }, [protocolClient]);
 
   // -------------------------------------------------------------------
   // Reconnect WS when session changes
@@ -145,7 +206,6 @@ export default function App() {
   useEffect(() => {
     if (activeSession?.id) {
       protocolClient.setSessionId(activeSession.id);
-      // Small delay to let backend fully initialize session before WS upgrade
       const timer = setTimeout(() => {
         protocolClient.connect();
       }, 300);
@@ -154,40 +214,32 @@ export default function App() {
   }, [activeSession?.id, protocolClient]);
 
   // -------------------------------------------------------------------
-  // Event handling from backend
+  // Event handling from backend (streaming-aware via adapter)
   // -------------------------------------------------------------------
 
   useEffect(() => {
     protocolClient.on("*", (envelope: WSEnvelopeClient) => {
-      const event: TranscriptEvent = {
-        type: mapEventType(envelope.event_type),
-        session_id: envelope.session_id,
-        seq: envelope.seq ?? 0,
-        payload: envelope.payload,
-        timestamp: envelope.timestamp ?? new Date().toISOString(),
-      };
-
       switch (envelope.event_type) {
         case EventType.ASSISTANT_DELTA: {
           const text = envelope.payload.text as string;
           if (text) {
-            streamBuffer.current += text;
-            setStreamingContent(streamBuffer.current);
-            setIsStreaming(true);
+            adapterRef.current.addDelta(text);
+            if (streamStart.current === null) {
+              streamStart.current = Date.now();
+            }
+            // Trigger wrapper update so runtime re-reads messages
+            setAdapterVersion(v => v + 1);
           }
           break;
         }
         case EventType.ASSISTANT_COMPLETED: {
-          if (streamBuffer.current) {
-            setTranscriptEvents((prev) => [...prev, event]);
-            streamBuffer.current = "";
-            setStreamingContent("");
-          }
-          setIsStreaming(false);
+          adapterRef.current.completeMessage();
+          streamStart.current = null;
+          setAdapterVersion(v => v + 1);
           break;
         }
         default:
-          setTranscriptEvents((prev) => [...prev, event]);
+          break;
       }
     });
   }, [protocolClient]);
@@ -201,7 +253,6 @@ export default function App() {
       if (event.type === "created") {
         setActiveSession(event.session);
         protocolClient.setSessionId(event.session.id);
-        setShowWelcome(false);
       }
     });
 
@@ -217,9 +268,7 @@ export default function App() {
     sessionStore.on("deleted", (event: SessionEvent) => {
       if (event.type === "deleted" && activeSession?.id === event.session_id) {
         setActiveSession(null);
-        setTranscriptEvents([]);
         protocolClient.setSessionId("");
-        setShowWelcome(true);
       }
     });
 
@@ -236,29 +285,21 @@ export default function App() {
   // -------------------------------------------------------------------
 
   const handleSendMessage = useCallback(
-    (message: string) => {
+    async (message: string) => {
       if (!activeSession) return;
-      setTranscriptEvents((prev) => [...prev, {
-        type: "message", session_id: activeSession.id, seq: 0,
-        payload: { text: message, isUserMessage: true }, timestamp: new Date().toISOString(),
-      }]);
+      await adapterRef.current.sendMessage(message);
       protocolClient.sendPrompt(message, { model: activeSession.model, cwd: activeSession.cwd });
+      setAdapterVersion(v => v + 1);
     },
     [activeSession, protocolClient]
   );
 
   const handleInterrupt = useCallback(() => {
     protocolClient.sendInterrupt();
-    if (streamBuffer.current) {
-      setTranscriptEvents((prev) => [...prev, {
-        type: "message", session_id: activeSession?.id ?? "", seq: 0,
-        payload: { text: streamBuffer.current }, timestamp: new Date().toISOString(),
-      }]);
-      streamBuffer.current = "";
-      setStreamingContent("");
-    }
-    setIsStreaming(false);
-  }, [protocolClient, activeSession]);
+    adapterRef.current.interrupt();
+    streamStart.current = null;
+    setAdapterVersion(v => v + 1);
+  }, [protocolClient]);
 
   const handleSelectSession = useCallback(
     (sessionId: string) => {
@@ -266,19 +307,7 @@ export default function App() {
         if (session) {
           setActiveSession(session);
           protocolClient.setSessionId(sessionId);
-          setShowWelcome(false);
-          fetch(`/api/sessions/${sessionId}/events`)
-            .then((res) => res.json())
-            .then((data) => {
-              setTranscriptEvents((data.events || []).map((e: any) => ({
-                type: mapEventType(e.type), session_id: e.session_id,
-                seq: e.seq ?? 0, payload: e.payload ?? {},
-                timestamp: e.timestamp ?? new Date().toISOString(),
-              })));
-              setStreamingContent("");
-              setIsStreaming(false);
-            })
-            .catch(() => setTranscriptEvents([]));
+          streamStart.current = null;
         }
       });
     },
@@ -286,7 +315,6 @@ export default function App() {
   );
 
   const handleAttachFiles = useCallback((files: File[]) => {
-    // Upload files to backend and attach to session
     if (!files.length || !activeSession?.id) return;
     
     const formData = new FormData();
@@ -306,14 +334,33 @@ export default function App() {
   }, [activeSession?.id]);
 
   const handleCreateSession = useCallback(() => {
-    sessionStore.createSession().then((session) => {
+    fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Failed to create session: ${r.status}`);
+      const data = await r.json();
+      const session: SessionSnapshot = {
+        id: data.id,
+        title: data.title || 'New Session',
+        model: data.model || 'qwen3.6-35b-a3b-ud-q4_k_xl',
+        cwd: data.cwd,
+        status: data.status || 'created',
+        is_active: false,
+        is_archived: false,
+        is_failed: false,
+        current_seq: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
       setActiveSession(session);
       setActiveModel(session.model);
-      setShowWelcome(false);
-      // Note: protocolClient.setSessionId() and connect() are handled by the
-      // useEffect that watches activeSession?.id — no duplicate calls here.
+      protocolClient.setSessionId(session.id);
+    }).catch((err) => {
+      console.error('Failed to create session:', err);
     });
-  }, [sessionStore]);
+  }, [protocolClient]);
 
   const handleModelChange = useCallback(async (modelId: string) => {
     if (!activeSession?.id) return;
@@ -326,7 +373,6 @@ export default function App() {
       if (!res.ok) throw new Error(`Model switch failed: ${res.status}`);
       const data = await res.json();
       setActiveModel(data.model);
-      // Update the active session too
       setActiveSession(prev => prev ? { ...prev, model: data.model } : prev);
     } catch (err) {
       console.error('Failed to switch model:', err);
@@ -341,21 +387,15 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: activeSession.id,
-          image_base64: imageBase64.split(',')[1], // strip data:...;base64, prefix
+          image_base64: imageBase64.split(',')[1],
           prompt: prompt,
           model: visionModel,
         }),
       });
       if (!res.ok) throw new Error(`Vision analyze failed: ${res.status}`);
       const data = await res.json();
-      // Add vision response to transcript
-      setTranscriptEvents((prev) => [...prev, {
-        type: "message",
-        session_id: activeSession.id,
-        seq: 0,
-        payload: { text: `[Vision: ${data.model}]\n${data.text}` },
-        timestamp: new Date().toISOString(),
-      }]);
+      await adapterRef.current.sendMessage(`[Vision: ${data.model}]\n${data.text}`);
+      setAdapterVersion(v => v + 1);
     } catch (err) {
       console.error('Vision analyze error:', err);
     }
@@ -435,7 +475,7 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-1 bg-bg-3 rounded-lg p-0.5">
-              <button onClick={() => { setActivePage("chat"); setShowWelcome(false); }}
+              <button onClick={() => setActivePage("chat")}
                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
                   activePage === "chat" ? "bg-accent text-white shadow-sm" : "text-text-muted hover:text-text-primary"
                 }`}>Chat</button>
@@ -448,123 +488,28 @@ export default function App() {
         </header>
 
         {activePage === "chat" ? (
-          <>
-            {!hasHydrated ? (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center max-w-lg px-6">
-                  <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-surface border border-border flex items-center justify-center animate-float">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-                    </svg>
-                  </div>
-                  <h2 className="text-2xl font-semibold text-text-primary mb-3">Loading Tektos</h2>
-                </div>
-              </div>
-            ) : showWelcome || !activeSession ? (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center max-w-lg px-6">
-                  <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-surface border border-border flex items-center justify-center animate-float">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-                    </svg>
-                  </div>
-                  <h2 className="text-2xl font-semibold text-text-primary mb-3">Welcome to Tektos</h2>
-                  <p className="text-sm text-text-muted leading-relaxed mb-6">
-                    Your AI-powered coding agent is ready. Create a session to begin building, debugging, or exploring.
-                  </p>
-                  <button
-                    onClick={handleCreateSession}
-                    className="inline-flex items-center gap-2 px-6 py-3 bg-accent text-white rounded-xl font-medium hover:bg-accent-hover shadow-lg shadow-accent/20 transition-all hover:scale-105"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                    </svg>
-                    New Session
-                  </button>
-                  <div className="mt-8 grid grid-cols-3 gap-4 text-center">
-                    <div className="p-4 rounded-xl bg-surface border border-border">
-                      <div className="text-2xl mb-2">⚡</div>
-                      <div className="text-xs font-medium text-text-primary">Local LLM</div>
-                    </div>
-                    <div className="p-4 rounded-xl bg-surface border border-border">
-                      <div className="text-2xl mb-2">🔒</div>
-                      <div className="text-xs font-medium text-text-primary">100% Private</div>
-                    </div>
-                    <div className="p-4 rounded-xl bg-surface border border-border">
-                      <div className="text-2xl mb-2">🧠</div>
-                      <div className="text-xs font-medium text-text-primary">Self-Improving</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <>
-                <Transcript
-                  activeSession={activeSession}
-                  events={transcriptEvents}
-                  streamingContent={streamingContent}
-                  isStreaming={isStreaming}
-                  onSendMessage={handleSendMessage}
-                  onInterrupt={handleInterrupt}
-                />
-                <Composer
-                  isActive={!!activeSession}
-                  isStreaming={isStreaming}
-                  sessionId={activeSession?.id}
-                  model={activeModel}
-                  connectionState={connectionState}
-                  onSendMessage={handleSendMessage}
-                  onInterrupt={handleInterrupt}
-                  onAttach={handleAttachFiles}
-                  onModelChange={handleModelChange}
-                  onVisionAnalyze={handleVisionAnalyze}
-                  visionModel={visionModel}
-                  visionAvailable={visionAvailable}
-                />
-              </>
-            )}
-          </>
+          <AssistantRuntimeProvider runtime={runtime}>
+            <ThreadView />
+            <div className="border-t border-border bg-surface/80 backdrop-blur-sm">
+              <Composer
+                isActive={!!activeSession}
+                onSend={handleSendMessage}
+                onInterrupt={handleInterrupt}
+                onAttachFiles={handleAttachFiles}
+                activeModel={activeModel}
+                onModelChange={handleModelChange}
+                visionAvailable={visionAvailable}
+                visionModel={visionModel}
+                onVisionAnalyze={handleVisionAnalyze}
+              />
+            </div>
+          </AssistantRuntimeProvider>
         ) : (
-          /* ───────── Dashboard ───────── */
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Tab bar */}
-            <div className="flex items-center gap-1 px-4 py-2 border-b border-border overflow-x-auto scrollbar-thin">
-              {DASHBOARD_TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap transition-all ${
-                    activeTab === tab.id
-                      ? "bg-accent/10 text-accent border border-accent/20"
-                      : "text-text-muted hover:text-text-primary hover:bg-surface-active"
-                  }`}
-                >
-                  <span className="text-sm">{tab.icon}</span>
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Panel content */}
-            <div className="flex-1 overflow-auto p-6">
-              <div className="max-w-6xl mx-auto">
-                {renderDashboardTab()}
-              </div>
-            </div>
+          <div className="flex-1 overflow-y-auto">
+            {renderDashboardTab()}
           </div>
         )}
       </div>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function mapEventType(backendType: string): "message" | "tool" | "system" {
-  if (backendType.startsWith("session.") || backendType.startsWith("system.")) return "system";
-  if (backendType.startsWith("tool.")) return "tool";
-  if (backendType.startsWith("assistant.")) return "message";
-  return "message";
 }
