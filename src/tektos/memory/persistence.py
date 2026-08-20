@@ -139,13 +139,19 @@ class MemoryPersistence:
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-        return self._conn
+        """Get thread-local SQLite connection for thread safety."""
+        # Use threading.local() to ensure each thread has its own connection
+        if not hasattr(self, '_thread_local'):
+            self._thread_local = threading.local()
+        conn = getattr(self._thread_local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            self._thread_local.conn = conn
+        return conn
 
     @contextmanager
     def _cursor(self):

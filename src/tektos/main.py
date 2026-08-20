@@ -28,9 +28,11 @@ from typing import Any
 
 from fastapi import FastAPI as _FastAPI
 from fastapi import HTTPException as _HTTPException
+from fastapi import Request as _Request
 from fastapi import WebSocket as _WebSocket
 from fastapi import WebSocketDisconnect as _WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware as _CORSMiddleware
+from fastapi.responses import StreamingResponse as _StreamingResponse
 from pydantic import BaseModel as _BaseModel
 from pydantic import Field as _Field
 
@@ -113,6 +115,28 @@ async def lifespan(app: _FastAPI):
         llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8081/v1"),
         llm_model=_os.getenv("TEKTOS_LLM_MODEL", "qwen3.6-35b-a3b-ud-q4_k_xl"),
     )
+
+    # 5b. Initialize model router with running LLM as default
+    if runtime_sdk._llm_base_url and runtime_sdk._llm_model:
+        try:
+            from tektos.routing import ModelRouter, ModelProfile, ModelTier
+            _model_router = ModelRouter()
+            _model_router.register_model(
+                ModelProfile(
+                    name=runtime_sdk._llm_model,
+                    api_base=runtime_sdk._llm_base_url,
+                    model_name=runtime_sdk._llm_model,
+                    tier=ModelTier.BALANCED,
+                    category="general",
+                    is_default=True,
+                    context_window=262144,
+                    max_tokens=8192,
+                )
+            )
+            app.state.model_router = _model_router
+            log.info("Model router initialized — default: %s → %s", runtime_sdk._llm_model, runtime_sdk._llm_base_url)
+        except Exception as exc:
+            log.warning("Failed to initialize model router: %s", exc)
 
     # 6. Initialize WebSocket manager
     ws_manager = WebSocketManager()
@@ -235,7 +259,7 @@ app = _FastAPI(
 # Middleware: CORS (applied after TrustedHost in reverse order — correct)
 app.add_middleware(
     _CORSMiddleware,
-    allow_origins=["http://localhost:3003", "http://localhost:3006", "http://localhost:5555"],  # Frontend URLs
+    allow_origins=["http://localhost:3000", "http://localhost:3003", "http://localhost:3006", "http://localhost:5555"],  # Frontend URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -278,8 +302,103 @@ class ModelRequest(_BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# REST API — Health & Sessions
+# REST API — Sessions (prompt via SSE streaming)
 # ---------------------------------------------------------------------------
+
+class _PromptSSEBody(_BaseModel):
+    prompt: str
+    session_id: str
+    system_prompt: str | None = None
+    model: str | None = None
+
+
+@app.post("/api/prompt/sse")
+async def prompt_sse(body: _PromptSSEBody):
+    """REST fallback for prompts — streams events via SSE.
+
+    Use this when WebSocket is unavailable (e.g., from a browser
+    fetch/XHR client or from tools that don't support WS).
+    """
+    if session_manager is None:
+        raise _HTTPException(status_code=503, detail="Session manager not initialized")
+
+    session = await session_manager.get_session(body.session_id)
+    if not session:
+        raise _HTTPException(status_code=404, detail="Session not found")
+
+    async def event_generator():
+        """Yield SSE events as they arrive."""
+        event_queue: _asyncio.Queue[str] = _asyncio.Queue(maxsize=1024)
+        approved_tools: dict[str, bool] = {}
+        approval_event: _asyncio.Event = _asyncio.Event()
+
+        async def on_event(envelope):
+            try:
+                data = envelope.to_json()
+                # Convert envelope event_type to SSE-compatible type
+                et = envelope.event_type
+                if et == "assistant.delta":
+                    et = "assistant_delta"
+                elif et == "assistant.completed":
+                    et = "assistant_completed"
+                await event_queue.put(f"event: {et}\ndata: {data}\n\n")
+            except Exception as e:
+                log.warning("SSE event send failed: %s", e)
+
+        async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
+            try:
+                await _asyncio.wait_for(approval_event.wait(), timeout=30.0)
+                return approved_tools.get(tool_id, False)
+            except _asyncio.TimeoutError:
+                log.warning("Tool approval timeout for %s", tool_id)
+                return False
+
+        task = _asyncio.create_task(
+            runtime_sdk.submit_prompt(
+                session=session,
+                prompt=body.prompt,
+                system_prompt=body.system_prompt,
+                on_event=on_event,
+                on_tool_approval=on_tool_approval,
+            )
+        )
+
+        # Keep yielding until the task completes or the client disconnects
+        while not task.done():
+            try:
+                msg = await _asyncio.wait_for(event_queue.get(), timeout=1.0)
+                yield msg
+            except _asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                log.warning("SSE yield error: %s", e)
+                break
+
+        # Drain remaining events
+        while not event_queue.empty():
+            try:
+                msg = event_queue.get_nowait()
+                yield msg
+            except _asyncio.QueueEmpty:
+                break
+
+        # Wait for task completion
+        try:
+            await task
+        except Exception as e:
+            error_data = _json.dumps({"type": "error", "detail": str(e)})
+            yield f"event: error\ndata: {error_data}\n\n"
+
+    return _StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 @app.get("/health")
 async def health_check():
@@ -289,9 +408,9 @@ async def health_check():
     return {
         "ok": True,
         "protocol_version": PROTOCOL_VERSION,
-        "llm_url": runtime_sdk._llm_base_url,
-        "llm_model": runtime_sdk._llm_model,
-        "active_sessions": len(session_manager._sessions),
+        "llm_url": getattr(runtime_sdk, "_llm_base_url", None) or "not initialized",
+        "llm_model": getattr(runtime_sdk, "_llm_model", None) or "not initialized",
+        "active_sessions": len(session_manager._sessions) if session_manager else 0,
         "event_bus": _event_bus.get_stats(),
         "state_machine": _state_machine.get_stats(),
     }
@@ -762,7 +881,9 @@ async def create_session(req: CreateSessionRequest):
 
     return {
         "id": session.id,
+        "title": session.title or "",
         "model": session.model,
+        "cwd": session.cwd,
         "status": session.status,
     }
 
@@ -1776,27 +1897,37 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
 
     Protocol versioned via query param: ?protocol_version=1.0.0
     """
-    # Check protocol version
-    _ = websocket.query_params.get("protocol_version", PROTOCOL_VERSION)
+    log.info(f"WS handler: incoming connection for session {session_id[:8]}")
+    # Accept the WebSocket with CORS headers (CORSMiddleware doesn't apply to WS)
+    origin = websocket.headers.get("origin", "")
+    allowed_origins = ["http://localhost:3000", "http://localhost:3003", "http://localhost:3006", "http://localhost:5555"]
+    headers = {}
+    if origin in allowed_origins:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Methods"] = "GET, POST"
+        headers["Access-Control-Allow-Headers"] = "*"
+        headers["Access-Control-Allow-Credentials"] = "true"
+    await websocket.accept(headers=headers)
+    log.info(f"WS handler: accepted, now checking session {session_id[:8]}")
 
     # Check if session exists
     session = await session_manager.get_session(session_id)
     if not session:
+        log.warning(f"WS handler: session {session_id[:8]} NOT FOUND — available sessions: {[s.id[:8] for s in session_manager._sessions.values()]}")
         await websocket.close(code=4004, reason="Session not found")
         return
+    log.info(f"WS handler: session found, status={session.status}")
 
     # Add WS connection to both registries (session_manager for lifecycle,
     # ws_manager for broadcast fanout)
     await session_manager.add_ws_connection(session_id, websocket)
     await ws_manager.add(session_id, websocket)
 
+    # Send session.ready (first message after connect)
+    await websocket.send_text(session_ready(session_id, since_seq=0).to_json())
+    log.info(f"WS handler: sent session.ready, entering main loop for {session_id[:8]}")
+
     try:
-        # Accept the WebSocket connection FIRST
-        await websocket.accept()
-
-        # Send session.ready (first message after connect)
-        await websocket.send_text(session_ready(session_id, since_seq=0).to_json())
-
         # Main loop: receive prompts and tool approvals
         log.info(f"WebSocket main loop starting for session {session_id[:8]}")
         while True:

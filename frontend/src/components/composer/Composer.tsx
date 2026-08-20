@@ -1,98 +1,195 @@
 /**
- * Tektos-Ultima v1 — Composer (Redesigned)
+ * Tektos-Ultima v1 — Composer (Hermes Agent ChatBar clone)
  *
- * Workflow-centered input with:
- * - Context-aware placeholder text
- * - Smart keyboard shortcuts display
- * - Live token/context usage visualization
- * - File attachment support
- * - Streaming state feedback
- * - Minimal, focused design
+ * Matches Hermes Agent desktop:
+ * - Textarea with inline status
+ * - Model pill on left (showing model name, not icon)
+ * - Send/stop button on right (solid circle, arrow-up)
+ * - CSS custom properties for sizing: --composer-control-size, --composer-control-gap
  */
 
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import {
-  PaperAirplaneIcon,
-  StopIcon,
-  ArrowUpOnSquareIcon,
-  SparklesIcon,
-  EyeIcon,
+  ChevronDownIcon,
 } from "@heroicons/react/24/outline";
-import { ModelPicker } from "./ModelPicker";
+import { useAuiState } from "@assistant-ui/react";
+import { TektosExternalStoreAdapter } from "@/lib/tektos-store-adapter";
 
-// ---------------------------------------------------------------------------
-// Composer component
-// ---------------------------------------------------------------------------
+// CSS for composer controls — matches Hermes Agent desktop PRIMARY_ICON_BTN exactly
+const COMPOSER_CSS = `
+  .composer-send-btn {
+    width: 1.625rem;
+    height: 1.625rem;
+    flex-shrink: 0;
+    border-radius: 50%;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    background: var(--text-primary);
+    color: var(--bg-primary);
+  }
+  .composer-send-btn:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+  .composer-send-btn:disabled {
+    background: color-mix(in srgb, var(--text-primary) 30%, transparent);
+    color: var(--bg-primary);
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .composer-model-pill {
+    height: 1.5rem;
+    max-width: 10rem;
+    flex-shrink: 0;
+    border-radius: 0.375rem;
+    padding: 0 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--text-muted-tertiary);
+    background: transparent;
+    cursor: pointer;
+    border: none;
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .composer-model-pill:hover {
+    background: var(--chrome-action-hover);
+    color: var(--text-primary);
+  }
+  .composer-model-pill:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    background: transparent;
+  }
+`;
 
 interface ComposerProps {
-  isActive: boolean;
-  isStreaming: boolean;
+  isActive?: boolean;
   sessionId?: string;
   model?: string;
-  connectionState?: "disconnected" | "connecting" | "connected" | "reconnecting";
-  onSendMessage: (message: string) => void;
-  onInterrupt: () => void;
-  onAttach?: (files: File[]) => void;
   onModelChange?: (modelId: string) => void;
+  connectionState?: "disconnected" | "connecting" | "connected" | "reconnecting";
+  adapter: TektosExternalStoreAdapter;
+  onSendMessage?: (message: string) => Promise<void>;
+  onInterrupt?: () => void;
+  onAttachFiles?: (files: File[]) => void;
   onVisionAnalyze?: (imageBase64: string, prompt: string) => void;
-  visionModel?: string;
   visionAvailable?: boolean;
+  visionModel?: string;
+  onNewSession?: () => void;
 }
 
 export function Composer({
   isActive,
-  isStreaming,
   sessionId,
   model,
+  onModelChange,
   connectionState = "disconnected",
+  adapter,
   onSendMessage,
   onInterrupt,
-  onAttach,
-  onModelChange,
+  onAttachFiles,
   onVisionAnalyze,
-  visionModel,
   visionAvailable = false,
+  visionModel,
+  onNewSession,
 }: ComposerProps) {
+  const isStreaming = useAuiState(
+    (s) => s.thread.isRunning && s.thread.messages.some((m) => m.role === "assistant")
+  );
+
   const [value, setValue] = useState("");
   const [isFocused, setIsFocused] = useState(false);
-  const [lineCount, setLineCount] = useState(1);
-  const [elapsedSec, setElapsedSec] = useState(0);
-  const [showMetrics, setShowMetrics] = useState(false);
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [visionPrompt, setVisionPrompt] = useState("");
   const [isVisionMode, setIsVisionMode] = useState(false);
-  const [attachedImage, setAttachedImage] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const visionInputRef = useRef<HTMLInputElement>(null);
-  
-  // Prompt history for up/down arrow navigation
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
-  const handleSubmit = useCallback(() => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const visionInputRef = useRef<HTMLInputElement>(null);
+
+  // Status
+  const isConnecting = connectionState !== "connected";
+  const statusColor = isConnecting
+    ? connectionState === "reconnecting"
+      ? "text-yellow-500"
+      : connectionState === "connecting"
+        ? "text-yellow-500"
+        : "text-status-error"
+    : "text-status-success";
+
+  const statusText = (() => {
+    if (!isActive) return "";
+    if (isStreaming) return "";
+    if (queuedMessages.length > 0) return `${queuedMessages.length} queued`;
+    if (connectionState === "reconnecting") return "Reconnecting…";
+    if (connectionState === "connecting") return "Connecting…";
+    if (!isConnecting) return "";
+    return "Disconnected";
+  })();
+
+  // Handlers
+  const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
-    if (!trimmed || !isActive || isStreaming) return;
+    if (!trimmed || isStreaming && !value.trim() && queuedMessages.length === 0) return;
 
-    // Add to history
-    setPromptHistory(prev => {
-      const newHistory = [...prev, trimmed];
-      // Keep only last 50 messages
-      return newHistory.slice(-50);
-    });
-    setHistoryIndex(-1); // Reset history navigation
+    setPromptHistory(prev => [...prev, trimmed].slice(-50));
+    setHistoryIndex(-1);
 
-    onSendMessage(trimmed);
+    // Queue if streaming and have text
+    if (isStreaming && trimmed) {
+      if (queuedMessages.length < 10) {
+        setQueuedMessages(prev => [...prev, trimmed]);
+      }
+      setValue("");
+      textareaRef.current?.focus();
+      return;
+    }
+
+    // Send via page.tsx handler (which does adapter.sendMessage + protocolClient.sendPrompt)
+    if (onSendMessage && trimmed) {
+      await onSendMessage(trimmed);
+    } else {
+      // Fallback: send through adapter directly
+      await adapter.sendMessage(trimmed);
+    }
     setValue("");
-    setLineCount(1);
-    setShowMetrics(false);
     textareaRef.current?.focus();
-  }, [value, isActive, isStreaming, onSendMessage]);
+  }, [value, isStreaming, queuedMessages, onSendMessage, adapter]);
+
+  const handleDrainQueue = useCallback(async () => {
+    if (queuedMessages.length === 0) return;
+    const next = queuedMessages[0];
+    setQueuedMessages(prev => prev.slice(1));
+    if (onSendMessage) {
+      await onSendMessage(next);
+    } else {
+      await adapter.sendMessage(next);
+    }
+  }, [queuedMessages, onSendMessage, adapter]);
+
+  const handleInterrupt = useCallback(() => {
+    if (onInterrupt) {
+      onInterrupt();
+    } else {
+      adapter.interrupt();
+    }
+  }, [onInterrupt, adapter]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Up arrow: navigate back through history
+      // Up arrow: history
       if (e.key === "ArrowUp" && !value) {
         e.preventDefault();
         if (promptHistory.length > 0) {
@@ -101,116 +198,75 @@ export function Composer({
         }
         return;
       }
-      // Down arrow: navigate forward through history
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        // istanbul ignore next — ArrowUp always jumps to last item, so
-        // historyIndex < length-1 is never true via keyboard nav
         if (historyIndex < promptHistory.length - 1) {
-          const nextIndex = historyIndex + 1;
-          setHistoryIndex(nextIndex);
-          setValue(promptHistory[nextIndex]);
+          setHistoryIndex(historyIndex + 1);
+          setValue(promptHistory[historyIndex + 1]);
         } else {
-          // Reached the end, clear input
           setHistoryIndex(-1);
           setValue("");
         }
         return;
       }
+      // Ctrl+Enter: queue message
+      if (e.key === "Enter" && e.ctrlKey && !e.shiftKey && isStreaming && value.trim()) {
+        e.preventDefault();
+        setQueuedMessages(prev => [...prev, value.trim()]);
+        setValue("");
+        return;
+      }
+      // Enter: send or drain queue
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        if (isStreaming && !value.trim() && queuedMessages.length > 0) {
+          handleDrainQueue();
+          return;
+        }
         handleSubmit();
+        return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === "d") {
-        e.preventDefault();
-        handleSubmit();
-      }
-      // Ctrl+C = interrupt (like Hermes Agent & Terminal)
+      // Ctrl+C: interrupt
       if ((e.ctrlKey || e.metaKey) && e.key === "c" && isStreaming) {
         e.preventDefault();
-        onInterrupt();
+        handleInterrupt();
+        return;
       }
-      // Ctrl+Shift+M = toggle metrics display
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "M") {
+      // Ctrl+Shift+K: drain queue
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "K") {
         e.preventDefault();
-        setShowMetrics(prev => !prev);
+        handleDrainQueue();
+        return;
+      }
+      // Escape: interrupt
+      if (e.key === "Escape" && isStreaming) {
+        e.preventDefault();
+        handleInterrupt();
+        return;
       }
     },
-    [handleSubmit, onInterrupt, value, promptHistory, historyIndex]
+    [handleSubmit, handleDrainQueue, handleInterrupt, value, promptHistory, historyIndex, isStreaming, queuedMessages]
   );
 
-  // Auto-resize textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = Math.min(
-        textareaRef.current.scrollHeight,
-        200
-      ) + "px";
-    }
-  }, [value]);
-
-  // Elapsed time counter
-  useEffect(() => {
-    if (!isStreaming) {
-      setElapsedSec(0);
-      return;
-    }
-    const interval = setInterval(() => {
-      setElapsedSec((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isStreaming]);
-
-  const formatElapsed = (sec: number): string => {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  };
-
-  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleResize = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    e.target.style.height = "auto";
+    e.target.style.height = e.target.scrollHeight + "px";
     setValue(e.target.value);
-    const lines = e.target.value.split("\n").length;
-    setLineCount(lines);
-    setShowMetrics(true);
-  };
-
-  const handleFileClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length > 0 && onAttach) {
-      onAttach(files);
-    }
-    e.target.value = "";
-  };
-
-  // Vision mode: select image and send to vision LLM
-  const handleVisionImageClick = () => {
-    visionInputRef.current?.click();
   };
 
   const handleVisionImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
-
     const file = files[0];
     if (!file.type.startsWith("image/")) return;
-
     const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = reader.result as string;
-      setAttachedImage(base64);
-    };
+    reader.onload = () => setAttachedImage(reader.result as string);
     reader.readAsDataURL(file);
     e.target.value = "";
   };
 
-  const handleVisionAnalyze = () => {
+  const handleVisionAnalyzeLocal = () => {
     if (!attachedImage || !visionPrompt || !onVisionAnalyze) return;
-
     onVisionAnalyze(attachedImage, visionPrompt);
     setVisionPrompt("");
     setAttachedImage(null);
@@ -222,358 +278,153 @@ export function Composer({
     setVisionPrompt("");
   };
 
-  const clearAttachedImage = () => {
-    setAttachedImage(null);
-  };
+  const clearImage = () => setAttachedImage(null);
 
-  // Metrics
-  const charCount = value.length;
-  const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
-  const estTokenCount = wordCount ? Math.ceil(wordCount * 1.3) : 0;
-  const estContextPct = estTokenCount > 0 ? Math.min((estTokenCount / 128000) * 100, 100) : 0;
+  const hasText = value.trim().length > 0;
+  const hasAttachment = attachedImage !== null;
+  const canSend = hasText || isStreaming;
+  const isStreamingOrQueued = isStreaming || queuedMessages.length > 0;
 
-  const formatTokens = (count: number): string => {
-    if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
-    return `${count}`;
-  };
-
-  const getUsageColor = (pct: number): string => {
-    if (pct < 50) return "text-text-muted";
-    if (pct < 75) return "text-status-warning";
-    return "text-status-error";
-  };
-
-  const getUsageBarColor = (pct: number): string => {
-    if (pct < 50) return "bg-status-success";
-    if (pct < 75) return "bg-status-warning";
-    return "bg-status-error";
-  };
-
-  const showMetricsUI = isActive && (showMetrics || isStreaming) && (wordCount > 0 || isStreaming);
-
-  // Context-aware placeholder
-  const getPlaceholder = () => {
-    if (!isActive) return "Create a session to start";
-    if (isStreaming) return "AI is responding... Ctrl+C to interrupt";
-    return "Describe what you want to build...";
-  };
+  // Short model name for display (strip paths, keep just the model)
+  const modelName = model
+    ? model.split('/').pop()?.split('-').slice(0, 2).join('-') || model
+    : '';
 
   return (
-    <div className="composer">
+    <div className="composer" style={{ 
+      '--composer-control-size': '1.5rem', 
+      '--composer-control-gap': '0.25rem', 
+      '--composer-control-primary-size': '1.625rem', 
+      '--composer-surface-pad-x': '0.5rem', 
+      '--composer-surface-pad-y': '0.3125rem', 
+      '--composer-row-gap': '0.25rem', 
+      '--composer-input-min-height': '1.625rem', 
+      '--composer-input-max-height': '9.375rem',
+      '--composer-fill': 'rgba(0, 0, 0, 0.2)',
+      '--dt-input': 'rgba(0, 0, 0, 0.3)',
+      '--ui-chat-surface-background': '#0a0a0a',
+      '--ui-base': '#ffffff',
+      '--text-primary': '#e5e5e5',
+      '--bg-primary': '#111111',
+      '--text-muted-tertiary': '#737373',
+      '--chrome-action-hover': 'rgba(255, 255, 255, 0.08)',
+    } as React.CSSProperties} data-slot="composer-root">
+      <style>{COMPOSER_CSS}</style>
       <div className="max-w-4xl mx-auto">
-        {/* Streaming indicator */}
-        {isStreaming && (
-          <div className="flex items-center gap-2 mb-2 px-1">
-            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-            <span className="text-xs text-accent font-medium">AI is thinking</span>
-            <span className="text-xs text-text-muted/50">·</span>
-            <span className="text-xs text-text-muted/70">{formatElapsed(elapsedSec)}</span>
+        {/* Queue pills — only show when actually queued */}
+        {queuedMessages.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 px-[5px] pb-1.5">
+            <button
+              onClick={handleDrainQueue}
+              className="inline-flex h-[1.5rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-xs font-normal text-muted-foreground border border-border/65 bg-surface/80 backdrop-blur-[0.5rem] hover:bg-surface-hover transition-colors"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3"><path d="M7.25 1.75a.75.75 0 0 1 1.5 0v7.19l3.47-3.47a.75.75 0 1 1 1.06 1.06l-4.75 4.75a.75.75 0 0 1-1.06 0l-4.75-4.75a.75.75 0 1 1 1.06-1.06l3.47 3.47V1.75Z" transform="rotate(180 8 8)"/></svg>
+              <span>Send queued ({queuedMessages.length})</span>
+            </button>
           </div>
         )}
 
-        {/* Input wrapper */}
-        <div className={`composer-input-wrapper ${isFocused ? "shadow-glow" : ""}`}>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={handleFileChange}
-          />
+        {/* Composer surface — matches Hermes Agent: rounded-2xl, glass border, subtle background */}
+        <div className="group/composer relative w-full overflow-visible rounded-2xl">
+          <div
+            className="group/composer-surface relative z-4 isolate grid grid-rows-[auto_1fr] overflow-hidden rounded-[inherit] border border-[color-mix(in_srgb,var(--ui-base)_calc(18%*1),var(--dt-input))] bg-[var(--composer-fill,var(--ui-chat-surface-background))] backdrop-blur-sm transition-[background-color] duration-150 ease-out"
+            data-slot="composer-surface"
+          >
+            {/* Glass fill layer (pointer-events-none overlay) */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 -z-10 rounded-[inherit] bg-[var(--composer-fill,var(--ui-chat-surface-background))]"
+            />
+            <div
+              className="relative z-1 flex min-h-0 w-full flex-col gap-[var(--composer-row-gap)] overflow-hidden rounded-[inherit] px-[var(--composer-surface-pad-x)] py-[var(--composer-surface-pad-y)] transition-opacity duration-200 ease-out"
+              data-slot="composer-fade"
+            >
+              {/* Main input row: 3-column grid — [model] [input] [controls] */}
+              <div className="grid w-full grid-cols-[auto_1fr_auto] items-center gap-[var(--composer-control-gap)]">
+                {/* Left: model pill */}
+                <div className="flex translate-y-[3px] items-start gap-[var(--composer-control-gap)] self-start">
+                  {onModelChange && model && isActive && (
+                    <button
+                      onClick={() => onModelChange(model)}
+                      disabled={!isActive}
+                      className="composer-model-pill"
+                      type="button"
+                    >
+                      <span className="truncate">{modelName}</span>
+                      <ChevronDownIcon className="w-2.5 h-2.5 shrink-0 opacity-50" />
+                    </button>
+                  )}
+                </div>
 
-          {/* Placeholder overlay */}
-          {!value && !isFocused && (
-            <div className="absolute inset-x-4 top-3 pointer-events-none">
-              <div className="flex items-center gap-3">
-                <SparklesIcon className="w-4 h-4 text-accent/50 flex-shrink-0" />
-                <p className="text-xs text-text-muted/60 leading-relaxed">
-                  {getPlaceholder()}
-                </p>
-              </div>
-            </div>
-          )}
-
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={handleTextareaChange}
-            onKeyDown={handleKeyDown}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            placeholder={getPlaceholder()}
-            disabled={!isActive || (isStreaming && false)}
-            rows={Math.min(lineCount, 8)}
-            className={`w-full bg-transparent border-none text-text-primary text-sm
-                       resize-none focus:ring-0 placeholder-text-muted
-                       px-4 py-3 min-h-[2.75rem]
-                       ${!value && !isFocused ? "pt-6" : ""}`}
-          />
-
-          {/* Vision mode input */}
-          {isVisionMode && (
-            <div className="px-4 py-3 border-b border-text-muted/10">
-              {/* Image preview */}
-              {attachedImage && (
-                <div className="relative inline-block mb-2">
-                  <img
-                    src={attachedImage}
-                    alt="Attached image"
-                    className="max-h-32 rounded-lg border border-text-muted/20"
+                {/* Center: textarea */}
+                <div className="min-w-0 relative">
+                  <textarea
+                    ref={textareaRef}
+                    value={value}
+                    onChange={handleResize}
+                    onKeyDown={handleKeyDown}
+                    placeholder={statusText}
+                    disabled={!isActive && connectionState === "disconnected"}
+                    className="w-full resize-none bg-transparent py-1 pr-1 text-foreground outline-none disabled:cursor-not-allowed text-[0.875rem] leading-normal placeholder:text-muted-foreground/60 min-h-[var(--composer-input-min-height)] max-h-[var(--composer-input-max-height)] overflow-y-auto"
+                    rows={1}
                   />
-                  <button
-                    onClick={clearAttachedImage}
-                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-status-error text-white
-                               flex items-center justify-center text-xs hover:bg-status-error/80
-                               transition-colors"
-                    title="Remove image"
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
-
-              {/* Vision prompt input */}
-              <input
-                ref={visionInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleVisionImageChange}
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleVisionImageClick}
-                  className="px-3 py-1.5 rounded-md bg-surface border border-border
-                             text-xs text-text-primary hover:bg-surface-hover/50
-                             transition-colors flex items-center gap-1"
-                >
-                  <EyeIcon className="w-3.5 h-3.5" />
-                  {attachedImage ? "Change image" : "Select image"}
-                </button>
-                <input
-                  value={visionPrompt}
-                  onChange={(e) => setVisionPrompt(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && attachedImage) {
-                      handleVisionAnalyze();
-                    }
-                  }}
-                  placeholder="What do you want to know about this image?"
-                  className="flex-1 bg-transparent border-none text-sm
-                             focus:ring-0 placeholder-text-muted
-                             px-2 py-1.5"
-                />
-                <button
-                  onClick={handleVisionAnalyze}
-                  disabled={!attachedImage || !visionPrompt.trim()}
-                  className="px-3 py-1.5 rounded-md bg-accent text-white
-                             hover:bg-accent-hover disabled:opacity-30 disabled:cursor-not-allowed
-                             transition-colors text-sm"
-                >
-                  Analyze
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Bottom bar */}
-          <div className="flex items-center justify-between px-3 py-2 border-t border-text-muted/10">
-            <div className="flex items-center gap-2">
-              {/* Vision mode toggle */}
-              {visionAvailable && onVisionAnalyze && (
-                <button
-                  onClick={toggleVisionMode}
-                  className={`w-7 h-7 rounded-md flex items-center justify-center
-                             transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                               isVisionMode
-                                 ? "bg-accent text-white"
-                                 : "text-text-muted hover:text-text-primary hover:bg-surface-hover/50"
-                             }`}
-                  title={isVisionMode ? "Exit vision mode" : "Vision mode (analyze images)"}
-                >
-                  <EyeIcon className="w-4 h-4" />
-                </button>
-              )}
-
-              {/* File attachment */}
-              {onAttach && (
-                <button
-                  onClick={handleFileClick}
-                  disabled={!isActive || isStreaming}
-                  className="w-7 h-7 rounded-md flex items-center justify-center
-                             text-text-muted hover:text-text-primary hover:bg-surface-hover/50
-                             transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  title="Attach file"
-                >
-                  <ArrowUpOnSquareIcon className="w-4 h-4" />
-                </button>
-              )}
-
-              {/* Model picker */}
-              {isActive && onModelChange && model && (
-                <ModelPicker
-                  currentModel={model}
-                  onModelChange={onModelChange}
-                />
-              )}
-
-              {/* Context usage */}
-              {isActive && estTokenCount > 0 && (
-                <div className="flex items-center gap-2 ml-1">
-                  <div className="w-16 h-1 rounded-full bg-bg-3 overflow-hidden">
-                    <div
-                      className={`h-full ${getUsageBarColor(estContextPct)} transition-all duration-200`}
-                      style={{ width: `${estContextPct}%` }}
-                    />
+                  {/* Inline status: dot + text overlay */}
+                  <div className="pointer-events-none absolute inset-y-1 left-0 flex items-center pl-0">
+                    <span className={`w-1.5 h-1.5 rounded-full ${statusColor} mr-1.5`}></span>
+                    <span className={`text-[11px] ${statusColor} truncate`}>{statusText}</span>
                   </div>
-                  <span className={`text-[10px] ${getUsageColor(estContextPct)}`}>
-                    {formatTokens(estTokenCount)}/128k tok
-                  </span>
-                </div>
-              )}
-
-              {/* Elapsed time when streaming */}
-              {isStreaming && (
-                <span className="text-[10px] text-accent/70 ml-1">
-                  ⏱ {formatElapsed(elapsedSec)}
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3">
-              {/* Metrics display */}
-              {showMetricsUI && (
-                <div className="flex items-center gap-2 text-xs text-text-muted/70">
-                  {wordCount > 0 && (
-                    <>
-                      <span>{wordCount} words</span>
-                      <span className="text-text-muted/30">·</span>
-                    </>
-                  )}
-                  {estTokenCount > 0 && (
-                    <>
-                      <span>{formatTokens(estTokenCount)} tokens</span>
-                      <span className="text-text-muted/30">·</span>
-                    </>
-                  )}
-                  {charCount > 0 && <span>{charCount} chars</span>}
-                  {isStreaming && (
-                    <>
-                      <span className="text-text-muted/30">·</span>
-                      <span className="text-accent">{formatElapsed(elapsedSec)}</span>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* Send/Interrupt */}
-              {isStreaming ? (
-                <button
-                  onClick={onInterrupt}
-                  className="w-7 h-7 rounded-md flex items-center justify-center
-                             bg-status-error/20 text-status-error hover:bg-status-error/30
-                             transition-colors"
-                  title="Stop generation"
-                >
-                  <StopIcon className="w-4 h-4" />
-                </button>
-              ) : (
-                <button
-                  onClick={handleSubmit}
-                  disabled={!isActive || !value.trim()}
-                  className="w-7 h-7 rounded-md flex items-center justify-center
-                             bg-accent text-white hover:bg-accent-hover
-                             transition-colors disabled:opacity-30 disabled:cursor-not-allowed
-                             disabled:hover:bg-accent"
-                  title="Send message"
-                >
-                  <PaperAirplaneIcon className="w-4 h-4 rotate-90" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Persistent status bar — always visible when active */}
-          {isActive && (
-            <div className="flex items-center justify-between px-3 py-1.5 border-t border-text-muted/5">
-              <div className="flex items-center gap-2">
-                {/* Connection status */}
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-1.5 h-1.5 rounded-full ${
-                    connectionState === "connected" ? "bg-status-success" :
-                    connectionState === "connecting" || connectionState === "reconnecting" ? "bg-status-warning animate-pulse" :
-                    "bg-status-error"
-                  }`} />
-                  <span className="text-[10px] text-text-muted/50 capitalize">
-                    {connectionState === "reconnecting" ? "reconnecting" : connectionState}
-                  </span>
                 </div>
 
-                {/* Active session indicator */}
-                {sessionId && (
-                  <span className="text-[10px] text-text-muted/40">
-                    {sessionId.slice(0, 8)}...
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Model + context */}
-                {model && (
-                  <span className="text-[10px] text-text-muted/40">
-                    {model}
-                  </span>
-                )}
-                {isStreaming && (
-                  <>
-                    <span className="text-[10px] text-text-muted/30">·</span>
-                    <span className="text-[10px] text-accent/70">
-                      ⏱ {formatElapsed(elapsedSec)}
-                    </span>
-                  </>
-                )}
+                {/* Right: send/stop — solid circle button matching PRIMARY_ICON_BTN */}
+                <div className="flex items-center justify-end gap-[var(--composer-control-gap)]">
+                  {/* File upload button */}
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!isActive}
+                    className="composer-send-btn"
+                    type="button"
+                    title="Attach file"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4"><path d="M1.5 0h11.586a1.5 1.5 0 0 1 1.06.44l1.415 1.414A1.5 1.5 0 0 1 16 2.914V14.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 0 14.5v-13A1.5 1.5 0 0 1 1.5 0ZM11 2H2v12h12V2Zm-1 1v5.586l2.293-2.293a.5.5 0 1 1 .707.707l-3 3a.5.5 0 0 1-.707 0l-3-3a.5.5 0 1 1 .707-.707L5 8.586V3a1 1 0 1 1 2 0Z" /></svg>
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*,.pdf,.txt,.md,.json,.csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      if (files.length > 0 && onAttachFiles) {
+                        onAttachFiles(files);
+                      }
+                      e.target.value = "";
+                    }}
+                  />
+                  {isStreaming ? (
+                    <button
+                      onClick={handleInterrupt}
+                      className="composer-send-btn"
+                      type="submit"
+                      title="Stop"
+                    >
+                      <span className="block size-2.5 rounded-[0.1875rem] bg-current" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleSubmit}
+                      disabled={!canSend}
+                      className="composer-send-btn"
+                      type="submit"
+                      title="Send"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4"><path d="M7.25 1.75a.75.75 0 0 1 1.5 0v7.19l3.47-3.47a.75.75 0 1 1 1.06 1.06l-4.75 4.75a.75.75 0 0 1-1.06 0l-4.75-4.75a.75.75 0 1 1 1.06-1.06l3.47 3.47V1.75Z" transform="rotate(180 8 8)"/></svg>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          )}
-        </div>
-
-        {/* Keyboard hints */}
-        {!showMetricsUI && isActive && (
-          <div className="text-center mt-2">
-            <div className="flex items-center justify-center gap-3 text-[11px] text-text-muted/50">
-              <span className="flex items-center gap-1">
-                <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
-                  Enter
-                </kbd>
-                <span>send</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
-                  Shift+Enter
-                </kbd>
-                <span>newline</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
-                  Ctrl+C
-                </kbd>
-                <span>stop</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">
-                  ↑↓
-                </kbd>
-                <span>history</span>
-              </span>
-            </div>
           </div>
-        )}
-
-        {/* Footer */}
-        <div className="text-center mt-1">
-          <p className="text-[10px] text-text-muted/30">
-            Tektos-Ultima v1
-          </p>
         </div>
       </div>
     </div>

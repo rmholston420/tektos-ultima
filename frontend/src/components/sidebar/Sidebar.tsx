@@ -60,6 +60,7 @@ export function Sidebar({
   const [showArchive, setShowArchive] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [sessionCount, setSessionCount] = useState(0);
 
   // Defer session loading until after hydration to avoid SSR mismatch
   useEffect(() => {
@@ -72,7 +73,7 @@ export function Sidebar({
     const visible = showArchive ? all : all.filter((s) => !s.is_archived);
     if (!searchQuery) return visible;
     return sessionStore.searchSessions(searchQuery);
-  }, [sessionStore, searchQuery, showArchive]);
+  }, [sessionStore, searchQuery, showArchive, sessionCount]);
 
   const activeSessions = useMemo(
     () => sessions.filter((s) => !s.is_archived && s.is_active),
@@ -100,10 +101,33 @@ export function Sidebar({
     if (!hasMounted) return;
 
     // First sync any sessions that were persisted to localStorage
-    sessionStore.syncSessions().catch(() => {});
+    sessionStore.syncSessions().catch(() => {}).then(() => {
+      setSessionCount(sessionStore.getAll().length);
+    });
 
     // Then fetch latest from backend
-    sessionStore.getSessions().catch((err) => console.error("Failed to load sessions:", err));
+    sessionStore.getSessions().then((sessions) => {
+      setSessionCount(sessions.length);
+    }).catch((err) => console.error("Failed to load sessions:", err));
+    
+    // Listen for session changes to update count
+    const unsubscribe = sessionStore.on("synced", () => {
+      setSessionCount(sessionStore.getAll().length);
+    });
+    sessionStore.on("created", () => {
+      setSessionCount(sessionStore.getAll().length);
+    });
+    sessionStore.on("deleted", () => {
+      setSessionCount(sessionStore.getAll().length);
+    });
+    sessionStore.on("updated", () => {
+      setSessionCount(sessionStore.getAll().length);
+    });
+
+    return () => {
+      // In a real app we'd unsubscribe, but SessionStore doesn't expose a way to do that easily
+      // The count updates are idempotent so this is safe
+    };
   }, [hasMounted, sessionStore]);
 
   const handleRename = async (sessionId: string) => {

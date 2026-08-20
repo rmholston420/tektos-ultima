@@ -373,7 +373,6 @@ class RuntimeSDK:
                 # Break out of the loop — safety mechanism activated
                 break
 
-            await on_event(assistant_delta(session.id, f"[Turn {turn + 1}]"))
             turn += 1
 
             try:
@@ -405,11 +404,13 @@ class RuntimeSDK:
                 current_tool_name = ""
                 current_tool_id = ""
                 current_tool_json = ""
-                saw_text = False
+                saw_any_text = False  # tracks whether ANY text was streamed this turn
+                saw_text = False      # tracks text in current chunk only
+                saw_real_text = False  # tracks actual text content (not reasoning)
                 tool_calls_this_turn: list[dict] = []
 
                 log.info(f"[SDK] Starting SSE stream for session {session.id[:8]}")
-                line_count = 0
+                reasoning_chunk_count = 0
                 async for line in resp.aiter_lines():
                     if not line or line == "data: [DONE]":
                         continue
@@ -433,18 +434,17 @@ class RuntimeSDK:
                     # Handle text content (regular content)
                     if content:
                         saw_text = True
+                        saw_any_text = True
                         current_text += content
                         await on_event(assistant_delta(session.id, content))
 
                     # Handle reasoning/thinking content (Qwen3.6, deep thinking models)
-                    # Treat reasoning_content as the main response when no regular content
+                    # Stream reasoning_content as the actual response — this IS the model's output
+                    # Accumulate into current_text for message history
                     reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                     if reasoning:
-                        if not content:
-                            # No regular content — treat reasoning as the main response
-                            saw_text = True
-                            current_text += reasoning
-                        await on_event(assistant_delta(session.id, f"[thinking: {reasoning}]"))
+                        current_text += reasoning
+                        await on_event(assistant_delta(session.id, reasoning))
 
                     # Handle tool calls
                     for tc in tool_calls:
@@ -484,7 +484,7 @@ class RuntimeSDK:
                     # llama.cpp puts finish_reason at choices[0], delta may have stop_reason
                     finish_reason = choices[0].get("finish_reason") or delta.get("finish_reason")
                     stop_reason = delta.get("stop_reason")
-                    is_last = finish_reason in ("stop", "tool_calls") or stop_reason == "end_turn"
+                    is_last = finish_reason in ("stop", "tool_calls", "length") or stop_reason == "end_turn"
 
                     if is_last:
                         # Parse and execute tool if present
@@ -511,9 +511,13 @@ class RuntimeSDK:
                             current_tool_name = ""
                             current_tool_id = ""
                             current_tool_json = ""
+                            saw_any_text = False
                             saw_text = False
-                        elif saw_text or current_text:
-                            # Emit assistant.completed ONLY from end_turn (PlexClaw bug #2 fix)
+                        elif saw_any_text or current_text:
+                            # Emit assistant.completed when text was streamed this turn.
+                            # Use saw_any_text (not saw_text) because the final chunk
+                            # may have finish_reason but empty content — the text was
+                            # already emitted in previous chunks.
                             await on_event(assistant_completed(session.id, stop_reason or "end_turn"))
                             # Add assistant text to conversation
                             messages.append({"role": "assistant", "content": current_text})
@@ -525,6 +529,7 @@ class RuntimeSDK:
                         current_tool_name = ""
                         current_tool_id = ""
                         current_tool_json = ""
+                        saw_any_text = False
                         saw_text = False
 
             except httpx.ConnectError as exc:

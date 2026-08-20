@@ -24,9 +24,10 @@ export class ProtocolClient {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private lastPong = 0;
   private lastPingSent = 0;
-  private host = "localhost";
-  private port = 8020;
-  private protocol = "ws";
+  private host = process.env.NEXT_PUBLIC_TEKTOS_HOST || "localhost";
+  private port = parseInt(process.env.NEXT_PUBLIC_TEKTOS_PORT || "8020", 10);
+  private protocol = process.env.NEXT_PUBLIC_TEKTOS_WS_PROTOCOL || "ws";
+  private pendingMessages: string[] = [];
 
   constructor(options?: { host?: string; port?: number; protocol?: string }) {
     if (options?.host) this.host = options.host;
@@ -51,21 +52,54 @@ export class ProtocolClient {
     this.handleCloseEvent(ev);
   }
 
+  private flushPendingMessages(): void {
+    while (this.pendingMessages.length > 0 && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const msg = this.pendingMessages.shift()!;
+      try { this.ws.send(msg); } catch (_) { break; }
+    }
+  }
+
   connect(): void {
     // If an old WS connection is open (e.g., from a previous session), close it first
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
       try { this.ws.close(1000, "Session change"); } catch (_) {}
     }
-    if (!this._sessionId) { this.setState("disconnected"); return; }
+    if (!this._sessionId) { console.warn("ProtocolClient.connect: no session ID"); this.setState("disconnected"); return; }
+    const url = `${this.protocol}://${this.host}:${this.port}/ws/${this._sessionId}`;
+    console.log(`ProtocolClient.connecting to ${url}`);
     this.setState("connecting");
     this.reconnectAttempts++;
     try {
-      this.ws = new WebSocket(`${this.protocol}://${this.host}:${this.port}/ws/${this._sessionId}`);
-      this.ws.onopen = () => { this.reconnectAttempts = 0; this.reconnectDelay = 1000; this.setState("connected"); this.startHeartbeat(); };
-      this.ws.onmessage = (e: MessageEvent) => { try { this.dispatch(JSON.parse(e.data)); } catch (err) { this.notifyError(new Error("Parse error: " + err)); } };
-      this.ws.onclose = (ev) => { this.stopHeartbeat(); this.setState("disconnected", ev.reason || "Closed");
-        this.handleCloseEventForOnClose(ev); };
-      this.ws.onerror = () => this.setState("disconnected", "WS error");
+      this.ws = new WebSocket(url);
+      this.ws.onopen = () => {
+        console.log("ProtocolClient.WS opened");
+        this.reconnectAttempts = 0;
+        this.reconnectDelay = 1000;
+        this.setState("connected");
+        this.startHeartbeat();
+        this.flushPendingMessages();
+      };
+      this.ws.onmessage = (e: MessageEvent) => {
+        console.log("ProtocolClient.WS message:", e.data.substring(0, 200));
+        // Track pong responses for heartbeat
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === "pong") {
+            this.lastPong = Date.now();
+          }
+        } catch (_) {}
+        try { this.dispatch(JSON.parse(e.data)); } catch (err) { this.notifyError(new Error("Parse error: " + err)); }
+      };
+      this.ws.onclose = (ev) => {
+        console.log("ProtocolClient.WS closed:", ev.code, ev.reason);
+        this.stopHeartbeat();
+        this.setState("disconnected", ev.reason || "Closed");
+        this.handleCloseEventForOnClose(ev);
+      };
+      this.ws.onerror = () => {
+        console.log("ProtocolClient.WS error");
+        this.setState("disconnected", "WS error");
+      };
     } catch (err) { this.notifyError(new Error("Connect error: " + err)); }
   }
 
@@ -75,9 +109,26 @@ export class ProtocolClient {
     const msg: any = { type: "prompt", session_id: this._sessionId, prompt: message };
     if (options?.model) msg.model = options.model;
     if (options?.cwd) msg.cwd = options.cwd;
-    this.ws?.send(JSON.stringify(msg));
+    const json = JSON.stringify(msg);
+    console.log("ProtocolClient.sendPrompt:", json, "ws readyState:", this.ws?.readyState, "sessionId:", this._sessionId);
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(json);
+      console.log("ProtocolClient.sendPrompt: sent");
+    } else {
+      this.pendingMessages.push(json);
+      console.log("ProtocolClient.sendPrompt: queued (ws not open), pending:", this.pendingMessages.length);
+    }
   }
-  sendInterrupt(): void { if (this._sessionId) this.ws?.send(JSON.stringify({ type: "interrupt", session_id: this._sessionId })); }
+  sendInterrupt(): void {
+    if (this._sessionId) {
+      const json = JSON.stringify({ type: "interrupt", session_id: this._sessionId });
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(json);
+      } else {
+        this.pendingMessages.push(json);
+      }
+    }
+  }
   sendResume(fromSeq: number): void { /* Not implemented on backend — no 'resume' message type */ }
   setSessionId(id: string): void { this._sessionId = id; }
   get sessionId(): string { return this._sessionId; }

@@ -7,7 +7,7 @@
 
 import { NextResponse } from 'next/server';
 
-const BACKEND_URL = 'http://localhost:8020';
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8020';
 
 /**
  * Build the backend path from the Next.js route path.

@@ -52,6 +52,7 @@ export default {
       fontFamily: {
         mono: ["JetBrains Mono", "Fira Code", "monospace"],
         sans: ["Inter", "system-ui", "sans-serif"],
+        collapse: ["Collapse", "Inter", "system-ui", "sans-serif"],
       },
       boxShadow: {
         glow: "0 0 20px rgba(59, 130, 246, 0.15)",

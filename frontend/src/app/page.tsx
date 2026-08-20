@@ -146,7 +146,7 @@ export default function App() {
         model: data.model || 'qwen3.6-35b-a3b-ud-q4_k_xl',
         cwd: data.cwd,
         status: data.status || 'created',
-        is_active: false,
+        is_active: true,
         is_archived: false,
         is_failed: false,
         current_seq: 0,
@@ -154,7 +154,7 @@ export default function App() {
         updated_at: new Date().toISOString(),
       };
       
-      console.log('Auto-session created:', session.id);
+      console.log('Auto-session created:', session.id, 'is_active:', session.is_active);
       setActiveSession(session);
       protocolClient.setSessionId(session.id);
     }).catch((err) => {
@@ -164,19 +164,6 @@ export default function App() {
     });
 
     protocolClient.onStateChange((state) => setConnectionState(state.state));
-
-    const checkHealth = () => {
-      if (cancelled) return;
-      fetch('/api/health', { cache: 'no-store' })
-        .then((r) => {
-          if (cancelled) return;
-          if (r.ok) setConnectionState('connected');
-          else setConnectionState('disconnected');
-        })
-        .catch(() => { if (!cancelled) setConnectionState('disconnected'); });
-    };
-
-    checkHealth();
 
     const checkVision = () => {
       if (cancelled) return;
@@ -194,22 +181,17 @@ export default function App() {
 
     checkVision();
 
-    const interval = setInterval(checkHealth, 30000);
-
-    return () => { cancelled = true; protocolClient.disconnect(); clearInterval(interval); };
+    return () => { cancelled = true; protocolClient.disconnect(); };
   }, [protocolClient]);
 
   // -------------------------------------------------------------------
-  // Reconnect WS when session changes
+  // Reconnect WS when session changes — no delay
   // -------------------------------------------------------------------
 
   useEffect(() => {
     if (activeSession?.id) {
       protocolClient.setSessionId(activeSession.id);
-      const timer = setTimeout(() => {
-        protocolClient.connect();
-      }, 300);
-      return () => clearTimeout(timer);
+      protocolClient.connect();
     }
   }, [activeSession?.id, protocolClient]);
 
@@ -218,7 +200,7 @@ export default function App() {
   // -------------------------------------------------------------------
 
   useEffect(() => {
-    protocolClient.on("*", (envelope: WSEnvelopeClient) => {
+    const handler = (envelope: WSEnvelopeClient) => {
       switch (envelope.event_type) {
         case EventType.ASSISTANT_DELTA: {
           const text = envelope.payload.text as string;
@@ -227,7 +209,6 @@ export default function App() {
             if (streamStart.current === null) {
               streamStart.current = Date.now();
             }
-            // Trigger wrapper update so runtime re-reads messages
             setAdapterVersion(v => v + 1);
           }
           break;
@@ -241,7 +222,12 @@ export default function App() {
         default:
           break;
       }
-    });
+    };
+
+    protocolClient.on("*", handler);
+    return () => {
+      protocolClient.off("*", handler);
+    };
   }, [protocolClient]);
 
   // -------------------------------------------------------------------
@@ -450,15 +436,11 @@ export default function App() {
       <div className="shell-main">
         <header className="shell-header">
           <div className="flex items-center gap-3">
-            {activePage === "chat" ? (
-              <h1 className="text-sm font-semibold text-text-primary">
-                {activeSession?.title ?? "Tektos-Ultima"}
-              </h1>
-            ) : (
-              <h1 className="text-sm font-semibold text-text-primary">System Dashboard</h1>
-            )}
+            <h1 className="text-sm font-semibold text-text-primary">
+              {activePage === "chat" ? (activeSession?.title || "Tektos") : "System Dashboard"}
+            </h1>
             {activePage === "chat" && activeSession && (
-              <span className="text-xs text-text-muted">{activeSession.model}</span>
+              <span className="text-xs text-text-muted truncate max-w-[12rem]">{activeSession.model?.split('/').pop()?.split('-').slice(0, 2).join('-')}</span>
             )}
           </div>
 
@@ -470,7 +452,7 @@ export default function App() {
                 "bg-status-error"
               }`} />
               <span className="text-xs text-text-muted capitalize">
-                {connectionState === "reconnecting" ? "reconnecting" : connectionState}
+                {connectionState}
               </span>
             </div>
 
@@ -489,24 +471,59 @@ export default function App() {
 
         {activePage === "chat" ? (
           <AssistantRuntimeProvider runtime={runtime}>
-            <ThreadView />
-            <div className="border-t border-border bg-surface/80 backdrop-blur-sm">
-              <Composer
-                isActive={!!activeSession}
-                onSend={handleSendMessage}
-                onInterrupt={handleInterrupt}
-                onAttachFiles={handleAttachFiles}
-                activeModel={activeModel}
-                onModelChange={handleModelChange}
-                visionAvailable={visionAvailable}
-                visionModel={visionModel}
-                onVisionAnalyze={handleVisionAnalyze}
-              />
-            </div>
+            {!activeSession ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center space-y-4">
+                  <h2 className="text-2xl font-semibold text-text-primary">Welcome to Tektos</h2>
+                  <p className="text-sm text-text-muted">Create a session to start chatting</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <ThreadView />
+                <div className="border-t border-border bg-surface/80 backdrop-blur-sm">
+                  <Composer
+                    isActive={!!activeSession}
+                    sessionId={activeSession?.id}
+                    adapter={adapterRef.current}
+                    model={activeModel}
+                    onModelChange={handleModelChange}
+                    connectionState={connectionState}
+                    onSendMessage={handleSendMessage}
+                    onInterrupt={handleInterrupt}
+                    onAttachFiles={handleAttachFiles}
+                    visionAvailable={visionAvailable}
+                    visionModel={visionModel}
+                    onVisionAnalyze={handleVisionAnalyze}
+                    onNewSession={handleCreateSession}
+                  />
+                </div>
+              </>
+            )}
           </AssistantRuntimeProvider>
         ) : (
-          <div className="flex-1 overflow-y-auto">
-            {renderDashboardTab()}
+          <div className="flex-1 overflow-y-auto flex flex-col">
+            {/* Dashboard tab bar */}
+            <div className="flex items-center gap-1 px-4 py-2 border-b border-border overflow-x-auto">
+              {DASHBOARD_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap ${
+                    activeTab === tab.id
+                      ? "bg-accent text-white shadow-sm"
+                      : "text-text-muted hover:text-text-primary hover:bg-surface-hover"
+                  }`}
+                >
+                  <span>{tab.icon}</span>
+                  <span>{tab.label}</span>
+                </button>
+              ))}
+            </div>
+            {/* Tab content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {renderDashboardTab()}
+            </div>
           </div>
         )}
       </div>

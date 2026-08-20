@@ -140,14 +140,8 @@ export class TektosExternalStoreAdapter implements ExternalStoreAdapter<ThreadMe
     };
     this._messages.push(assistantMsg);
     this._isRunning = true;
+    this._version++;
     this.notify();
-
-    // Notify runtime
-    await this._onNewFn?.({
-      role: "user",
-      content: [{ type: "text", text }],
-      createdAt: new Date(),
-    } as unknown as AppendMessage);
 
     return assistantMsg.id;
   }

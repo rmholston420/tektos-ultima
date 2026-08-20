@@ -60,11 +60,17 @@ test.describe("Create Session Flow", () => {
 
     // Click "New Session"
     await page.getByRole("button", { name: /new session/i }).first().click();
-    await page.waitForTimeout(2000);
 
-    // Connection should still be green
+    // Poll for connection state — WS handshake may take several seconds
     const statusText = page.locator("span.text-xs.text-text-muted.capitalize");
-    await expect(statusText).toContainText(/connected/);
+    await expect(statusText).toContainText(/connected|reconnecting|connecting|disconnected/);
+    
+    // Wait until connected (poll up to 10s)
+    await expect(async () => {
+      const state = await statusText.textContent();
+      if (state === "connected") return;
+      throw new Error(`Waiting for connected, got: ${state}`);
+    }).toPass({ timeout: 10000 });
   });
 });
 
@@ -309,8 +315,9 @@ test.describe("Full E2E Workflow", () => {
     await page.goto(FRONTEND);
     await page.waitForTimeout(2000);
 
-    // Verify welcome screen
-    await expect(page.locator("h2:text('Welcome to Tektos')")).toBeVisible();
+    // Verify welcome screen (wait for React hydration)
+    await page.waitForSelector('h2', { state: 'visible', timeout: 5000 });
+    await expect(page.locator('h2').filter({ hasText: 'Welcome to Tektos' })).toBeVisible();
 
     // Create session
     await page
@@ -324,9 +331,13 @@ test.describe("Full E2E Workflow", () => {
     await expect(textarea).toBeVisible();
     await expect(textarea).toBeEnabled();
 
-    // Verify connection is good
+    // Verify connection is good (poll up to 10s — WS handshake is async)
     const statusText = page.locator("span.text-xs.text-text-muted.capitalize");
-    await expect(statusText).toContainText(/connected/);
+    await expect(async () => {
+      const state = await statusText.textContent();
+      if (state === "connected") return;
+      throw new Error(`Waiting for connected, got: ${state}`);
+    }).toPass({ timeout: 10000 });
 
     // Navigate to dashboard
     await page.getByRole("button", { name: /dashboard/i }).click();

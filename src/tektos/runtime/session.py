@@ -164,12 +164,14 @@ class SessionManager:
         session.status = "ready"
         session.updated_at = _time.monotonic()
 
-        # State machine transition: created/ready → ready
+        # State machine transition: created/ready → ready (only if not already ready)
         _sm = get_state_machine()
         try:
-            _sm.transition(session_id, State.READY, "WS connected")
+            current = _sm.get_state(session_id)
+            if current != State.READY:
+                _sm.transition(session_id, State.READY, "WS connected")
         except Exception as e:
-            log.warning("Session state already valid: %s", e)
+            log.warning("Session state transition failed: %s", e)
 
         # Emit session.ready with since_seq
         await append_event(
