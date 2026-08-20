@@ -138,8 +138,8 @@ class TestSimilarityMatch:
 class TestEmbedderClientInit:
     def test_defaults(self):
         client = EmbedderClient()
-        assert client._base_url == "http://127.0.0.1:8090/v1"
-        assert client._model == "qwen3-embedding-4b-q8-gguf"
+        assert client._base_url == "http://127.0.0.1:8091/v1"
+        assert client._model == "Qwen3-Embedding-0.6B-Q8_0"
         assert client._client is None
 
     def test_custom_base_url(self):
@@ -185,8 +185,8 @@ class TestEmbedderClientEmbed:
     async def test_embed_single_text(self):
         client = EmbedderClient()
         mock_resp = _make_response({
-            "model": "qwen3-embedding-4b-q8-gguf",
-            "data": [{"embedding": [0.1] * 2560}],
+            "model": "Qwen3-Embedding-0.6B-Q8_0",
+            "data": [{"embedding": [0.1] * 1024}],
             "usage": {"prompt_tokens": 5, "total_tokens": 5},
         })
 
@@ -200,19 +200,19 @@ class TestEmbedderClientEmbed:
             client._client.post = AsyncMock(return_value=mock_resp)
             result = await client.embed("hello world")
 
-            assert result.model == "qwen3-embedding-4b-q8-gguf"
+            assert result.model == "Qwen3-Embedding-0.6B-Q8_0"
             assert len(result.embeddings) == 1
-            assert len(result.embeddings[0]) == 2560
+            assert len(result.embeddings[0]) == 1024
             assert result.usage["prompt_tokens"] == 5
 
     @pytest.mark.asyncio
     async def test_embed_batch(self):
         client = EmbedderClient()
         mock_resp = _make_response({
-            "model": "qwen3-embedding-4b-q8-gguf",
+            "model": "Qwen3-Embedding-0.6B-Q8_0",
             "data": [
-                {"embedding": [0.1] * 2560},
-                {"embedding": [0.2] * 2560},
+                {"embedding": [0.1] * 1024},
+                {"embedding": [0.2] * 1024},
             ],
             "usage": {"prompt_tokens": 10, "total_tokens": 10},
         })
@@ -250,7 +250,7 @@ class TestEmbedderClientSimilar:
     @pytest.mark.asyncio
     async def test_similar_returns_top_k(self):
         client = EmbedderClient()
-        # Mock: query returns [0.9]*2560, corpus returns different vectors
+        # Mock: query returns [0.9]*1024, corpus returns different vectors
         call_count = [0]
         def mock_post(*args, **kwargs):
             call_count[0] += 1
@@ -260,12 +260,12 @@ class TestEmbedderClientSimilar:
             if isinstance(inp, list):
                 embeddings = []
                 for i, text in enumerate(inp):
-                    v = [0.1 + i * 0.05] * 2560
+                    v = [0.1 + i * 0.05] * 1024
                     embeddings.append({"embedding": v})
             else:
-                embeddings = [{"embedding": [0.9] * 2560}]
+                embeddings = [{"embedding": [0.9] * 1024}]
             return _make_response({
-                "model": "qwen3-embedding-4b-q8-gguf",
+                "model": "Qwen3-Embedding-0.6B-Q8_0",
                 "data": embeddings,
                 "usage": {"prompt_tokens": 5, "total_tokens": 5},
             })
@@ -296,8 +296,8 @@ class TestEmbedderClientSimilar:
     async def test_similar_scores_are_sorted(self):
         client = EmbedderClient()
         mock_resp = _make_response({
-            "model": "qwen3-embedding-4b-q8-gguf",
-            "data": [{"embedding": [0.1] * 2560}],
+            "model": "Qwen3-Embedding-0.6B-Q8_0",
+            "data": [{"embedding": [0.1] * 1024}],
             "usage": {"prompt_tokens": 3, "total_tokens": 3},
         })
 
@@ -326,12 +326,12 @@ class TestEmbedderClientSearchEvents:
             if isinstance(inp, list):
                 embeddings = []
                 for i, text in enumerate(inp):
-                    v = [0.1 + i * 0.05] * 2560
+                    v = [0.1 + i * 0.05] * 1024
                     embeddings.append({"embedding": v})
             else:
-                embeddings = [{"embedding": [0.9] * 2560}]
+                embeddings = [{"embedding": [0.9] * 1024}]
             return _make_response({
-                "model": "qwen3-embedding-4b-q8-gguf",
+                "model": "Qwen3-Embedding-0.6B-Q8_0",
                 "data": embeddings,
                 "usage": {"prompt_tokens": 5, "total_tokens": 5},
             })
@@ -360,8 +360,8 @@ class TestEmbedderClientSearchEvents:
     async def test_search_events_skips_empty_events(self):
         client = EmbedderClient()
         mock_resp = _make_response({
-            "model": "qwen3-embedding-4b-q8-gguf",
-            "data": [{"embedding": [0.1] * 2560}],
+            "model": "Qwen3-Embedding-0.6B-Q8_0",
+            "data": [{"embedding": [0.1] * 1024}],
             "usage": {"prompt_tokens": 3, "total_tokens": 3},
         })
 
@@ -381,12 +381,12 @@ class TestEmbedderClientSearchEvents:
 
 
 def _embedder_available() -> bool:
-    """Check if the live embedder server on :8090 is responding."""
+    """Check if the live embedder server on :8091 is responding."""
     try:
         import httpx
 
         with httpx.Client(timeout=2) as c:
-            r = c.get("http://127.0.0.1:8090/v1/models")
+            r = c.get("http://127.0.0.1:8091/v1/models")
             return r.status_code == 200
     except Exception:
         return False
@@ -394,7 +394,7 @@ def _embedder_available() -> bool:
 
 @pytest.mark.skipif(
     not _embedder_available(),
-    reason="Embedder server (:8090) is not running",
+    reason="Embedder server (:8091) is not running",
 )
 class TestEmbedderIntegration:
     @pytest.mark.asyncio
@@ -404,8 +404,8 @@ class TestEmbedderIntegration:
         await client.start()
         result = await client.embed("Tektos self-improving agent")
 
-        assert len(result.embeddings[0]) == 2560
-        assert result.model == "qwen3-embedding-4b-q8-gguf"
+        assert len(result.embeddings[0]) == 1024
+        assert result.model == "Qwen3-Embedding-0.6B-Q8_0"
         assert result.usage["prompt_tokens"] > 0
 
     @pytest.mark.asyncio

@@ -7,7 +7,7 @@ Provides:
 - Knowledge base document chunking and retrieval
 
 Usage:
-    client = EmbedderClient(llm_base_url="http://127.0.0.1:8090/v1")
+    client = EmbedderClient(llm_base_url="http://127.0.0.1:8091/v1")
     vec = await client.embed("hello world")
     results = await client.similar(query, corpus, top_k=5)
 """
@@ -42,16 +42,16 @@ class SimilarityMatch:
 
 
 class EmbedderClient:
-    """Client for Qwen3-Embedding-4B via OpenAI-compatible API.
+    """Client for Qwen3-Embedding-0.6B via OpenAI-compatible API.
 
-    The embedder runs as a separate llama.cpp server on port 8090,
-    serving a `qwen3-embedding-4b-q8-gguf` model with 2560-dim vectors.
+    The embedder runs as a separate llama.cpp server on port 8091,
+    serving a `Qwen3-Embedding-0.6B-Q8_0` model with 1024-dim vectors.
 
     Endpoints:
         POST /v1/embeddings   — generate embeddings
     """
 
-    def __init__(self, llm_base_url: str = "http://127.0.0.1:8090/v1", model: str = "qwen3-embedding-4b-q8-gguf"):
+    def __init__(self, llm_base_url: str = "http://127.0.0.1:8091/v1", model: str = "Qwen3-Embedding-0.6B-Q8_0"):
         self._base_url = llm_base_url.rstrip("/")
         self._model = model
         self._client: httpx.AsyncClient | None = None

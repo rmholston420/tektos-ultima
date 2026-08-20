@@ -44,7 +44,7 @@ Tektos-Ultima-v1: fully local, free OSS self-improving coding agent system.
 - **Hardware:** RTX 5090 (32GB VRAM), strict thermal policy (51°C yellow, 80°C cap, 88°C red)
 - **Deployment:** 100% LOCAL, NO CLOUD, free OSS only
 - **GPU Model:** Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf on `:8081/v1`
-- **Embedder:** qwen3-embedding-4B-Q8_0 on `:8090/v1` (CPU-only)
+- **Embedder:** Qwen3-Embedding-0.6B-Q8_0 on `:8091/v1` (CPU-only)
 - **Ports:** Backend `:8020`, WebSocket `:5555`, Frontend `:3003` (dev server)
 - **GPU Power Limit:** 400W enforced via `gpu-power-limit.service` (systemd, enabled, persistent across reboots)
 

@@ -303,7 +303,7 @@ PORT=3003
 | Tektos Backend | :8020 | FastAPI + WebSocket |
 | Tektos Frontend | :3003 (dev) / :5555 (prod) | Next.js |
 | OpenHands llama.cpp | :8081/:8082 | Coder/Planner |
-| OpenHands embedder | :8090 | CPU embedder |
+| OpenHands embedder | :8091 | CPU embedder |
 
 ---
 
