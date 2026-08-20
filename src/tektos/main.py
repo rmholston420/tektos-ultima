@@ -1899,15 +1899,18 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
     """
     log.info(f"WS handler: incoming connection for session {session_id[:8]}")
     # Accept the WebSocket with CORS headers (CORSMiddleware doesn't apply to WS)
+    # Starlette expects headers as a list of (name, value) tuples
+    extra_headers = []
     origin = websocket.headers.get("origin", "")
     allowed_origins = ["http://localhost:3000", "http://localhost:3003", "http://localhost:3006", "http://localhost:5555"]
-    headers = {}
     if origin in allowed_origins:
-        headers["Access-Control-Allow-Origin"] = origin
-        headers["Access-Control-Allow-Methods"] = "GET, POST"
-        headers["Access-Control-Allow-Headers"] = "*"
-        headers["Access-Control-Allow-Credentials"] = "true"
-    await websocket.accept(headers=headers)
+        extra_headers.extend([
+            (b"access-control-allow-origin", origin.encode()),
+            (b"access-control-allow-methods", b"GET, POST"),
+            (b"access-control-allow-headers", b"*"),
+            (b"access-control-allow-credentials", b"true"),
+        ])
+    await websocket.accept(headers=extra_headers if extra_headers else None)
     log.info(f"WS handler: accepted, now checking session {session_id[:8]}")
 
     # Check if session exists
