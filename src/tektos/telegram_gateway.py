@@ -146,7 +146,7 @@ class TelegramGateway:
 
         try:
             session = await self.session_manager.create_session(
-                model=self._user_models.get(message.from_user.id, "qwen3.6-35b-a3b-ud-q4_k_xl"),
+                model=self._user_models.get(message.from_user.id, "Qwen_Qwen3.6-35B-A3B-Q4_K_M"),
                 cwd=".",
             )
             self._user_sessions[message.from_user.id] = session.id
@@ -488,7 +488,7 @@ class TelegramGateway:
                 await message.answer("🔄 Creating new session...")
                 try:
                     session = await self.session_manager.create_session(
-                        model=self._user_models.get(user_id, "qwen3.6-35b-a3b-ud-q4_k_xl"),
+                        model=self._user_models.get(user_id, "Qwen_Qwen3.6-35B-A3B-Q4_K_M"),
                         cwd=".",
                     )
                     self._user_sessions[user_id] = session.id

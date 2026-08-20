@@ -112,8 +112,8 @@ async def lifespan(app: _FastAPI):
 
     # 5. Initialize runtime SDK
     runtime_sdk = RuntimeSDK(
-        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8081/v1"),
-        llm_model=_os.getenv("TEKTOS_LLM_MODEL", "qwen3.6-35b-a3b-ud-q4_k_xl"),
+        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1"),
+        llm_model=_os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M"),
     )
 
     # 5b. Initialize model router with running LLM as default
@@ -271,7 +271,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class CreateSessionRequest(_BaseModel):
-    model: str = "qwen3.6-35b-a3b-ud-q4_k_xl"
+    model: str = "Qwen_Qwen3.6-35B-A3B-Q4_K_M"
     cwd: str = "."
     provider: str = "local"
     permission_mode: str = "auto"

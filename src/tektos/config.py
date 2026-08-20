@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class LLMConfig(BaseModel):
     """Configuration for the LLM inference backend."""
     base_url: str = Field(
-        default="http://127.0.0.1:8081/v1",
+        default="http://127.0.0.1:8090/v1",
         description="LLM API base URL (TEKTOS_LLM_BASE_URL env var)"
     )
     timeout: float = Field(default=300.0, description="Request timeout in seconds")
@@ -62,7 +62,7 @@ class TektosConfig(BaseModel):
     @classmethod
     def from_env(cls) -> "TektosConfig":
         """Load config from environment variables with defaults."""
-        llm_url = os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8081/v1")
+        llm_url = os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1")
         hindsight_url = os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177")
         searxng_url = os.getenv("TEKTOS_SEARXNG_URL", "http://localhost:8888/search")
         vision_url = os.getenv("TEKTOS_VISION_URL", "http://127.0.0.1:8083")

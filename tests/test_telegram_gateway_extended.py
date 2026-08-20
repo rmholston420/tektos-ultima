@@ -63,7 +63,7 @@ class MockCallbackQuery:
 
 class MockSession:
     """Mock LiveSession."""
-    def __init__(self, session_id: str = "test-session-1", model: str = "qwen3.6-35b-a3b-ud-q4_k_xl", status: str = "ready", cwd: str = ".", updated_at: float = 1000.0):
+    def __init__(self, session_id: str = "test-session-1", model: str = "Qwen3.6-35B-A3B-Q4_K_M", status: str = "ready", cwd: str = ".", updated_at: float = 1000.0):
         self.id = session_id
         self.model = model
         self.status = status

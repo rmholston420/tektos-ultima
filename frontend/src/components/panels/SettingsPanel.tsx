@@ -92,7 +92,7 @@ export function SettingsPanel({ initialConfig }: SettingsPanelProps) {
                         defaultValue={config.models?.default_model}
                         onChange={(e) => handleSave("models", "default_model", e.target.value)}
                       >
-                        <option value="qwen3.6-35b-a3b">Qwen3.6-35B-A3B</option>
+                        <option value="Qwen3.6-35B-A3B-Q4_K_M">Qwen3.6-35B-A3B</option>
                         <option value="qwen3-coder-30b">Qwen3-Coder-30B</option>
                       </select>
                     </div>

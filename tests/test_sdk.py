@@ -120,7 +120,7 @@ class TestRuntimeSDKLifecycle:
     @pytest.mark.asyncio
     async def test_sdk_creation_with_defaults(self):
         sdk = RuntimeSDK()
-        assert sdk._llm_model == "qwen3.6-35b-a3b-ud-q4_k_xl"
+        assert sdk._llm_model == "Qwen3.6-35B-A3B-Q4_K_M"
         assert sdk._client is None
 
     @pytest.mark.asyncio
@@ -236,7 +236,7 @@ class TestSubmitPrompt:
         await sdk.submit_prompt(session, "test")
         assert len(hook_called) == 1
         assert hook_called[0].session_id == "s1"
-        assert hook_called[0].model == "qwen3.6-35b-a3b-ud-q4_k_xl"
+        assert hook_called[0].model == "Qwen3.6-35B-A3B-Q4_K_M"
         assert hook_called[0].outcome == "success"
 
     @pytest.mark.asyncio

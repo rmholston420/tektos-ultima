@@ -48,8 +48,8 @@ from tektos.store.event_store import append_event
 log = _log.getLogger("tektos.runtime")
 
 # LLM endpoint configuration — configurable via environment
-LLM_BASE_URL = _os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8081/v1")
-LLM_MODEL = "qwen3.6-35b-a3b-ud-q4_k_xl"
+LLM_BASE_URL = _os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1")
+LLM_MODEL = "Qwen3.6-35B-A3B-Q4_K_M"
 
 # Tool definitions for function calling
 TOOLS_SCHEMA = [

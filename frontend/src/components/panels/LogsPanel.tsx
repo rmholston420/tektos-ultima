@@ -36,7 +36,12 @@ export function LogsPanel() {
         const entries = await api.getLogs(filterLevel !== "all" ? filterLevel : undefined, 200);
         setLogs(entries);
       } catch (err) {
-        console.error("Failed to fetch logs:", err);
+        // Logs endpoint not available — show placeholder
+        if (logs.length === 0) {
+          setLogs([
+            { level: "INFO", logger: "system", message: "Logs endpoint not configured. Backend /api/logs not available.", timestamp: new Date().toISOString() },
+          ]);
+        }
       }
     };
 

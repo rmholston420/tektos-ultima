@@ -1,694 +1,518 @@
 /**
- * WebSocket Protocol Client Unit Tests
- * Tests the ProtocolClient class and EventType constants
+ * Tests for the ProtocolClient — WebSocket envelope handling.
  */
 
-import {
-  ProtocolClient,
-  EventType,
-  ConnectionState,
-  WSEnvelopeClient,
-  EventHandler,
-  ErrorHandler,
-  StateHandler,
-} from '../protocol';
+import { ProtocolClient, EventType, type ConnectionState, type WSEnvelopeClient } from "@/lib/protocol";
 
-describe('WebSocket Protocol', () => {
+describe("ProtocolClient", () => {
+  let client: ProtocolClient;
   let mockWebSocket: any;
-  let mockWebSocketInstance: any;
-  let messages: string[] = [];
+  let wsInstances: any[] = [];
 
   beforeEach(() => {
-    messages = [];
-    mockWebSocketInstance = {
-      readyState: 1,
-      send: jest.fn((data: string) => {
-        messages.push(data);
-      }),
-      close: jest.fn(),
+    mockWebSocket = {
+      readyState: 0,
       onopen: null,
-      onmessage: null,
       onclose: null,
       onerror: null,
+      onmessage: null,
+      close: jest.fn(),
+      send: jest.fn(),
     };
+    wsInstances = [];
 
-    mockWebSocket = jest.fn().mockImplementation((url: string) => {
-      mockWebSocketInstance.url = url;
-      return mockWebSocketInstance;
+    jest.spyOn(global, "WebSocket").mockImplementation((url: string) => {
+      const ws = { ...mockWebSocket };
+      wsInstances.push(ws);
+      return ws as unknown as WebSocket;
     });
 
-    global.WebSocket = mockWebSocket as any;
-    global.setInterval = jest.fn(() => 1 as any);
-    global.clearInterval = jest.fn();
-    global.setTimeout = jest.fn() as any;
-    global.Date.now = jest.fn(() => 1000000);
+    client = new ProtocolClient();
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    client.disconnect();
+    jest.clearAllMocks();
   });
 
-  describe('EventType constants', () => {
-    test('has SESSION_CREATED', () => {
-      expect(EventType.SESSION_CREATED).toBe('session.created');
+  describe("initial state", () => {
+    it("starts disconnected", () => {
+      expect(client["state"]).toBe("disconnected");
     });
 
-    test('has SESSION_READY', () => {
-      expect(EventType.SESSION_READY).toBe('session.ready');
+    it("has empty session id", () => {
+      expect(client.sessionId).toBe("");
     });
 
-    test('has SESSION_UPDATED', () => {
-      expect(EventType.SESSION_UPDATED).toBe('session.updated');
+    it("uses default host/port/protocol", () => {
+      expect(client["host"]).toBe("localhost");
+      expect(client["port"]).toBe(8020);
+      expect(client["protocol"]).toBe("ws");
     });
 
-    test('has ASSISTANT_DELTA', () => {
-      expect(EventType.ASSISTANT_DELTA).toBe('assistant.delta');
-    });
-
-    test('has ASSISTANT_COMPLETED', () => {
-      expect(EventType.ASSISTANT_COMPLETED).toBe('assistant.completed');
-    });
-
-    test('has TOOL_STARTED', () => {
-      expect(EventType.TOOL_STARTED).toBe('tool.started');
-    });
-
-    test('has TOOL_DELTA', () => {
-      expect(EventType.TOOL_DELTA).toBe('tool.delta');
-    });
-
-    test('has TOOL_COMPLETED', () => {
-      expect(EventType.TOOL_COMPLETED).toBe('tool.completed');
-    });
-
-    test('has TOOL_PERMISSION_REQUIRED', () => {
-      expect(EventType.TOOL_PERMISSION_REQUIRED).toBe('tool.permission.required');
-    });
-
-    test('has SYSTEM_MESSAGE', () => {
-      expect(EventType.SYSTEM_MESSAGE).toBe('system.message');
-    });
-
-    test('has SESSION_INTERRUPTED', () => {
-      expect(EventType.SESSION_INTERRUPTED).toBe('session.interrupted');
-    });
-
-    test('has SESSION_FAILED', () => {
-      expect(EventType.SESSION_FAILED).toBe('session.failed');
-    });
-
-    test('has SELF_IMPROVEMENT_TICK', () => {
-      expect(EventType.SELF_IMPROVEMENT_TICK).toBe('self_improvement.tick');
-    });
-
-    test('has RESOURCE_WARNING', () => {
-      expect(EventType.RESOURCE_WARNING).toBe('resource.warning');
+    it("accepts custom options", () => {
+      const custom = new ProtocolClient({ host: "custom.host", port: 9999, protocol: "wss" });
+      expect(custom["host"]).toBe("custom.host");
+      expect(custom["port"]).toBe(9999);
+      expect(custom["protocol"]).toBe("wss");
+      custom.disconnect();
     });
   });
 
-  describe('ConnectionState type', () => {
-    test('has disconnected state', () => {
-      expect(['disconnected', 'connecting', 'connected', 'reconnecting']).toContain('disconnected');
+  describe("setSessionId", () => {
+    it("sets session id", () => {
+      client.setSessionId("test-session-123");
+      expect(client.sessionId).toBe("test-session-123");
     });
 
-    test('has connecting state', () => {
-      expect(['disconnected', 'connecting', 'connected', 'reconnecting']).toContain('connecting');
-    });
-
-    test('has connected state', () => {
-      expect(['disconnected', 'connecting', 'connected', 'reconnecting']).toContain('connected');
-    });
-
-    test('has reconnecting state', () => {
-      expect(['disconnected', 'connecting', 'connected', 'reconnecting']).toContain('reconnecting');
+    it("can change session id", () => {
+      client.setSessionId("session-1");
+      client.setSessionId("session-2");
+      expect(client.sessionId).toBe("session-2");
     });
   });
 
-  describe('ProtocolClient constructor', () => {
-    test('can be instantiated', () => {
-      const client = new ProtocolClient();
-      expect(client).toBeDefined();
+  describe("on / off", () => {
+    it("registers event handler for specific event type", () => {
+      const handler = jest.fn();
+      client.on("session.created", handler);
+      expect(client["handlers"].has("session.created")).toBe(true);
     });
 
-    test('has default host', () => {
-      const client = new ProtocolClient();
-      expect((client as any).host).toBe('localhost');
+    it("registers wildcard handler", () => {
+      const handler = jest.fn();
+      client.on("*", handler);
+      expect(client["handlers"].has("*")).toBe(true);
     });
 
-    test('has default port', () => {
-      const client = new ProtocolClient();
-      expect((client as any).port).toBe(8020);
+    it("registers state change handler", () => {
+      const handler = jest.fn();
+      client.onStateChange(handler);
+      expect(client["stateHandlers"]).toContain(handler);
     });
 
-    test('uses http protocol by default', () => {
-      const client = new ProtocolClient();
-      expect((client as any).protocol).toBe('ws');
+    it("removes specific handler", () => {
+      const handler = jest.fn();
+      client.on("session.created", handler);
+      client.off("session.created", handler);
+      expect(client["handlers"].get("session.created")?.has(handler)).toBe(false);
     });
 
-    test('uses custom host when provided', () => {
-      const client = new ProtocolClient({ host: 'custom.local' });
-      expect((client as any).host).toBe('custom.local');
+    it("removes state change handler", () => {
+      const handler = jest.fn();
+      client.onStateChange(handler);
+      client.offStateChange(handler);
+      expect(client["stateHandlers"]).not.toContain(handler);
     });
 
-    test('uses custom port when provided', () => {
-      const client = new ProtocolClient({ port: 9000 });
-      expect((client as any).port).toBe(9000);
+    it("registers error handler", () => {
+      const handler = jest.fn();
+      client.onError(handler);
+      expect(client["errorHandlers"]).toContain(handler);
     });
 
-    test('uses wss protocol when specified', () => {
-      const client = new ProtocolClient({ protocol: 'wss' });
-      expect((client as any).protocol).toBe('wss');
-    });
-  });
-
-  describe('setSessionId and sessionId', () => {
-    test('sets session ID', () => {
-      const client = new ProtocolClient();
-      client.setSessionId('session-123');
-      expect(client.sessionId).toBe('session-123');
-    });
-
-    test('updates session ID', () => {
-      const client = new ProtocolClient();
-      client.setSessionId('session-123');
-      client.setSessionId('session-456');
-      expect(client.sessionId).toBe('session-456');
+    it("removes error handler", () => {
+      const handler = jest.fn();
+      client.onError(handler);
+      client.offError(handler);
+      expect(client["errorHandlers"]).not.toContain(handler);
     });
   });
 
-  describe('sendPrompt', () => {
-    test('sends prompt message', () => {
-      const client = new ProtocolClient();
-      client.setSessionId('session-123');
-      client.connect();
-      client.sendPrompt('Hello world');
-
-      expect(mockWebSocketInstance.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'prompt',
-          session_id: 'session-123',
-          prompt: 'Hello world',
-        })
-      );
-    });
-
-    test('sends prompt with model option', () => {
-      const client = new ProtocolClient();
-      client.setSessionId('session-123');
-      client.connect();
-      client.sendPrompt('Hello', { model: 'gpt-4' });
-
-      expect(mockWebSocketInstance.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'prompt',
-          session_id: 'session-123',
-          prompt: 'Hello',
-          model: 'gpt-4',
-        })
-      );
-    });
-
-    test('sends prompt with cwd option', () => {
-      const client = new ProtocolClient();
-      client.setSessionId('session-123');
-      client.connect();
-      client.sendPrompt('Hello', { cwd: '/home/user' });
-
-      expect(mockWebSocketInstance.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'prompt',
-          session_id: 'session-123',
-          prompt: 'Hello',
-          cwd: '/home/user',
-        })
-      );
-    });
-
-    test('does not send when no WebSocket', () => {
-      const client = new ProtocolClient();
-      client.sendPrompt('Hello');
-      expect(mockWebSocket).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('sendInterrupt', () => {
-    test('sends interrupt message', () => {
-      const client = new ProtocolClient();
-      client.setSessionId('session-123');
-      client.connect();
-      client.sendInterrupt();
-
-      expect(mockWebSocketInstance.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          type: 'interrupt',
-          session_id: 'session-123',
-        })
-      );
-    });
-
-    test('does not send when no session ID', () => {
-      const client = new ProtocolClient();
-      client.sendInterrupt();
-      expect(mockWebSocketInstance.send).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('sendResume', () => {
-    test('sendResume is stubbed — backend does not handle resume type', () => {
-      const client = new ProtocolClient();
-      expect(() => client.sendResume(42)).not.toThrow();
-    });
-  });
-
-  describe('Event handlers', () => {
-    test('on adds event handler', () => {
-      const client = new ProtocolClient();
-      const handler: EventHandler = jest.fn();
-      client.on(EventType.SESSION_CREATED, handler);
-      expect(handler).toBeDefined();
-    });
-
-    test('off removes event handler', () => {
-      const client = new ProtocolClient();
-      const handler: EventHandler = jest.fn();
-      client.on(EventType.SESSION_CREATED, handler);
-      client.off(EventType.SESSION_CREATED, handler);
-      expect(client).toBeDefined();
-    });
-
-    test('wildcard handler receives all events', () => {
-      const client = new ProtocolClient();
-      const wildcardHandler: EventHandler = jest.fn();
-      const specificHandler: EventHandler = jest.fn();
-
-      client.on('*', wildcardHandler);
-      client.on(EventType.SESSION_CREATED, specificHandler);
+  describe("dispatch (internal)", () => {
+    it("calls handlers for matching event", () => {
+      const handler = jest.fn();
+      client.on("session.created", handler);
 
       const envelope: WSEnvelopeClient = {
-        session_id: 's1',
-        event_type: EventType.SESSION_CREATED,
-        payload: {},
-        protocol_version: '1',
+        session_id: "test-1",
+        event_type: "session.created",
+        payload: { message: "created" },
+        protocol_version: "1",
       };
+      client["dispatch"](envelope);
+      expect(handler).toHaveBeenCalledWith(envelope);
+    });
 
-      expect(client).toBeDefined();
+    it("calls wildcard handlers", () => {
+      const handler = jest.fn();
+      client.on("*", handler);
+
+      const envelope: WSEnvelopeClient = {
+        session_id: "test-1",
+        event_type: "any.event",
+        payload: {},
+        protocol_version: "1",
+      };
+      client["dispatch"](envelope);
+      expect(handler).toHaveBeenCalledWith(envelope);
+    });
+
+    it("calls both specific and wildcard handlers", () => {
+      const specific = jest.fn();
+      const wildcard = jest.fn();
+      client.on("session.created", specific);
+      client.on("*", wildcard);
+
+      const envelope: WSEnvelopeClient = {
+        session_id: "test-1",
+        event_type: "session.created",
+        payload: {},
+        protocol_version: "1",
+      };
+      client["dispatch"](envelope);
+      expect(specific).toHaveBeenCalled();
+      expect(wildcard).toHaveBeenCalled();
+    });
+
+    it("updates session_id from envelope", () => {
+      client.setSessionId("");
+      const envelope: WSEnvelopeClient = {
+        session_id: "from-envelope",
+        event_type: "session.created",
+        payload: {},
+        protocol_version: "1",
+      };
+      client["dispatch"](envelope);
+      expect(client.sessionId).toBe("from-envelope");
+    });
+
+    it("handles handler errors gracefully", () => {
+      const handler = jest.fn(() => { throw new Error("handler error"); });
+      client.on("session.created", handler);
+      client.onError((err) => { /* capture */ });
+
+      const envelope: WSEnvelopeClient = {
+        session_id: "test-1",
+        event_type: "session.created",
+        payload: {},
+        protocol_version: "1",
+      };
+      // Should not throw
+      expect(() => client["dispatch"](envelope)).not.toThrow();
     });
   });
 
-  describe('Error handlers', () => {
-    test('onError adds error handler', () => {
-      const client = new ProtocolClient();
-      const errorHandler: ErrorHandler = jest.fn();
-      client.onError(errorHandler);
-      expect(errorHandler).toBeDefined();
-    });
-
-    test('offError removes error handler', () => {
-      const client = new ProtocolClient();
-      const errorHandler: ErrorHandler = jest.fn();
-      client.onError(errorHandler);
-      client.offError(errorHandler);
-      expect(client).toBeDefined();
-    });
-  });
-
-  describe('State change handlers', () => {
-    test('onStateChange adds state handler', () => {
-      const client = new ProtocolClient();
-      const stateHandler: StateHandler = jest.fn();
-      client.onStateChange(stateHandler);
-      expect(stateHandler).toBeDefined();
-    });
-
-    test('offStateChange removes state handler', () => {
-      const client = new ProtocolClient();
-      const stateHandler: StateHandler = jest.fn();
-      client.onStateChange(stateHandler);
-      client.offStateChange(stateHandler);
-      expect(client).toBeDefined();
-    });
-  });
-
-  describe('disconnect', () => {
-    test('closes WebSocket', () => {
-      const client = new ProtocolClient();
-      client.setSessionId('session-123');
+  describe("connect / disconnect", () => {
+    it("requires session id to connect", () => {
+      const logSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
       client.connect();
+      expect(logSpy).toHaveBeenCalledWith("ProtocolClient.connect: no session ID");
+      expect(client["state"]).toBe("disconnected");
+      logSpy.mockRestore();
+    });
+
+    it("sets state to connecting then connected", () => {
+      client.setSessionId("test-session");
+      client.connect();
+
+      expect(client["state"]).toBe("connecting");
+
+      // Simulate open
+      const ws = wsInstances[0];
+      ws.onopen!();
+      expect(client["state"]).toBe("connected");
+    });
+
+    it("resets reconnect attempts on connect", () => {
+      client.setSessionId("test-session");
+      client["reconnectAttempts"] = 5;
+      client["reconnectDelay"] = 5000;
+
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      expect(client["reconnectAttempts"]).toBe(0);
+      expect(client["reconnectDelay"]).toBe(1000);
+    });
+
+    it("sets state to disconnected on close", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+      expect(client["state"]).toBe("connected");
+
+      ws.onclose!({ code: 1000, reason: "bye" } as CloseEvent);
+      expect(client["state"]).toBe("disconnected");
+    });
+
+    it("sends messages via WebSocket", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      client.sendPrompt("hello", { model: "test-model", cwd: "/tmp" });
+      expect(ws.send).toHaveBeenCalled();
+    });
+
+    it("queues messages when not connected", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      // Don't call onopen — ws stays in CONNECTING state
+
+      client.sendPrompt("hello", { model: "test-model" });
+      expect(client["pendingMessages"].length).toBeGreaterThan(0);
+    });
+
+    it("flushes pending messages on connect", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+
+      client.sendPrompt("queued", { model: "test" });
+      expect(client["pendingMessages"].length).toBe(1);
+
+      ws.onopen!();
+      // After onopen, pending messages should be flushed
+      expect(ws.send).toHaveBeenCalled();
+    });
+
+    it("handles WebSocket errors", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+      expect(client["state"]).toBe("connected");
+
+      ws.onerror!();
+      expect(client["state"]).toBe("disconnected");
+    });
+
+    it("handles incoming messages", () => {
+      const handler = jest.fn();
+      client.on("*", handler);
+
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      const envelope = {
+        session_id: "test-1",
+        event_type: "assistant.delta",
+        payload: { text: "hello" },
+        protocol_version: "1",
+      };
+      ws.onmessage!({ data: JSON.stringify(envelope) } as MessageEvent);
+      expect(handler).toHaveBeenCalled();
+    });
+
+    it("disconnects cleanly", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
       client.disconnect();
-
-      expect(mockWebSocketInstance.close).toHaveBeenCalledWith(1000, 'Disconnect');
+      expect(ws.close).toHaveBeenCalledWith(1000, "Disconnect");
+      expect(client["state"]).toBe("disconnected");
     });
-  });
 
-  describe('reconnect', () => {
-    test('disconnects and reconnects', () => {
-      const client = new ProtocolClient();
-      client.setSessionId('session-123');
+    it("reconnect calls disconnect then connect", () => {
+      client.setSessionId("test-session");
       client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
       client.reconnect();
-
-      expect(client).toBeDefined();
+      expect(ws.close).toHaveBeenCalled();
     });
   });
 
-  describe('WSEnvelopeClient interface', () => {
-    test('valid envelope has required fields', () => {
-      const envelope: WSEnvelopeClient = {
-        session_id: 's1',
-        event_type: 'session.created',
-        payload: { data: 'test' },
-        protocol_version: '1',
-      };
+  describe("sendPrompt", () => {
+    it("sends prompt with model and cwd", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
 
-      expect(envelope.session_id).toBe('s1');
-      expect(envelope.event_type).toBe('session.created');
-      expect(envelope.payload).toEqual({ data: 'test' });
-      expect(envelope.protocol_version).toBe('1');
+      client.sendPrompt("hello world", { model: "test-model", cwd: "/tmp" });
+
+      const sent = JSON.parse(ws.send.mock.calls[0][0]);
+      expect(sent.type).toBe("prompt");
+      expect(sent.session_id).toBe("test-session");
+      expect(sent.prompt).toBe("hello world");
+      expect(sent.model).toBe("test-model");
+      expect(sent.cwd).toBe("/tmp");
     });
 
-    test('optional seq field', () => {
-      const envelope: WSEnvelopeClient = {
-        session_id: 's1',
-        event_type: 'session.created',
-        payload: {},
-        seq: 42,
-        protocol_version: '1',
-      };
+    it("sends prompt without optional fields", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
 
-      expect(envelope.seq).toBe(42);
+      client.sendPrompt("hello");
+      const sent = JSON.parse(ws.send.mock.calls[0][0]);
+      expect(sent.type).toBe("prompt");
+      expect(sent.prompt).toBe("hello");
+    });
+  });
+
+  describe("sendInterrupt", () => {
+    it("sends interrupt event", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      client.sendInterrupt();
+      const sent = JSON.parse(ws.send.mock.calls[0][0]);
+      expect(sent.type).toBe("interrupt");
+      expect(sent.session_id).toBe("test-session");
     });
 
-    test('optional timestamp field', () => {
-      const envelope: WSEnvelopeClient = {
-        session_id: 's1',
-        event_type: 'session.created',
-        payload: {},
-        timestamp: '2026-01-01',
-        protocol_version: '1',
-      };
+    it("does nothing without session id", () => {
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
 
-      expect(envelope.timestamp).toBe('2026-01-01');
+      client.sendInterrupt();
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("onStateChange", () => {
+    it("calls all registered state handlers", () => {
+      const handler1 = jest.fn();
+      const handler2 = jest.fn();
+      client.onStateChange(handler1);
+      client.onStateChange(handler2);
+
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      expect(handler1).toHaveBeenCalledWith({ state: "connected", error: null });
+      expect(handler2).toHaveBeenCalledWith({ state: "connected", error: null });
+    });
+
+    it("calls state handlers on disconnect", () => {
+      const handler = jest.fn();
+      client.onStateChange(handler);
+
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+      handler.mockClear();
+
+      client.disconnect();
+      expect(handler).toHaveBeenCalledWith({ state: "disconnected", error: null });
+    });
+  });
+
+  describe("heartbeat", () => {
+    it("starts heartbeat on connect", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      expect(client["heartbeatInterval"]).not.toBeNull();
+    });
+
+    it("stops heartbeat on disconnect", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      client.disconnect();
+      expect(client["heartbeatInterval"]).toBeNull();
+    });
+
+    it("sends ping when pong received", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      // Simulate pong
+      ws.onmessage!({ data: JSON.stringify({ type: "pong" }) } as MessageEvent);
+
+      // Advance timer past 15s to trigger heartbeatTick
+      jest.advanceTimersByTime(16000);
+      expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: "ping" }));
+    });
+
+    it("closes connection when pong not received", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      // Don't send any pong — advance timer past 15s
+      jest.advanceTimersByTime(16000);
+      expect(ws.close).toHaveBeenCalledWith(4000, "Timeout");
+    });
+  });
+
+  describe("reconnection", () => {
+    it("schedules reconnect on close with error code", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      // Simulate error close (not 1000)
+      ws.onclose!({ code: 1006, reason: "error" } as CloseEvent);
+      expect(client["state"]).toBe("reconnecting");
+    });
+
+    it("does not reconnect on normal close (1000)", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      ws.onclose!({ code: 1000, reason: "normal" } as CloseEvent);
+      expect(client["state"]).toBe("disconnected");
+    });
+
+    it("stops reconnecting after 10 attempts", () => {
+      client.setSessionId("test-session");
+      client.connect();
+      const ws = wsInstances[0];
+      ws.onopen!();
+
+      // Simulate 10 error closes
+      for (let i = 0; i < 10; i++) {
+        ws.onclose!({ code: 1006, reason: "error" } as CloseEvent);
+      }
+      // After 10 attempts, should not reconnect
+      expect(client["state"]).toBe("disconnected");
     });
   });
 });
 
-// ---------------------------------------------------------------------------
-// handleCloseEvent
-// ---------------------------------------------------------------------------
-
-describe("ProtocolClient — handleCloseEvent", () => {
-  let mockWS: any;
-  let mockInstance: any;
-
-  beforeEach(() => {
-    mockInstance = {
-      readyState: 1, send: jest.fn(), close: jest.fn(),
-      onopen: null, onmessage: null, onclose: null, onerror: null, url: '',
-    };
-    mockWS = jest.fn().mockImplementation((url: string) => {
-      mockInstance.url = url;
-      return mockInstance;
-    });
-    mockWS.CONNECTING = 0; mockWS.OPEN = 1;
-    mockWS.CLOSING = 2; mockWS.CLOSED = 3;
-    global.WebSocket = mockWS as any;
-  });
-
-  it("does not schedule reconnect when code is 1000", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    const spy = jest.spyOn(client as any, "scheduleReconnect");
-    client.handleCloseEvent(new CloseEvent("close", { code: 1000, reason: "Normal" }));
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
-  });
-
-  it("schedules reconnect when code is not 1000", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    const spy = jest.spyOn(client as any, "scheduleReconnect");
-    client.handleCloseEvent(new CloseEvent("close", { code: 4000, reason: "Error" }));
-    expect(spy).toHaveBeenCalled();
-    spy.mockRestore();
-  });
-
-  it("does not schedule reconnect if reconnectAttempts >= 10", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    (client as any).reconnectAttempts = 10;
-    const spy = jest.spyOn(client as any, "scheduleReconnect");
-    client.handleCloseEvent(new CloseEvent("close", { code: 4000, reason: "Error" }));
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
+describe("EventType", () => {
+  it("has all expected event types", () => {
+    expect(EventType.SESSION_CREATED).toBe("session.created");
+    expect(EventType.SESSION_READY).toBe("session.ready");
+    expect(EventType.SESSION_UPDATED).toBe("session.updated");
+    expect(EventType.ASSISTANT_DELTA).toBe("assistant.delta");
+    expect(EventType.ASSISTANT_COMPLETED).toBe("assistant.completed");
+    expect(EventType.TOOL_STARTED).toBe("tool.started");
+    expect(EventType.TOOL_DELTA).toBe("tool.delta");
+    expect(EventType.TOOL_COMPLETED).toBe("tool.completed");
+    expect(EventType.TOOL_PERMISSION_REQUIRED).toBe("tool.permission.required");
+    expect(EventType.SYSTEM_MESSAGE).toBe("system.message");
+    expect(EventType.SESSION_INTERRUPTED).toBe("session.interrupted");
+    expect(EventType.SESSION_FAILED).toBe("session.failed");
+    expect(EventType.SELF_IMPROVEMENT_TICK).toBe("self_improvement.tick");
+    expect(EventType.RESOURCE_WARNING).toBe("resource.warning");
+    expect(EventType.MODEL_SWITCHED).toBe("model_switched");
   });
 });
 
-// ---------------------------------------------------------------------------
-// dispatch handler errors → notifyError
-// ---------------------------------------------------------------------------
-
-describe("ProtocolClient — dispatch handler errors", () => {
-  let mockWS: any;
-  let mockInstance: any;
-
-  beforeEach(() => {
-    mockInstance = {
-      readyState: 1, send: jest.fn(), close: jest.fn(),
-      onopen: null, onmessage: null, onclose: null, onerror: null, url: '',
-    };
-    mockWS = jest.fn().mockImplementation((url: string) => {
-      mockInstance.url = url;
-      return mockInstance;
-    });
-    mockWS.CONNECTING = 0; mockWS.OPEN = 1;
-    mockWS.CLOSING = 2; mockWS.CLOSED = 3;
-    global.WebSocket = mockWS as any;
-  });
-
-  it("specific handler error triggers notifyError", () => {
-    const client = new ProtocolClient();
-    const errorHandler = jest.fn();
-    client.onError(errorHandler);
-    const badHandler = jest.fn(() => { throw new Error("boom"); });
-    client.on(EventType.SESSION_CREATED, badHandler);
-    client.setSessionId("s1");
-    client.connect();
-    mockInstance.onopen?.();
-    mockInstance.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({ session_id: "s1", event_type: EventType.SESSION_CREATED, payload: {}, seq: 0, protocol_version: "1.0" }),
-    }));
-    expect(errorHandler).toHaveBeenCalled();
-  });
-
-  it("wildcard handler error triggers notifyError", () => {
-    const client = new ProtocolClient();
-    const errorHandler = jest.fn();
-    client.onError(errorHandler);
-    const badHandler = jest.fn(() => { throw new Error("boom"); });
-    client.on("*", badHandler);
-    client.setSessionId("s1");
-    client.connect();
-    mockInstance.onopen?.();
-    mockInstance.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({ session_id: "s1", event_type: EventType.SESSION_READY, payload: {}, seq: 0, protocol_version: "1.0" }),
-    }));
-    expect(errorHandler).toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// notifyError with handler that throws
-// ---------------------------------------------------------------------------
-
-describe("ProtocolClient — notifyError with throwing handler", () => {
-  it("catches handler exceptions without crashing", () => {
-    const client = new ProtocolClient();
-    const badHandler = () => { throw new Error("handler error"); };
-    const goodHandler = jest.fn();
-    client.onError(badHandler);
-    client.onError(goodHandler);
-    expect(() => { (client as any).notifyError(new Error("test error")); }).not.toThrow();
-    expect(goodHandler).toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// connect with existing open WS connection
-// ---------------------------------------------------------------------------
-
-describe("ProtocolClient — connect with existing connection", () => {
-  let mockWS: any;
-  let mockInstance1: any;
-  let mockInstance2: any;
-
-  beforeEach(() => {
-    let callCount = 0;
-    mockInstance1 = {
-      readyState: 1, send: jest.fn(), close: jest.fn(),
-      onopen: null, onmessage: null, onclose: null, onerror: null, url: '',
-    };
-    mockInstance2 = { ...mockInstance1 };
-    mockWS = jest.fn().mockImplementation((url: string) => {
-      callCount++;
-      return callCount === 1 ? mockInstance1 : mockInstance2;
-    });
-    mockWS.CONNECTING = 0; mockWS.OPEN = 1;
-    mockWS.CLOSING = 2; mockWS.CLOSED = 3;
-    global.WebSocket = mockWS as any;
-  });
-
-  it("closes existing open WS connection on new connect", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    client.connect();
-    mockInstance1.onopen?.();
-    client.setSessionId("s2");
-    client.connect();
-    expect(mockInstance1.close).toHaveBeenCalled();
-    expect(mockWS).toHaveBeenCalledTimes(2);
-  });
-
-  it("handles WS error via onerror handler", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    client.connect();
-    const handler = jest.fn();
-    client.onStateChange(handler);
-    mockInstance1.onerror?.();
-    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ state: "disconnected" }));
-  });
-
-  it("handles WS parse error via notifyError", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    client.connect();
-    const errorHandler = jest.fn();
-    client.onError(errorHandler);
-    mockInstance1.onopen?.();
-    mockInstance1.onmessage?.(new MessageEvent("message", { data: "not valid json" }));
-    expect(errorHandler).toHaveBeenCalled();
-    expect(errorHandler.mock.calls[0][0].message).toContain("Parse error");
-  });
-
-  it("handles connect error via notifyError", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    const errorHandler = jest.fn();
-    client.onError(errorHandler);
-    (global.WebSocket as any) = jest.fn(() => { throw new Error("WS creation failed"); });
-    client.connect();
-    expect(errorHandler).toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// disconnect/send when no WS connection
-// ---------------------------------------------------------------------------
-
-describe("ProtocolClient — safe when no WS connection", () => {
-  it("disconnect is safe when no WS connection", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    expect(() => client.disconnect()).not.toThrow();
-  });
-
-  it("sendPrompt is safe when no WS connection", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    expect(() => client.sendPrompt("test")).not.toThrow();
-  });
-
-  it("sendInterrupt is safe when no WS connection", () => {
-    const client = new ProtocolClient();
-    expect(() => client.sendInterrupt()).not.toThrow();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// off handlers when not registered
-// ---------------------------------------------------------------------------
-
-describe("ProtocolClient — off handlers when not registered", () => {
-  it("off is safe when handler not registered", () => {
-    const client = new ProtocolClient();
-    const handler = jest.fn();
-    expect(() => client.off(EventType.SESSION_CREATED, handler)).not.toThrow();
-  });
-
-  it("offError is safe when handler not registered", () => {
-    const client = new ProtocolClient();
-    const handler = jest.fn();
-    expect(() => client.offError(handler)).not.toThrow();
-  });
-
-  it("offStateChange is safe when handler not registered", () => {
-    const client = new ProtocolClient();
-    const handler = jest.fn();
-    expect(() => client.offStateChange(handler)).not.toThrow();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// heartbeat tests
-// ---------------------------------------------------------------------------
-// heartbeat tests
-// ---------------------------------------------------------------------------
-
-describe("ProtocolClient — heartbeat", () => {
-  let mockWS: any;
-  let mockInstance: any;
-
-  beforeEach(() => {
-    mockInstance = {
-      readyState: 1, send: jest.fn(), close: jest.fn(),
-      onopen: null, onmessage: null, onclose: null, onerror: null, url: '',
-    };
-    mockWS = jest.fn().mockImplementation((url: string) => {
-      mockInstance.url = url;
-      return mockInstance;
-    });
-    mockWS.CONNECTING = 0; mockWS.OPEN = 1;
-    mockWS.CLOSING = 2; mockWS.CLOSED = 3;
-    global.WebSocket = mockWS as any;
-  });
-
-  it("startHeartbeat sets up interval", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    client.connect();
-    mockInstance.onopen?.();
-    expect((client as any).heartbeatInterval).not.toBeNull();
-  });
-
-  it("stopHeartbeat clears interval", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    client.connect();
-    mockInstance.onopen?.();
-    (client as any).stopHeartbeat();
-    expect((client as any).heartbeatInterval).toBeNull();
-  });
-
-  it("onclose triggers handleCloseEvent which schedules reconnect", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    client.connect();
-    mockInstance.onopen?.();
-    const spy = jest.spyOn(client as any, "handleCloseEvent");
-    mockInstance.onclose?.(new CloseEvent("close", { code: 4000, reason: "Error" }));
-    expect(spy).toHaveBeenCalled();
-    spy.mockRestore();
-  });
-
-  it("onclose calls stopHeartbeat", () => {
-    const client = new ProtocolClient();
-    client.setSessionId("s1");
-    client.connect();
-    mockInstance.onopen?.();
-    (client as any).reconnectAttempts = 10; // prevent scheduleReconnect
-    const spyStop = jest.spyOn(client as any, "stopHeartbeat");
-    mockInstance.onclose?.(new CloseEvent("close", { code: 4000, reason: "Error" }));
-    expect(spyStop).toHaveBeenCalled();
-    spyStop.mockRestore();
+describe("ConnectionState", () => {
+  it("type includes all states", () => {
+    const states: ConnectionState[] = ["disconnected", "connecting", "connected", "reconnecting"];
+    expect(states).toHaveLength(4);
   });
 });

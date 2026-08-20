@@ -39,7 +39,7 @@ Quick reference for ports, versions, commands, and key facts. Updated on each co
 
 | Setting | Value |
 |---------|-------|
-| Default model | qwen3.6-35b-a3b-ud-q4_k_xl |
+| Default model | Qwen3.6-35B-A3B-Q4_K_M |
 | LLM base URL | http://127.0.0.1:8081/v1 |
 | Event store DB | data/tektos.db |
 | Permission mode | auto |

@@ -262,7 +262,7 @@ test.describe("WebSocket Endpoint", () => {
         fetch("/api/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "qwen3.6-35b-a3b-ud-q4_k_xl" }),
+          body: JSON.stringify({ model: "Qwen_Qwen3.6-35B-A3B-Q4_K_M" }),
         })
           .then((r) => r.json())
           .then((data) => {

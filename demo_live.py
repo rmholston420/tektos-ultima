@@ -23,7 +23,7 @@ async def check_health():
         return True
 
 
-async def create_session(model: str = "qwen3.6-35b-a3b-ud-q4_k_xl", cwd: str = "."):
+async def create_session(model: str = "Qwen3.6-35B-A3B-Q4_K_M", cwd: str = "."):
     """Create a new session."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -161,7 +161,7 @@ async def direct_llm_call(session_id: str, task: str):
         resp = await client.post(
             "http://127.0.0.1:8081/v1/chat/completions",
             json={
-                "model": "qwen3.6-35b-a3b-ud-q4_k_xl",
+                "model": "Qwen3.6-35B-A3B-Q4_K_M",
                 "messages": messages,
                 "max_tokens": 4096,
                 "stream": False,

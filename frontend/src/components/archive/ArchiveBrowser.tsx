@@ -339,9 +339,9 @@ function ListMode({
           }`}
         >
           {/* Main row */}
-          <button
+          <div
             onClick={() => onSelectSession(session.id)}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left"
+            className="w-full flex items-center gap-2 px-3 py-2 text-left cursor-pointer"
           >
             {/* Status indicator */}
             <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
@@ -459,7 +459,7 @@ function ListMode({
                 <TrashIcon className="w-3.5 h-3.5" />
               </button>
             </div>
-          </button>
+          </div>
 
           {/* Tag input (when active) */}
           {tagSessionId === session.id && (

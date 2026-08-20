@@ -29,7 +29,7 @@ class TestExperienceRecord:
         record = ExperienceRecord(
             session_id="test-session",
             task="Write a function",
-            model_used="qwen3.6-35b-a3b",
+            model_used="Qwen3.6-35B-A3B-Q4_K_M",
             success=True,
             tests_passed=10,
             tests_total=10,
@@ -121,7 +121,7 @@ class TestExperienceRecord:
         record = ExperienceRecord(
             session_id="test-session",
             task="Write test",
-            model_used="qwen3.6-35b-a3b",
+            model_used="Qwen3.6-35B-A3B-Q4_K_M",
             success=True,
             tests_passed=3,
             tests_total=3,
@@ -195,7 +195,7 @@ class TestExperienceStorage:
         record = ExperienceRecord(
             session_id="test-1",
             task="Write function",
-            model_used="qwen3.6-35b-a3b",
+            model_used="Qwen3.6-35B-A3B-Q4_K_M",
             success=True,
             tests_passed=5,
             tests_total=5,
@@ -492,7 +492,7 @@ class TestSessionLifecycleHandlers:
                 session_id="test-1",
                 task="Write function",
                 spec="Spec text",
-                model_used="qwen3.6-35b-a3b",
+                model_used="Qwen3.6-35B-A3B-Q4_K_M",
                 success=True,
                 tests_passed=10,
                 tests_total=10,
@@ -528,7 +528,7 @@ class TestSessionLifecycleHandlers:
                 session_id="test-fail",
                 task="Debug function",
                 spec="Spec text",
-                model_used="qwen3.6-35b-a3b",
+                model_used="Qwen3.6-35B-A3B-Q4_K_M",
                 error="RuntimeError: something broke",
                 wall_time_seconds=15.0,
             )

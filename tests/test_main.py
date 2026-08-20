@@ -180,7 +180,7 @@ def _mock_search_events(return_value=None):
 class TestCreateSessionRequest:
     def test_defaults(self):
         req = CreateSessionRequest()
-        assert req.model == "qwen3.6-35b-a3b-ud-q4_k_xl"
+        assert req.model == "Qwen_Qwen3.6-35B-A3B-Q4_K_M"
         assert req.cwd == "."
         assert req.provider == "local"
         assert req.permission_mode == "auto"

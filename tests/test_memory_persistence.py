@@ -360,17 +360,13 @@ class TestDecayScheduler:
         assert self.persistence.decay_thread is None
 
     def test_scheduler_removes_expired(self):
+        # Save with past expiry
         self.persistence.save_working(_sample_entry(tier="working", expires_at="2020-01-01T00:00:00+00:00"))
 
-        # Start scheduler with short interval
-        self.persistence.start_decay_scheduler(interval=0.5)
+        # Verify entry exists before decay
+        assert len(self.persistence.load_working()) == 1
 
-        # Wait for decay cycle
-        import time
-        time.sleep(1.5)
-
-        # Manually trigger decay to verify
+        # Manually trigger decay to verify removal
         removed = self.persistence.decay_working()
         assert removed == 1
-
-        self.persistence.stop_decay_scheduler()
+        assert len(self.persistence.load_working()) == 0

@@ -28,7 +28,7 @@ export function McpPanel() {
   const [expandedServer, setExpandedServer] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/mcp")
+    fetch("/api/mcp/status")
       .then((r) => r.json())
       .then((data) => {
         setServers(data.servers || []);
