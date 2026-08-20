@@ -99,7 +99,7 @@ def _build_mocked_app(append_event_return=None):
     }
 
 
-def _mock_session_exists(session_model="qwen3.6:35b-a3b-ud-q4_k_xl", session_id="test-model-switch"):
+def _mock_session_exists(session_model="qwen3.6:35b-a3b-q4_k_m", session_id="test-model-switch"):
     """Patch session_manager.get_session to return a valid session."""
     import tektos.main as main_module
     mock_session = MagicMock()
@@ -193,7 +193,7 @@ class TestSwitchModelEndpoint:
     def test_switch_model_emits_event(self):
         """Switching model should emit model_switched to WS clients."""
         app, mocks = _build_mocked_app()
-        mock_session = _mock_session_exists(session_model="qwen3.6:35b-a3b-ud-q4_k_xl")
+        mock_session = _mock_session_exists(session_model="qwen3.6:35b-a3b-q4_k_m")
         main_module = mocks["main_module"]
 
         ws = MagicMock()
@@ -216,7 +216,7 @@ class TestSwitchModelEndpoint:
         body = json.loads(ws.send_text.call_args[0][0])
         assert body["type"] == "model_switched"
         assert body["payload"]["model"] == "glm-4.7-flash:q4_K_M"
-        assert body["payload"]["old_model"] == "qwen3.6:35b-a3b-ud-q4_k_xl"
+        assert body["payload"]["old_model"] == "qwen3.6:35b-a3b-q4_k_m"
 
         # Verify session.model was mutated directly
         assert mock_session.model == "glm-4.7-flash:q4_K_M"
@@ -230,7 +230,7 @@ class TestSwitchModelEndpoint:
         Actual switch_model code has no early-return for same model.
         """
         app, mocks = _build_mocked_app()
-        _mock_session_exists(session_model="qwen3.6:35b-a3b-ud-q4_k_xl")
+        _mock_session_exists(session_model="qwen3.6:35b-a3b-q4_k_m")
         main_module = mocks["main_module"]
 
         ws = MagicMock()
@@ -240,13 +240,13 @@ class TestSwitchModelEndpoint:
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post(
             "/api/sessions/test-model-switch/model",
-            json={"model": "qwen3.6:35b-a3b-ud-q4_k_xl"},
+            json={"model": "qwen3.6:35b-a3b-q4_k_m"},
         )
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
-        assert data["old_model"] == "qwen3.6:35b-a3b-ud-q4_k_xl"
+        assert data["old_model"] == "qwen3.6:35b-a3b-q4_k_m"
 
         # Event IS emitted (no early-return in actual code)
         ws.send_text.assert_called_once()
@@ -357,7 +357,7 @@ class TestMultipleWSConnections:
     def test_event_reaches_multiple_clients(self):
         """Multiple WS clients for same session should all receive model_switched."""
         app, mocks = _build_mocked_app()
-        _mock_session_exists(session_model="qwen3.6:35b-a3b-ud-q4_k_xl")
+        _mock_session_exists(session_model="qwen3.6:35b-a3b-q4_k_m")
         main_module = mocks["main_module"]
 
         ws1 = MagicMock()

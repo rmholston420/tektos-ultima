@@ -112,7 +112,7 @@ async def lifespan(app: _FastAPI):
 
     # 5. Initialize runtime SDK
     runtime_sdk = RuntimeSDK(
-        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1"),
+        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8091/v1"),
         llm_model=_os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M"),
     )
 

@@ -282,8 +282,8 @@ User → POST /api/sessions/{id}/archive → SessionManager.archive()
 BACKEND_URL=http://localhost:8020
 DB_PATH=./data/events.db
 LLM_API_BASE=http://127.0.0.1:8081/v1
-LLM_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_XL
-EMBEDDER_API_BASE=http://127.0.0.1:8090/v1
+LLM_MODEL=Qwen3.6-35B-A3B-Q4_K_M
+EMBEDDER_API_BASE=http://127.0.0.1:8091/v1
 EMBEDDER_MODEL=Qwen3-Embedding-4B-Q8_0
 TEKTOS_FS_ROOT=/home/rmholston/dev/tektos-ultima-v1
 GPU_OPERATIONAL_CEILING=80
@@ -303,7 +303,7 @@ PORT=3003
 | Tektos Backend | :8020 | FastAPI + WebSocket |
 | Tektos Frontend | :3003 (dev) / :5555 (prod) | Next.js |
 | OpenHands llama.cpp | :8081/:8082 | Coder/Planner |
-| OpenHands embedder | :8091 | CPU embedder |
+| OpenHands embedder | :8091 | GPU embedder |
 
 ---
 

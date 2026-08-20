@@ -21,7 +21,7 @@ from tektos.utils.db_utils import validate_table_name, escape_sql_identifier
 class TestLLMConfig:
     def test_default_values(self):
         config = LLMConfig()
-        assert config.base_url == "http://127.0.0.1:8090/v1"
+        assert config.base_url == "http://127.0.0.1:8091/v1"
         assert config.timeout == 300.0
 
     def test_custom_values(self):
@@ -67,14 +67,14 @@ class TestAPIKeyConfig:
 class TestTektosConfig:
     def test_from_env_defaults(self):
         config = TektosConfig.from_env()
-        assert config.llm.base_url == "http://127.0.0.1:8090/v1"
+        assert config.llm.base_url == "http://127.0.0.1:8091/v1"
         assert config.hindsight.base_url == "http://127.0.0.1:9177"
         assert config.searxng.base_url == "http://localhost:8888/search"
         assert config.vision.base_url == "http://127.0.0.1:8083"
         assert config.api_key.enabled is False
 
     @patch.dict(os.environ, {
-        "TEKTOS_LLM_BASE_URL": "http://llm:8090/v1",
+        "TEKTOS_LLM_BASE_URL": "http://llm:8091/v1",
         "TEKTOS_HINDSIGHT_URL": "http://hindsight:9177",
         "TEKTOS_SEARXNG_URL": "http://search:8888/search",
         "TEKTOS_VISION_URL": "http://vision:8083",
@@ -83,7 +83,7 @@ class TestTektosConfig:
     })
     def test_from_env_custom(self):
         config = TektosConfig.from_env()
-        assert config.llm.base_url == "http://llm:8090/v1"
+        assert config.llm.base_url == "http://llm:8091/v1"
         assert config.hindsight.base_url == "http://hindsight:9177"
         assert config.searxng.base_url == "http://search:8888/search"
         assert config.vision.base_url == "http://vision:8083"

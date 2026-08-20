@@ -399,7 +399,7 @@ def _embedder_available() -> bool:
 class TestEmbedderIntegration:
     @pytest.mark.asyncio
     async def test_live_embed(self):
-        """Test against the live Qwen3-Embedding-4B server on :8090."""
+        """Test against the live Qwen3-Embedding-4B server on :8091."""
         client = EmbedderClient()
         await client.start()
         result = await client.embed("Tektos self-improving agent")

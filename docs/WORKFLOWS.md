@@ -77,7 +77,7 @@ npm start
 | Tektos Backend | :8020 | FastAPI + WebSocket |
 | Tektos Frontend | :5555 (prod) / :3003 (dev) | Next.js |
 | OpenHands :8081 | :8081 | llama.cpp Coder/Planner |
-| OpenHands :8090 | :8090 | Embedder (CPU) |
+| OpenHands :8091 | :8091 | Embedder (GPU) |
 
 ---
 
@@ -339,8 +339,8 @@ volumes:
 BACKEND_URL=http://localhost:8020
 DB_PATH=./data/events.db
 LLM_API_BASE=http://127.0.0.1:8081/v1
-LLM_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_XL
-EMBEDDER_API_BASE=http://127.0.0.1:8090/v1
+LLM_MODEL=Qwen3.6-35B-A3B-Q4_K_M
+EMBEDDER_API_BASE=http://127.0.0.1:8091/v1
 EMBEDDER_MODEL=Qwen3-Embedding-4B-Q8_0
 GPU_YELLOW_TEMP=51
 GPU_OPERATIONAL_CEILING=80
