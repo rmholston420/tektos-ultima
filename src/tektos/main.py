@@ -44,10 +44,14 @@ log = _log.getLogger("tektos.main")
 # ---------------------------------------------------------------------------
 
 memory_system: Any = None
+_skill_manager: Any = None
+_skill_executor: Any = None
 _tool_registry: Any = None
 _mcp_client: Any = None
 _metabolism: Any = None
+_voice_manager: Any = None
 
+from tektos.db_manager import DatabaseManager
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
 from tektos.protocol.envelope import (
     PROTOCOL_VERSION,
@@ -74,6 +78,7 @@ session_manager: SessionManager
 runtime_sdk: RuntimeSDK
 ws_manager: WebSocketManager
 schema_engine: SchemaEvolutionEngine
+db_manager: DatabaseManager
 self_improvement: SelfImprovementAdapter
 vision_client: Any = None
 telegram_gateway: Any = None
@@ -99,6 +104,9 @@ async def lifespan(app: _FastAPI):
 
     # 3. Initialize schema evolution engine (uses event store DB)
     schema_engine = SchemaEvolutionEngine(db_path)
+
+    # 3b. Initialize database manager (full DB lifecycle management)
+    db_manager = DatabaseManager(db_path)
 
     # 4. Apply any pending schema migrations
     try:
@@ -141,9 +149,27 @@ async def lifespan(app: _FastAPI):
     # 6. Initialize WebSocket manager
     ws_manager = WebSocketManager()
 
+    # 6b. Initialize skill system (create, select, execute)
+    from tektos.skills.registry import SkillRegistry
+    from tektos.skills.manager import SkillManager
+    from tektos.skills.executor import SkillExecutor
+    global _skill_manager, _skill_executor
+    _skill_registry = SkillRegistry(
+        db_path=str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db"),
+        skill_dir=str(_Path.home() / ".tektos/skills/"),
+    )
+    _skill_manager = SkillManager(registry=_skill_registry)
+    # tool_registry is initialized later at step 9; pass None for now
+    _skill_executor = SkillExecutor(
+        runtime_sdk=runtime_sdk,
+        tool_registry=None,
+    )
+    log.info("Skill system initialized (registry + manager + executor)")
+
     # 7. Initialize self-improvement adapter with schema engine
     self_improvement = SelfImprovementAdapter(
         ws_event_emitter=lambda **kw: _emit_schema_event(**kw),
+        skill_manager=_skill_manager,
     )
 
     # 8. Initialize event bus + state machine (nervous system)
@@ -163,19 +189,326 @@ async def lifespan(app: _FastAPI):
     log.info("Event bus + state machine initialized (nervous system)")
 
     # 9. Initialize tool registry (replaces hardcoded TOOLS_SCHEMA)
-    from tektos.tools.registry import ToolRegistry, MCPClient
+    from tektos.tools.registry import ToolRegistry, MCPClient, ToolDefinition
     from tektos.providers.sandbox_provider import SandboxProvider
     global _tool_registry, _mcp_client
     _sandbox = SandboxProvider()
     _tool_registry = ToolRegistry(event_bus=_event_bus)
     _tool_registry.load_built_in(_sandbox)
     _mcp_client = MCPClient(registry=_tool_registry)
-    log.info("Tool registry initialized with built-in tools")
+
+    # Register database management tools (need db_manager instance)
+    _db_tools_registered = False
+
+    def _register_db_tools():
+        from tektos.db_manager import DatabaseManager as _DBMgr
+        nonlocal _db_tools_registered
+        if _db_tools_registered:
+            return
+        _db_tools_registered = True
+        try:
+            _db_mgr = _DBMgr(db_path)
+
+            # db_introspect — get full schema
+            _tool_registry.register(ToolDefinition(
+                name="db_introspect",
+                description="Get the full database schema: all tables, columns, types, indexes, and row counts. Use this to understand the current database structure before making changes.",
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+                handler=lambda params: _json.dumps(_db_mgr.get_stats(), indent=2, default=str),
+            ))
+
+            # db_query — execute a SELECT query
+            _tool_registry.register(ToolDefinition(
+                name="db_query",
+                description="Execute a SELECT query on the database. Returns results as a list of dicts. Use for reading data, checking counts, or inspecting records. Only SELECT statements are allowed for safety.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "sql": {"type": "string", "description": "SQL SELECT query"},
+                        "params": {"type": "array", "description": "Query parameters (list)", "default": None},
+                        "limit": {"type": "integer", "description": "Max rows to return", "default": 1000},
+                    },
+                    "required": ["sql"],
+                },
+                handler=lambda params: _json.dumps(_db_mgr.execute_query(params["sql"], tuple(params.get("params", [])), params.get("limit", 1000)), indent=2, default=str),
+            ))
+
+            # db_dml — execute INSERT/UPDATE/DELETE
+            _tool_registry.register(ToolDefinition(
+                name="db_dml",
+                description="Execute a DML statement (INSERT, UPDATE, or DELETE). For UPDATE/DELETE, a WHERE clause is required by default for safety. Returns the number of rows affected.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "sql": {"type": "string", "description": "SQL DML statement"},
+                        "params": {"type": "array", "description": "Statement parameters (list)", "default": None},
+                        "require_confirmation": {"type": "boolean", "description": "Require WHERE clause for UPDATE/DELETE", "default": True},
+                    },
+                    "required": ["sql"],
+                },
+                handler=lambda params: _json.dumps({"rows_affected": _db_mgr.execute_dml(params["sql"], tuple(params.get("params", [])), params.get("require_confirmation", True))}, indent=2),
+            ))
+
+            # db_create_table — create a new table
+            _tool_registry.register(ToolDefinition(
+                name="db_create_table",
+                description="Create a new table in the database. Specify table name, column definitions as {name: type}, and optionally a primary key column.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Table name"},
+                        "columns": {"type": "object", "description": "Column definitions: {column_name: column_type}", "additionalProperties": {"type": "string"}},
+                        "primary_key": {"type": "string", "description": "Primary key column name", "default": None},
+                    },
+                    "required": ["table_name", "columns"],
+                },
+                handler=lambda params: _json.dumps({"created": _db_mgr.create_table(params["table_name"], params["columns"], params.get("primary_key"))}, indent=2),
+            ))
+
+            # db_add_column — add a column to an existing table
+            _tool_registry.register(ToolDefinition(
+                name="db_add_column",
+                description="Add a column to an existing table. Specify table name, column name, type, optional default value, and NOT NULL constraint.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Target table"},
+                        "column_name": {"type": "string", "description": "New column name"},
+                        "column_type": {"type": "string", "description": "Column type (TEXT, INTEGER, REAL, BLOB)"},
+                        "default": {"type": "string", "description": "Default value", "default": None},
+                        "notnull": {"type": "boolean", "description": "NOT NULL constraint", "default": False},
+                    },
+                    "required": ["table_name", "column_name", "column_type"],
+                },
+                handler=lambda params: _json.dumps({"added": _db_mgr.add_column(params["table_name"], params["column_name"], params["column_type"], params.get("default"), params.get("notnull", False))}, indent=2),
+            ))
+
+            # db_drop_column — drop a column from a table
+            _tool_registry.register(ToolDefinition(
+                name="db_drop_column",
+                description="Drop a column from an existing table. Note: SQLite recreates the table internally to drop a column.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Target table"},
+                        "column_name": {"type": "string", "description": "Column to drop"},
+                    },
+                    "required": ["table_name", "column_name"],
+                },
+                handler=lambda params: _json.dumps({"dropped": _db_mgr.drop_column(params["table_name"], params["column_name"])}, indent=2),
+            ))
+
+            # db_rename_table — rename a table
+            _tool_registry.register(ToolDefinition(
+                name="db_rename_table",
+                description="Rename a table in the database.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "old_name": {"type": "string", "description": "Current table name"},
+                        "new_name": {"type": "string", "description": "New table name"},
+                    },
+                    "required": ["old_name", "new_name"],
+                },
+                handler=lambda params: _json.dumps({"renamed": _db_mgr.rename_table(params["old_name"], params["new_name"])}, indent=2),
+            ))
+
+            # db_rename_column — rename a column
+            _tool_registry.register(ToolDefinition(
+                name="db_rename_column",
+                description="Rename a column in a table.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Target table"},
+                        "old_name": {"type": "string", "description": "Current column name"},
+                        "new_name": {"type": "string", "description": "New column name"},
+                    },
+                    "required": ["table_name", "old_name", "new_name"],
+                },
+                handler=lambda params: _json.dumps({"renamed": _db_mgr.rename_column(params["table_name"], params["old_name"], params["new_name"])}, indent=2),
+            ))
+
+            # db_create_index — create an index
+            _tool_registry.register(ToolDefinition(
+                name="db_create_index",
+                description="Create an index on one or more columns of a table. Use UNIQUE for unique constraints.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "index_name": {"type": "string", "description": "Index name"},
+                        "table_name": {"type": "string", "description": "Target table"},
+                        "columns": {"type": "array", "items": {"type": "string"}, "description": "Columns to index"},
+                        "unique": {"type": "boolean", "description": "Unique index", "default": False},
+                    },
+                    "required": ["index_name", "table_name", "columns"],
+                },
+                handler=lambda params: _json.dumps({"created": _db_mgr.create_index(params["index_name"], params["table_name"], params["columns"], params.get("unique", False))}, indent=2),
+            ))
+
+            # db_drop_index — drop an index
+            _tool_registry.register(ToolDefinition(
+                name="db_drop_index",
+                description="Drop an index from the database.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "index_name": {"type": "string", "description": "Index name to drop"},
+                    },
+                    "required": ["index_name"],
+                },
+                handler=lambda params: _json.dumps({"dropped": _db_mgr.drop_index(params["index_name"])}, indent=2),
+            ))
+
+            # db_analyze — analyze a table for data quality and optimization
+            _tool_registry.register(ToolDefinition(
+                name="db_analyze",
+                description="Analyze a table: data quality, column distribution, missing indexes, duplicate indexes, and optimization suggestions.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Table to analyze"},
+                    },
+                    "required": ["table_name"],
+                },
+                handler=lambda params: _json.dumps(_db_mgr.analyze_table(params["table_name"]).__dict__, indent=2, default=str),
+            ))
+
+            # db_analyze_all — analyze all tables
+            _tool_registry.register(ToolDefinition(
+                name="db_analyze_all",
+                description="Analyze all tables in the database for data quality issues and optimization opportunities.",
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+                handler=lambda params: _json.dumps({
+                    t: r.__dict__ for t, r in _db_mgr.analyze_all().items()
+                }, indent=2, default=str),
+            ))
+
+            # db_backup — create a database backup
+            _tool_registry.register(ToolDefinition(
+                name="db_backup",
+                description="Create a backup of the database. Returns backup path, size, table count, row count, and checksum.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "backup_path": {"type": "string", "description": "Backup file path (optional, auto-generated if omitted)", "default": None},
+                        "compress": {"type": "boolean", "description": "Compress with gzip", "default": False},
+                    },
+                    "required": [],
+                },
+                handler=lambda params: _json.dumps({
+                    "path": _db_mgr.backup(params.get("backup_path"), params.get("compress", False)).path,
+                    "tables": _db_mgr.backup(params.get("backup_path"), params.get("compress", False)).table_count,
+                    "rows": _db_mgr.backup(params.get("backup_path"), params.get("compress", False)).row_count,
+                }, indent=2),
+            ))
+
+            # db_restore — restore from backup
+            _tool_registry.register(ToolDefinition(
+                name="db_restore",
+                description="Restore the database from a backup file. WARNING: This replaces the current database entirely.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "backup_path": {"type": "string", "description": "Backup file to restore from"},
+                        "verify": {"type": "boolean", "description": "Verify backup before restoring", "default": True},
+                    },
+                    "required": ["backup_path"],
+                },
+                handler=lambda params: _json.dumps({"restored": _db_mgr.restore(params["backup_path"], params.get("verify", True))}, indent=2),
+            ))
+
+            # db_export — export a table to JSON/CSV/SQL
+            _tool_registry.register(ToolDefinition(
+                name="db_export",
+                description="Export a table to a file in JSON, CSV, or SQL format.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Table to export"},
+                        "format": {"type": "string", "enum": ["json", "csv", "sql"], "description": "Output format", "default": "json"},
+                        "path": {"type": "string", "description": "Output file path (optional)", "default": None},
+                    },
+                    "required": ["table_name"],
+                },
+                handler=lambda params: _json.dumps({"exported": True, "path": _db_mgr.export_table(params["table_name"], params.get("format", "json"), params.get("path"))}, indent=2),
+            ))
+
+            # db_import — import data into a table
+            _tool_registry.register(ToolDefinition(
+                name="db_import",
+                description="Import data into a table from a JSON, CSV, or SQL file.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Target table"},
+                        "format": {"type": "string", "enum": ["json", "csv", "sql"], "description": "Input format", "default": "json"},
+                        "path": {"type": "string", "description": "Input file path"},
+                        "mode": {"type": "string", "enum": ["insert", "replace"], "description": "Insert or replace mode", "default": "insert"},
+                        "clear_first": {"type": "boolean", "description": "Clear table before importing", "default": False},
+                    },
+                    "required": ["table_name", "path"],
+                },
+                handler=lambda params: _json.dumps({"imported": True, "rows": _db_mgr.import_table(params["table_name"], params.get("format", "json"), params["path"], params.get("mode", "insert"), params.get("clear_first", False))}, indent=2),
+            ))
+
+            # db_optimize — run VACUUM and ANALYZE
+            _tool_registry.register(ToolDefinition(
+                name="db_optimize",
+                description="Run database optimization: VACUUM (rebuild file), ANALYZE (update query planner stats), and re-analyze all tables.",
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+                handler=lambda params: _json.dumps(_db_mgr.optimize(), indent=2, default=str),
+            ))
+
+            # db_explain — get query plan
+            _tool_registry.register(ToolDefinition(
+                name="db_explain",
+                description="Get the query execution plan for a SELECT statement. Shows whether indexes are used and the join order.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "sql": {"type": "string", "description": "SQL SELECT query"},
+                        "params": {"type": "array", "description": "Query parameters", "default": None},
+                    },
+                    "required": ["sql"],
+                },
+                handler=lambda params: _json.dumps(_db_mgr.explain_query(params["sql"], tuple(params.get("params", [])) if params.get("params") else None), indent=2, default=str),
+            ))
+
+            log.info("Registered %d database management tools", 16)
+        except Exception as e:
+            log.warning("Failed to register DB tools: %s", e)
+
+    _register_db_tools()
+    # Update skill executor with the now-available tool registry
+    if _skill_executor:
+        _skill_executor.tool_registry = _tool_registry
+    log.info("Tool registry initialized with built-in tools and DB management tools")
 
     # 10. Initialize metabolism engine (resource monitoring + context budget)
     from tektos.metabolism import MetabolismEngine
     global _metabolism
     _metabolism = MetabolismEngine(event_bus=_event_bus, max_tokens=262144)
+    log.info("Metabolism engine initialized")
+
+    # 11. Initialize voice system (ears and voice)
+    global _voice_manager
+    from tektos.voice import get_voice_manager
+    _voice_manager = get_voice_manager()
+    await _voice_manager.initialize()
+    log.info("Voice system initialized")
     log.info("Metabolism engine initialized (VRAM + context budget + power)")
 
     # 11. Start runtime SDK
@@ -416,6 +749,71 @@ async def health_check():
     }
 
 
+@app.get("/api/voice/state")
+async def get_voice_state():
+    """Get current voice system state."""
+    if not _voice_manager:
+        return {"error": "Voice system not initialized"}
+    return _voice_manager.get_state()
+
+
+@app.post("/api/voice/stt")
+async def transcribe_audio(request: _Request):
+    """Transcribe audio to text using Whisper.
+    
+    Accepts multipart form data with 'audio' file (WAV/MP3).
+    Returns transcribed text.
+    """
+    if not _voice_manager:
+        raise _HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    try:
+        form = await request.form()
+        audio_file = form.get("audio")
+        if not audio_file:
+            raise _HTTPException(status_code=400, detail="No audio file provided")
+        
+        # audio_file is UploadFile from multipart form
+        audio_bytes = await audio_file.read()  # type: ignore[union-attr]
+        if not audio_bytes:
+            raise _HTTPException(status_code=400, detail="Empty audio file")
+        
+        text = await _voice_manager.transcribe(audio_bytes)
+        return {"text": text, "wake_word_detected": _voice_manager.state.is_wake_word_detected}
+    except _HTTPException:
+        raise
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+
+@app.post("/api/voice/tts")
+async def synthesize_speech(request: _Request):
+    """Synthesize text to speech using edge-tts.
+    
+    Accepts JSON body with 'text' field.
+    Returns audio stream (MP3).
+    """
+    if not _voice_manager:
+        raise _HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    try:
+        body = await request.json()
+        text = body.get("text", "")
+        if not text:
+            raise _HTTPException(status_code=400, detail="No text provided")
+        
+        audio_bytes = await _voice_manager.speak(text)
+        return _StreamingResponse(
+            iter([audio_bytes]),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "attachment; filename=tektos_speech.mp3"},
+        )
+    except _HTTPException:
+        raise
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
+
+
 @app.get("/api/memory")
 async def get_memory(tier: str | None = None, search: str | None = None):
     """Get memory entries. Optional tier filter and FTS5 search."""
@@ -473,6 +871,383 @@ async def delete_memory(tier: str, entry_id: str):
 
     deleted = fn(entry_id)
     return {"deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# REST API — Skills
+# ---------------------------------------------------------------------------
+
+class _CreateSkillBody(_BaseModel):
+    name: str = _Field(description="Skill name")
+    description: str = _Field(description="What the skill does")
+    trigger_conditions: list[str] = _Field(default_factory=list, description="Conditions that trigger this skill")
+    steps: list[dict[str, Any]] = _Field(default_factory=list, description="Ordered steps to execute")
+    category: str = _Field(default="", description="Skill category")
+    source: str = _Field(default="user_created", description="Origin of the skill")
+    metadata: dict[str, Any] = _Field(default_factory=dict, description="Additional metadata")
+
+
+@app.get("/api/skills")
+async def get_skills_list(category: str | None = None, active_only: bool = True):
+    """List all skills with optional category filter."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    skills = _skill_manager.registry.list_skills(active_only=active_only, category=category)
+    return {
+        "skills": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "category": s.category,
+                "description": s.description,
+                "enabled": s.is_active,
+                "version": s.version,
+                "trigger_conditions": s.trigger_conditions,
+                "steps": s.steps,
+                "usage_count": s.usage_count,
+                "last_used": s.last_used,
+                "success_rate": round(s.success_rate, 3),
+                "source": s.source,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+            }
+            for s in skills
+        ]
+    }
+
+
+@app.get("/api/skills/stats")
+async def get_skill_stats():
+    """Get skill system statistics."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    return _skill_manager.get_stats()
+
+
+@app.get("/api/skills/search")
+async def search_skills(query: str, limit: int = 20):
+    """Search skills by name, description, or trigger conditions."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    skills = _skill_manager.registry.search(query, limit=limit)
+    return {
+        "skills": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "category": s.category,
+                "description": s.description,
+                "enabled": s.is_active,
+                "version": s.version,
+                "trigger_conditions": s.trigger_conditions,
+                "steps": s.steps,
+                "usage_count": s.usage_count,
+                "success_rate": round(s.success_rate, 3),
+            }
+            for s in skills
+        ]
+    }
+
+
+@app.post("/api/skills")
+async def create_skill(body: _CreateSkillBody):
+    """Create a new skill."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    try:
+        skill = _skill_manager.create_skill(
+            name=body.name,
+            description=body.description,
+            trigger_conditions=body.trigger_conditions,
+            steps=body.steps,
+            category=body.category,
+            source=body.source,
+            metadata=body.metadata,
+        )
+        return {
+            "id": skill.id,
+            "name": skill.name,
+            "created": True,
+        }
+    except Exception as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/skills/{skill_id}")
+async def get_skill(skill_id: str):
+    """Get a single skill by ID."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    skill = _skill_manager.registry.get_by_id(skill_id)
+    if not skill:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "category": skill.category,
+        "description": skill.description,
+        "enabled": skill.is_active,
+        "version": skill.version,
+        "trigger_conditions": skill.trigger_conditions,
+        "steps": skill.steps,
+        "usage_count": skill.usage_count,
+        "last_used": skill.last_used,
+        "success_rate": round(skill.success_rate, 3),
+        "source": skill.source,
+        "metadata": skill.metadata,
+        "created_at": skill.created_at,
+        "updated_at": skill.updated_at,
+    }
+
+
+class _UpdateSkillBody(_BaseModel):
+    name: str | None = None
+    description: str | None = None
+    trigger_conditions: list[str] | None = None
+    steps: list[dict[str, Any]] | None = None
+    category: str | None = None
+    enabled: bool | None = None
+    version: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+@app.put("/api/skills/{skill_id}")
+async def update_skill(skill_id: str, body: _UpdateSkillBody):
+    """Update an existing skill."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    skill = _skill_manager.registry.get_by_id(skill_id)
+    if not skill:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+    if body.name is not None:
+        skill.name = body.name
+    if body.description is not None:
+        skill.description = body.description
+    if body.trigger_conditions is not None:
+        skill.trigger_conditions = body.trigger_conditions
+    if body.steps is not None:
+        skill.steps = body.steps
+    if body.category is not None:
+        skill.category = body.category
+    if body.enabled is not None:
+        skill.is_active = body.enabled
+    if body.version is not None:
+        skill.version = body.version
+    if body.metadata is not None:
+        skill.metadata = body.metadata
+    updated = _skill_manager.registry.update(skill)
+    return {
+        "id": updated.id,
+        "name": updated.name,
+        "updated": True,
+    }
+
+
+@app.delete("/api/skills/{skill_id}")
+async def delete_skill(skill_id: str):
+    """Delete a skill."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    deleted = _skill_manager.registry.delete(skill_id)
+    if not deleted:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+    return {"deleted": True}
+
+
+@app.post("/api/skills/{skill_id}/toggle")
+async def toggle_skill(skill_id: str):
+    """Toggle a skill's enabled/disabled state."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    skill = _skill_manager.registry.get_by_id(skill_id)
+    if not skill:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+    skill.is_active = not skill.is_active
+    updated = _skill_manager.registry.update(skill)
+    return {
+        "id": updated.id,
+        "name": updated.name,
+        "enabled": updated.is_active,
+    }
+
+
+@app.post("/api/skills/{skill_id}/prune")
+async def prune_skills():
+    """Prune inactive/low-performing skills."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    archived = _skill_manager.prune_inactive_skills()
+    return {"archived": archived}
+
+
+@app.post("/api/skills/dedup")
+async def deduplicate_skills(threshold: float = 0.6):
+    """Find and merge duplicate skills."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    stats = _skill_manager.deduplicate(similarity_threshold=threshold)
+    return stats
+
+
+@app.get("/api/skills/dedup/groups")
+async def get_duplicate_groups(threshold: float = 0.6):
+    """Find duplicate skill groups without merging."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    groups = _skill_manager.find_duplicate_groups(similarity_threshold=threshold)
+    return {
+        "groups": [
+            {
+                "primary": {
+                    "id": g["primary"].id,
+                    "name": g["primary"].name,
+                    "usage_count": g["primary"].usage_count,
+                    "success_rate": round(g["primary"].success_rate, 3),
+                },
+                "duplicates": [
+                    {
+                        "id": d.id,
+                        "name": d.name,
+                        "usage_count": d.usage_count,
+                        "success_rate": round(d.success_rate, 3),
+                    }
+                    for d in g["duplicates"]
+                ],
+                "similarity": round(g.get("similarity", 0), 3),
+            }
+            for g in groups
+        ]
+    }
+
+
+@app.post("/api/skills/{skill_id}/improve")
+async def improve_skill(skill_id: str, body: _UpdateSkillBody):
+    """Improve a skill by updating its description, steps, or triggers."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    skill = _skill_manager.registry.get_by_id(skill_id)
+    if not skill:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+
+    improvements = []
+    if body.description is not None:
+        improvements.append(f"Updated description")
+    if body.steps is not None:
+        improvements.append(f"Updated {len(body.steps)} steps")
+    if body.trigger_conditions is not None:
+        improvements.append(f"Updated {len(body.trigger_conditions)} triggers")
+
+    improved = _skill_manager.improve_skill(
+        skill_id=skill_id,
+        new_description=body.description,
+        new_steps=body.steps,
+        new_triggers=body.trigger_conditions,
+        improvement_note="; ".join(improvements) if improvements else "Manual improvement",
+    )
+    if not improved:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+    return {
+        "id": improved.id,
+        "name": improved.name,
+        "version": improved.version,
+        "improved": True,
+    }
+
+
+@app.post("/api/skills/{skill_id}/improve/from-execution")
+async def improve_from_execution(skill_id: str):
+    """Improve a skill based on its last execution result."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    skill = _skill_manager.registry.get_by_id(skill_id)
+    if not skill:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+
+    # Use the skill's metadata to reconstruct execution context
+    improved = _skill_manager.improve_from_execution(
+        skill_id=skill_id,
+        execution_result={
+            "success": skill.success_rate > 0.5,
+            "output": f"Executed {skill.usage_count} times",
+            "error": "" if skill.success_rate > 0.5 else "Some failures recorded",
+            "step_results": [],
+        },
+    )
+    if not improved:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+    return {
+        "id": improved.id,
+        "name": improved.name,
+        "version": improved.version,
+        "improved": True,
+    }
+
+
+@app.post("/api/skills/maintenance")
+async def run_skill_maintenance():
+    """Run full skill maintenance: dedup, prune, and auto-improve."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    results = _skill_manager.run_maintenance()
+    return results
+
+
+class _SelectSkillsBody(_BaseModel):
+    context: dict[str, Any] = _Field(default_factory=dict, description="Current session context")
+    max_skills: int = _Field(default=5, description="Maximum number of skills to return")
+
+
+@app.post("/api/skills/select")
+async def select_skills(body: _SelectSkillsBody):
+    """Select skills that match the current context."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    result = _skill_manager.select_skills(context=body.context, max_skills=body.max_skills)
+    return {
+        "selected": [
+            {
+                "id": m.skill.id,
+                "name": m.skill.name,
+                "category": m.skill.category,
+                "score": round(m.score, 2),
+                "reason": m.reason,
+            }
+            for m in result.matches
+        ]
+    }
+
+
+class _ExecuteSkillBody(_BaseModel):
+    context: dict[str, Any] = _Field(default_factory=dict, description="Execution context")
+
+
+@app.post("/api/skills/{skill_id}/execute")
+async def execute_skill(skill_id: str, body: _ExecuteSkillBody):
+    """Execute a skill with given context."""
+    if not _skill_manager:
+        return {"error": "Skill manager not initialized"}
+    skill = _skill_manager.registry.get_by_id(skill_id)
+    if not skill:
+        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+
+    try:
+        # Execute inline (simple skills)
+        await _skill_manager._execute_inline(skill, body.context)
+        _skill_manager.registry.record_usage(skill_id, success=True)
+        return {
+            "skill_id": skill_id,
+            "skill_name": skill.name,
+            "success": True,
+            "result": f"Skill '{skill.name}' executed successfully",
+        }
+    except Exception as e:
+        _skill_manager.registry.record_usage(skill_id, success=False)
+        return {
+            "skill_id": skill_id,
+            "skill_name": skill.name,
+            "success": False,
+            "error": str(e),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +1385,70 @@ async def get_metabolism_history(limit: int = 100):
 
 
 # ---------------------------------------------------------------------------
+# REST API — Immune System
+# ---------------------------------------------------------------------------
+
+@app.get("/api/immune/health")
+async def get_immune_health():
+    """Get immune system health dashboard: overall score, components, active threats."""
+    if not runtime_sdk._immune_system:
+        return {"error": "Immune system not initialized"}
+    health = runtime_sdk._immune_system.get_health()
+    return health.to_dict()
+
+
+@app.get("/api/immune/threats")
+async def get_immune_threats(resolved: bool = False):
+    """Get immune threats, optionally including resolved ones."""
+    if not runtime_sdk._immune_system:
+        return {"error": "Immune system not initialized"}
+    threats = runtime_sdk._immune_system.get_threats(resolved=resolved)
+    return {
+        "threats": [t.to_dict() for t in threats],
+        "count": len(threats),
+    }
+
+
+@app.get("/api/immune/memory")
+async def get_immune_memory():
+    """Get immune memory summary: total threats, patterns, response effectiveness."""
+    if not runtime_sdk._immune_system:
+        return {"error": "Immune system not initialized"}
+    return runtime_sdk._immune_system.get_memory_summary()
+
+
+@app.get("/api/immune/responses")
+async def get_immune_responses(limit: int = 20):
+    """Get immune response history."""
+    if not runtime_sdk._immune_system:
+        return {"error": "Immune system not initialized"}
+    return {"responses": runtime_sdk._immune_system.get_response_history(limit=limit)}
+
+
+@app.get("/api/immune/detectors")
+async def get_immune_detectors():
+    """List all registered immune detectors and their status."""
+    if not runtime_sdk._immune_system:
+        return {"error": "Immune system not initialized"}
+    detectors = runtime_sdk._immune_system._detectors
+    return {
+        "detectors": [
+            {"name": name, "type": type(det).__name__}
+            for name, det in detectors.items()
+        ],
+        "count": len(detectors),
+    }
+
+
+@app.get("/api/immune/memory/entries")
+async def get_immune_memory_entries(limit: int = 50):
+    """Get immune memory entries for self-improvement loop."""
+    if not runtime_sdk._immune_system:
+        return {"error": "Immune system not initialized"}
+    return runtime_sdk._immune_system.to_memory_entry()
+
+
+# ---------------------------------------------------------------------------
 # REST API — Schema Evolution
 # ---------------------------------------------------------------------------
 
@@ -721,6 +1560,417 @@ async def apply_schema_proposal(body: _ApplySchemaProposalBody):
         return {"success": False, "errors": proposal.validation_errors}
     result = schema_engine.apply_proposal(proposal)
     return {"success": result, "version": schema_engine.get_current_version()}
+
+
+# ---------------------------------------------------------------------------
+# REST API — Database Management
+# ---------------------------------------------------------------------------
+
+class _DBCreateTableBody(_BaseModel):
+    table_name: str = _Field(description="Table name")
+    columns: dict[str, str] = _Field(description="Column definitions: {name: type}")
+    primary_key: str | None = _Field(default=None, description="Primary key column")
+
+
+class _DBAddColumnBody(_BaseModel):
+    table_name: str = _Field(description="Target table")
+    column_name: str = _Field(description="New column name")
+    column_type: str = _Field(description="Column type (TEXT, INTEGER, REAL, BLOB)")
+    default: Any = _Field(default=None, description="Default value")
+    notnull: bool = _Field(default=False, description="NOT NULL constraint")
+
+
+class _DBDropColumnBody(_BaseModel):
+    table_name: str = _Field(description="Target table")
+    column_name: str = _Field(description="Column to drop")
+
+
+class _DBRenameBody(_BaseModel):
+    new_name: str = _Field(description="New name")
+
+
+class _DBCreateIndexBody(_BaseModel):
+    index_name: str = _Field(description="Index name")
+    table_name: str = _Field(description="Target table")
+    columns: list[str] = _Field(description="Columns to index")
+    unique: bool = _Field(default=False, description="Unique index")
+
+
+class _DBQueryBody(_BaseModel):
+    sql: str = _Field(description="SQL query (SELECT only)")
+    params: list | None = _Field(default=None, description="Query parameters")
+    limit: int = _Field(default=1000, description="Max rows")
+
+
+class _DBDMLBody(_BaseModel):
+    sql: str = _Field(description="SQL statement (INSERT/UPDATE/DELETE)")
+    params: list | None = _Field(default=None, description="Statement parameters")
+    require_confirmation: bool = _Field(default=True, description="Require WHERE clause")
+
+
+class _DBExportBody(_BaseModel):
+    table_name: str = _Field(description="Table to export")
+    format: str = _Field(default="json", description="Format: json, csv, sql")
+    path: str | None = _Field(default=None, description="Output file path")
+
+
+class _DBImportBody(_BaseModel):
+    table_name: str = _Field(description="Target table")
+    format: str = _Field(default="json", description="Format: json, csv, sql")
+    path: str = _Field(description="Input file path")
+    mode: str = _Field(default="insert", description="insert or replace")
+    clear_first: bool = _Field(default=False, description="Clear table first")
+
+
+class _DBBackupBody(_BaseModel):
+    backup_path: str | None = _Field(default=None, description="Backup file path")
+    compress: bool = _Field(default=False, description="Compress with gzip")
+
+
+class _DBRestoreBody(_BaseModel):
+    backup_path: str = _Field(description="Backup file to restore from")
+    verify: bool = _Field(default=True, description="Verify backup before restore")
+
+
+@app.get("/api/db")
+async def get_db_stats():
+    """Get database statistics: tables, rows, sizes."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    return db_manager.get_stats()
+
+
+@app.get("/api/db/schema")
+async def get_db_schema():
+    """Get full database schema with column types and indexes."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    snapshot = db_manager.introspect()
+    return {
+        "tables": {
+            name: {
+                "columns": [
+                    {
+                        "name": c.name,
+                        "type": c.col_type,
+                        "notnull": c.notnull,
+                        "pk": c.pk,
+                        "default": c.default_value,
+                    }
+                    for c in t.columns
+                ],
+                "indexes": [i.name for i in t.indexes],
+                "row_count": t.row_count,
+                "size_bytes": t.size_bytes,
+            }
+            for name, t in snapshot.tables.items()
+        }
+    }
+
+
+@app.get("/api/db/tables/{table_name}/sample")
+async def get_table_sample(table_name: str, limit: int = 100):
+    """Get a sample of records from a table."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        sample = db_manager.get_table_sample(table_name, limit)
+        return {"table": table_name, "count": len(sample), "data": sample}
+    except ValueError as e:
+        raise _HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/db/tables/{table_name}/analyze")
+async def analyze_table(table_name: str):
+    """Analyze a table: data quality, distribution, optimization suggestions."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.analyze_table(table_name)
+        return {
+            "table": result.table_name,
+            "row_count": result.row_count,
+            "column_stats": result.column_stats,
+            "missing_indexes": result.missing_indexes,
+            "duplicate_indexes": result.duplicate_indexes,
+            "suggestions": result.suggestions,
+            "data_quality_issues": result.data_quality_issues,
+        }
+    except ValueError as e:
+        raise _HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/db/analyze")
+async def analyze_all_tables():
+    """Analyze all tables in the database."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    results = db_manager.analyze_all()
+    return {
+        table: {
+            "row_count": r.row_count,
+            "suggestions": r.suggestions,
+            "data_quality_issues": r.data_quality_issues,
+        }
+        for table, r in results.items()
+    }
+
+
+@app.post("/api/db/tables")
+async def create_table(body: _DBCreateTableBody):
+    """Create a new table."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.create_table(
+            body.table_name, body.columns, body.primary_key
+        )
+        return {"created": result, "table": body.table_name}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/db/tables/{table_name}")
+async def drop_table(table_name: str):
+    """Drop a table."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.drop_table(table_name)
+        return {"dropped": result, "table": table_name}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/db/tables/{table_name}/columns")
+async def add_column(table_name: str, body: _DBAddColumnBody):
+    """Add a column to an existing table."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.add_column(
+            table_name, body.column_name, body.column_type,
+            body.default, body.notnull,
+        )
+        return {"added": result, "table": table_name, "column": body.column_name}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/db/tables/{table_name}/columns/{column_name}")
+async def drop_column(table_name: str, column_name: str):
+    """Drop a column from a table."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.drop_column(table_name, column_name)
+        return {"dropped": result, "table": table_name, "column": column_name}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.patch("/api/db/tables/{table_name}/rename")
+async def rename_table(table_name: str, body: _DBRenameBody):
+    """Rename a table."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.rename_table(table_name, body.new_name)
+        return {"renamed": result, "old": table_name, "new": body.new_name}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.patch("/api/db/tables/{table_name}/columns/{old_name}/rename")
+async def rename_column(table_name: str, old_name: str, body: _DBRenameBody):
+    """Rename a column."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.rename_column(table_name, old_name, body.new_name)
+        return {"renamed": result, "old": old_name, "new": body.new_name}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/db/indexes")
+async def create_index(body: _DBCreateIndexBody):
+    """Create an index on a table."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.create_index(
+            body.index_name, body.table_name, body.columns, body.unique
+        )
+        return {"created": result, "index": body.index_name}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/db/indexes/{index_name}")
+async def drop_index(index_name: str):
+    """Drop an index."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.drop_index(index_name)
+        return {"dropped": result, "index": index_name}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/db/query")
+async def execute_query(body: _DBQueryBody):
+    """Execute a SELECT query. Returns results as list of dicts."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        params = tuple(body.params) if body.params else None
+        results = db_manager.execute_query(body.sql, params, body.limit)
+        return {"rows": len(results), "data": results}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/db/dml")
+async def execute_dml(body: _DBDMLBody):
+    """Execute a DML statement (INSERT/UPDATE/DELETE)."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        params = tuple(body.params) if body.params else None
+        rowcount = db_manager.execute_dml(body.sql, params, body.require_confirmation)
+        return {"rows_affected": rowcount}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/db/transaction")
+async def execute_transaction(body: _BaseModel):
+    """Execute multiple statements in a single transaction."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        statements = [
+            (s["sql"], tuple(s.get("params", [])))
+            for s in body.model_dump().get("statements", [])
+        ]
+        results = db_manager.execute_transaction(statements)
+        return {"results": results}
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/db/explain")
+async def explain_query(body: _DBQueryBody):
+    """Get query plan for a SELECT statement."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        params = tuple(body.params) if body.params else None
+        plan = db_manager.explain_query(body.sql, params)
+        return plan
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/db/export")
+async def export_table(body: _DBExportBody):
+    """Export a table to JSON, CSV, or SQL."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        path = db_manager.export_table(
+            body.table_name, body.format, body.path
+        )
+        return {"exported": True, "path": path, "format": body.format}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/db/import")
+async def import_table(body: _DBImportBody):
+    """Import data into a table from JSON, CSV, or SQL."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        count = db_manager.import_table(
+            body.table_name, body.format, body.path,
+            body.mode, body.clear_first,
+        )
+        return {"imported": True, "rows": count}
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/db/backup")
+async def create_backup(body: _DBBackupBody):
+    """Create a database backup."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        info = db_manager.backup(body.backup_path, body.compress)
+        return {
+            "backup": True,
+            "path": info.path,
+            "size_bytes": info.size_bytes,
+            "tables": info.table_count,
+            "rows": info.row_count,
+            "checksum": info.checksum,
+        }
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/db/restore")
+async def restore_backup(body: _DBRestoreBody):
+    """Restore the database from a backup."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        result = db_manager.restore(body.backup_path, body.verify)
+        return {"restored": result, "path": body.backup_path}
+    except (FileNotFoundError, ValueError) as e:
+        raise _HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/db/backups")
+async def list_backups():
+    """List all available backups."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    backups = db_manager.backup.list_backups()
+    return {
+        "backups": [
+            {
+                "path": b.path,
+                "timestamp": b.timestamp,
+                "size_bytes": b.size_bytes,
+                "tables": b.table_count,
+                "rows": b.row_count,
+                "checksum": b.checksum,
+            }
+            for b in backups
+        ]
+    }
+
+
+@app.post("/api/db/optimize")
+async def optimize_db():
+    """Run database optimization: VACUUM, ANALYZE, rebuild indexes."""
+    if not db_manager:
+        return {"error": "Database manager not initialized"}
+    try:
+        results = db_manager.optimize()
+        return results
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/models")

@@ -1,0 +1,20 @@
+# Tektos Build System - Example Configuration
+
+tasks:
+  compile:
+    deps: []
+    inputs: ["src/*.py"]
+    outputs: ["build/*.pyc"]
+    command: "python -m compileall src/"
+
+  test:
+    deps: [compile]
+    inputs: ["tests/*.py"]
+    outputs: ["test_results.xml"]
+    command: "pytest tests/ -o test_results.xml"
+
+  package:
+    deps: [compile, test]
+    inputs: ["build/"]
+    outputs: ["dist/package.tar.gz"]
+    command: "tar czf dist/package.tar.gz build/"

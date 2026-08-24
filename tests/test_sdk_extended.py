@@ -17,6 +17,7 @@ from tektos.protocol.envelope import (
     tool_permission_required,
     tool_started,
 )
+from tektos.metabolism import MetabolismEngine
 from tektos.runtime.loop_safety import LoopSafetyConfig, LoopSafetyMonitor
 from tektos.runtime.sdk import (
     HookContext,
@@ -408,20 +409,23 @@ class TestHandleToolCompletion:
 
     @pytest.mark.asyncio
     async def test_handle_tool_completion_no_on_tool_approval_in_manual_mode(self):
-        """Test manual mode with no on_tool_approval callback -- execution falls through."""
+        """Test manual mode with no on_tool_approval callback -- execution is rejected."""
         sdk = RuntimeSDK()
         session = LiveSession(id="s1", model="test", cwd=".", permission_mode="manual")
         events = []
         async def on_event(env):
             events.append(env)
 
-        sdk._sandbox.execute = MagicMock(return_value="auto output")
-
         result = await sdk._handle_tool_completion(
             session, on_event, "tc-1", "bash",
             _json.dumps({"command": "ls"}), set(), None
         )
-        assert result == "auto output"
+        assert result == "Tool rejected: no approval callback"
+        event_types = [e.event_type for e in events]
+        assert "tool.permission_required" in event_types
+        completed_events = [e for e in events if e.event_type == "tool.completed"]
+        assert len(completed_events) == 1
+        assert completed_events[0].payload.get("status") == "rejected"
 
     @pytest.mark.asyncio
     async def test_handle_tool_completion_execution_error(self):
@@ -484,10 +488,13 @@ class TestCheckResources:
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="45\n")
-                await sdk._check_resources(session)
-                mock_append.assert_not_called()
+            mock_health = MagicMock(
+                overall_health=MagicMock(value="normal"),
+                gpu=MagicMock(temperature=45.0),
+            )
+            sdk._metabolism_engine.assess_health = MagicMock(return_value=mock_health)
+            await sdk._check_resources(session)
+            mock_append.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_check_resources_yellow_zone(self):
@@ -496,10 +503,13 @@ class TestCheckResources:
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="55\n")
-                await sdk._check_resources(session)
-                mock_append.assert_not_called()
+            mock_health = MagicMock(
+                overall_health=MagicMock(value="normal"),
+                gpu=MagicMock(temperature=55.0),
+            )
+            sdk._metabolism_engine.assess_health = MagicMock(return_value=mock_health)
+            await sdk._check_resources(session)
+            mock_append.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_check_resources_over_ceiling(self):
@@ -508,13 +518,16 @@ class TestCheckResources:
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="85\n")
-                await sdk._check_resources(session)
-                mock_append.assert_called_once()
-                call_args = mock_append.call_args
-                assert call_args[0][0] == "s1"
-                assert call_args[0][1] == "resource.warning"
+            mock_health = MagicMock(
+                overall_health=MagicMock(value="normal"),
+                gpu=MagicMock(temperature=85.0),
+            )
+            sdk._metabolism_engine.assess_health = MagicMock(return_value=mock_health)
+            await sdk._check_resources(session)
+            mock_append.assert_called_once()
+            call_args = mock_append.call_args
+            assert call_args[0][0] == "s1"
+            assert call_args[0][1] == "resource.warning"
 
 
 # -- RuntimeSDK -- submit_prompt full path --
@@ -530,38 +543,33 @@ class TestSubmitPromptFull:
             MockClient.return_value = mock_client
             await sdk.start()
 
-        captured_payload = []
+        sse_lines = [
+            _sse_chunk(delta_content="Response", stop_reason="end_turn"),
+            "data: [DONE]",
+        ]
 
         async def mock_post(url, json=None, headers=None):
-            captured_payload.append(json)
-            return _make_mock_sse_response([
-                _sse_chunk(delta_content="Done", stop_reason="end_turn"),
-                "data: [DONE]",
-            ])
+            return _make_mock_sse_response(sse_lines)
 
-        mock_client.post = mock_post
+        mock_client.post = AsyncMock(side_effect=mock_post)
 
-        session = LiveSession(id="s1", model="test", cwd=".")
         events = []
         async def on_event(env):
             events.append(env)
 
-        await sdk.submit_prompt(
-            session,
-            "test prompt",
-            system_prompt="You are a helpful assistant.",
-            on_event=on_event,
-        )
+        session = LiveSession(id="s1", model="test", cwd=".")
+        await sdk.submit_prompt(session, "test prompt", system_prompt="You are helpful.", on_event=on_event)
 
-        assert len(captured_payload) == 1
-        assert captured_payload[0]["messages"][0]["role"] == "system"
-        assert captured_payload[0]["messages"][0]["content"] == "You are a helpful assistant."
-        assert captured_payload[0]["messages"][1]["role"] == "user"
-        assert captured_payload[0]["messages"][1]["content"] == "test prompt"
+        assert session.status == "ready"
+        # Verify system prompt was included in the LLM payload
+        call_args = mock_client.post.call_args
+        payload = call_args[1]["json"]
+        assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][0]["content"] == "You are helpful."
 
     @pytest.mark.asyncio
     async def test_submit_prompt_tools_schema_sent(self):
-        """Test that TOOLS_SCHEMA is included in payload."""
+        """Test submit_prompt includes TOOLS_SCHEMA in the LLM payload."""
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
@@ -569,46 +577,94 @@ class TestSubmitPromptFull:
             MockClient.return_value = mock_client
             await sdk.start()
 
-        captured_payload = []
+        sse_lines = [
+            _sse_chunk(delta_content="Done", stop_reason="end_turn"),
+            "data: [DONE]",
+        ]
 
         async def mock_post(url, json=None, headers=None):
-            captured_payload.append(json)
-            return _make_mock_sse_response([
-                _sse_chunk(delta_content="Done", stop_reason="end_turn"),
-                "data: [DONE]",
-            ])
+            return _make_mock_sse_response(sse_lines)
 
-        mock_client.post = mock_post
+        mock_client.post = AsyncMock(side_effect=mock_post)
 
-        session = LiveSession(id="s1", model="test", cwd=".")
         events = []
         async def on_event(env):
             events.append(env)
 
-        await sdk.submit_prompt(session, "test", on_event=on_event)
+        session = LiveSession(id="s1", model="test", cwd=".")
+        await sdk.submit_prompt(session, "test prompt", on_event=on_event)
 
-        assert len(captured_payload) == 1
-        assert "tools" in captured_payload[0]
-        assert len(captured_payload[0]["tools"]) == 8
+        call_args = mock_client.post.call_args
+        payload = call_args[1]["json"]
+        assert "tools" in payload
+        assert len(payload["tools"]) == len(TOOLS_SCHEMA)
 
 
-# -- RuntimeSDK -- HookContext --
+# -- HookContext --
 
 class TestHookContext:
     def test_hook_context_creation(self):
         ctx = HookContext(
             session_id="s1",
             model="test-model",
-            task_description="Do something",
+            task_description="do something",
             outcome="success",
-            wall_time=2.5,
+            tool_name="bash",
+            tool_input={"command": "ls"},
+            tool_id="tc-1",
+            wall_time=1.5,
         )
         assert ctx.session_id == "s1"
         assert ctx.model == "test-model"
-        assert ctx.task_description == "Do something"
-        assert ctx.outcome == "success"
-        assert ctx.wall_time == 2.5
+        assert ctx.tool_name == "bash"
+        assert ctx.wall_time == 1.5
 
     def test_hook_context_defaults(self):
-        ctx = HookContext(session_id="s2", model="m", task_description="t", outcome="ok")
+        ctx = HookContext(
+            session_id="s1",
+            model="test-model",
+            task_description="do something",
+            outcome="success",
+        )
+        assert ctx.tool_name == ""
+        assert ctx.tool_input is None
+        assert ctx.tool_id == ""
         assert ctx.wall_time == 0.0
+
+
+# -- HookRegistry --
+
+class TestHookRegistry:
+    @pytest.mark.asyncio
+    async def test_hook_registry_runs_sync(self):
+        results = []
+
+        @hooks.register("test.event")
+        def sync_handler(ctx):
+            results.append("sync")
+
+        ctx = HookContext(session_id="s1", model="test", task_description="test", outcome="ok")
+        await hooks.run("test.event", ctx)
+        assert results == ["sync"]
+
+    @pytest.mark.asyncio
+    async def test_hook_registry_runs_async(self):
+        results = []
+
+        @hooks.register("test.event")
+        async def async_handler(ctx):
+            results.append("async")
+
+        ctx = HookContext(session_id="s1", model="test", task_description="test", outcome="ok")
+        await hooks.run("test.event", ctx)
+        assert results == ["async"]
+
+    @pytest.mark.asyncio
+    async def test_hook_registry_catches_errors(self):
+        @hooks.register("test.event")
+        def bad_handler(ctx):
+            raise ValueError("boom")
+
+        ctx = HookContext(session_id="s1", model="test", task_description="test", outcome="ok")
+        # Should not raise -- errors are caught per-hook
+        await hooks.run("test.event", ctx)

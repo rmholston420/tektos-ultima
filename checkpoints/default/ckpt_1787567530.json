@@ -1,0 +1,11 @@
+{
+  "checkpoint_id": "ckpt_1787567530",
+  "session_id": "default",
+  "state": "idle",
+  "timestamp": 1787567530.7782526,
+  "context": {},
+  "memory": {},
+  "tool_results": [],
+  "next_action": "Hello, this is a test. Respond with a short greeting.",
+  "error": null
+}

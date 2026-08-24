@@ -16,6 +16,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { useAuiState } from "@assistant-ui/react";
 import { TektosExternalStoreAdapter } from "@/lib/tektos-store-adapter";
+import { MicButton } from "./MicButton";
 
 // CSS for composer controls — matches Hermes Agent desktop PRIMARY_ICON_BTN exactly
 const COMPOSER_CSS = `
@@ -85,6 +86,7 @@ interface ComposerProps {
   visionAvailable?: boolean;
   visionModel?: string;
   onNewSession?: () => void;
+  onVoiceTranscript?: (text: string) => void;
 }
 
 export function Composer({
@@ -101,6 +103,7 @@ export function Composer({
   visionAvailable = false,
   visionModel,
   onNewSession,
+  onVoiceTranscript,
 }: ComposerProps) {
   const isStreaming = useAuiState(
     (s) => s.thread.isRunning && s.thread.messages.some((m) => m.role === "assistant")
@@ -272,6 +275,12 @@ export function Composer({
     setAttachedImage(null);
   };
 
+  const handleVoiceTranscript = useCallback((text: string) => {
+    if (text && onVoiceTranscript) {
+      onVoiceTranscript(text);
+    }
+  }, [onVoiceTranscript]);
+
   const toggleVisionMode = () => {
     setIsVisionMode(!isVisionMode);
     setAttachedImage(null);
@@ -377,6 +386,11 @@ export function Composer({
 
                 {/* Right: send/stop — solid circle button matching PRIMARY_ICON_BTN */}
                 <div className="flex items-center justify-end gap-[var(--composer-control-gap)]">
+                  {/* Mic button for voice input */}
+                  <MicButton
+                    isActive={isActive}
+                    onTranscript={handleVoiceTranscript}
+                  />
                   {/* File upload button */}
                   <button
                     onClick={() => fileInputRef.current?.click()}

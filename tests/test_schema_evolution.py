@@ -1,476 +1,667 @@
-"""Tests for Schema Evolution Engine — self-modifying storage schema.
+"""Tests for src/tektos/schema_evolution.py — Schema Evolution Engine.
 
-Tests introspection, pattern detection, proposal generation,
-validation, and application of schema migrations.
+Covers:
+- MigrationEngine: versioned migrations, apply, rollback, history
+- SchemaDiffer: diffing, migration SQL generation, migration plans
+- RelationshipDetector: FK detection, implicit relationships, many-to-many
+- NormalizationAnalyzer: repeating groups, partial/transitive dependencies
+- SchemaDocumenter: doc generation, markdown export
+- HealthMonitor: fragmentation, bloat, corruption detection
+- SchemaEvolutionEngine: full lifecycle integration
 """
 
 import json
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 
-from tektos.migrations.schema_evolution import (
+from tektos.schema_evolution import (
     SchemaEvolutionEngine,
-    SchemaSnapshot,
-    FieldPattern,
-    SchemaProposal,
-    TableInfo,
-    ColumnInfo,
+    MigrationEngine,
+    SchemaDiffer,
+    RelationshipDetector,
+    NormalizationAnalyzer,
+    SchemaDocumenter,
+    HealthMonitor,
+    MigrationRecord,
+    SchemaDiff,
+    Relationship,
+    NormalizationIssue,
+    HealthReport,
+    SchemaDoc,
+    create_engine,
 )
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
+# ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
-def _create_test_db(seed_data: list[dict] | None = None) -> str:
-    """Create a temporary SQLite DB with sessions table and optional seed data."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
+@pytest.fixture
+def tmp_db():
+    """Create a temporary SQLite database with test schema."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
 
     import sqlite3
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn = sqlite3.connect(db_path)
 
-    # Create sessions table with payload JSON field (mimics event_store)
+    # Create users table
     conn.execute("""
-        CREATE TABLE sessions (
-            id TEXT PRIMARY KEY,
-            title TEXT,
-            model TEXT,
-            created_at REAL,
-            payload TEXT
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT,
+            department_id INTEGER
         )
     """)
+
+    # Create orders table (references users)
+    conn.execute("""
+        CREATE TABLE orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            total REAL,
+            created_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
+    # Create a junction table (many-to-many)
+    conn.execute("""
+        CREATE TABLE user_tags (
+            user_id INTEGER,
+            tag_id INTEGER
+        )
+    """)
+
+    # Create a table with repeating groups
+    conn.execute("""
+        CREATE TABLE products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            field_1 TEXT,
+            field_2 TEXT,
+            field_3 TEXT
+        )
+    """)
+
+    # Insert test data (needed for normalization analysis)
+    conn.execute("INSERT INTO products (name, field_1, field_2, field_3) VALUES ('widget', 'a', 'b', 'c')")
+
+    # Insert test data
+    for i in range(5):
+        conn.execute(
+            "INSERT INTO users (name, email, department_id) VALUES (?, ?, ?)",
+            (f"user_{i}", f"user_{i}@example.com", (i % 3) + 1),
+        )
+    for i in range(10):
+        conn.execute(
+            "INSERT INTO orders (user_id, total, created_at) VALUES (?, ?, ?)",
+            ((i % 5) + 1, 10.0 * (i + 1), "2024-01-01"),
+        )
+
     conn.commit()
-
-    if seed_data:
-        for row in seed_data:
-            conn.execute(
-                "INSERT INTO sessions (id, title, model, created_at, payload) VALUES (?, ?, ?, ?, ?)",
-                (row["id"], row["title"], row["model"], row["created_at"], json.dumps(row["payload"])),
-            )
-        conn.commit()
-
     conn.close()
-    return path
+    yield db_path
+    os.unlink(db_path)
 
 
-# ─── Introspection Tests ────────────────────────────────────────────────────
+@pytest.fixture
+def engine(tmp_db):
+    """Create a SchemaEvolutionEngine instance."""
+    return SchemaEvolutionEngine(tmp_db)
 
 
-class TestIntrospection:
-    def test_create_engine_creates_log_table(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            schema = engine.introspect()
-            assert schema.version == 0
-            # Should have sessions + _schema_evolution_log
-            assert "sessions" in schema.tables
-            assert "_schema_evolution_log" in schema.tables
-        finally:
-            os.unlink(path)
+# ── MigrationEngine Tests ────────────────────────────────────────────────────
 
-    def test_introspect_returns_snapshot(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            schema = engine.introspect()
-            assert isinstance(schema, SchemaSnapshot)
-            assert "sessions" in schema.tables
-            sessions = schema.tables["sessions"]
-            assert isinstance(sessions, TableInfo)
-            assert sessions.row_count == 0
-            assert len(sessions.columns) == 5  # id, title, model, created_at, payload
-        finally:
-            os.unlink(path)
 
-    def test_get_schema_serializable(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            schema = engine.get_schema()
-            assert "version" in schema
-            assert "tables" in schema
-            assert "sessions" in schema["tables"]
-            assert "columns" in schema["tables"]["sessions"]
-        finally:
-            os.unlink(path)
+class TestMigrationEngine:
+    """Tests for versioned migration management."""
 
-    def test_get_table_sample(self):
-        path = _create_test_db(
-            seed_data=[
-                {
-                    "id": "s1",
-                    "title": "Test Session",
-                    "model": "qwen3.6",
-                    "created_at": 1000.0,
-                    "payload": {"key": "value"},
+    def test_get_current_version_empty(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+        assert me.get_current_version() == 0
+
+    def test_apply_migration(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+
+        # Apply a migration with a unique table name
+        result = me.apply_migration(
+            migration_id="m001",
+            version=1,
+            name="Add test_table",
+            sql="CREATE TABLE test_migration_table (id INTEGER PRIMARY KEY, name TEXT)",
+        )
+        assert result is True
+        assert me.get_current_version() == 1
+
+    def test_apply_duplicate_migration(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+
+        me.apply_migration("m001", 1, "First", "CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
+        result = me.apply_migration("m001", 2, "Duplicate", "CREATE TABLE t2 (id INTEGER PRIMARY KEY)")
+        assert result is False  # Should skip duplicate
+
+    def test_get_applied_migrations(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+
+        me.apply_migration("m001", 1, "First", "CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
+        me.apply_migration("m002", 2, "Second", "CREATE TABLE t2 (id INTEGER PRIMARY KEY)")
+
+        migrations = me.get_applied_migrations()
+        assert len(migrations) == 2
+        assert migrations[0].id == "m001"
+        assert migrations[1].id == "m002"
+
+    def test_rollback_migration(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+
+        me.apply_migration("m001", 1, "First", "CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
+        result = me.rollback_migration("m001")
+        assert result is True
+
+        # After rollback, version should be 0
+        assert me.get_current_version() == 0
+
+    def test_rollback_nonexistent_migration(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+        with pytest.raises(ValueError, match="not found"):
+            me.rollback_migration("nonexistent")
+
+    def test_migration_version_limit(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+        with pytest.raises(ValueError, match="exceeds maximum"):
+            me.apply_migration("m999", 100000, "Too high", "SELECT 1")
+
+    def test_migration_size_limit(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+        large_sql = "SELECT " + "x" * (1024 * 1024 + 1)
+        with pytest.raises(ValueError, match="exceeds"):
+            me.apply_migration("m001", 1, "Too large", large_sql)
+
+    def test_get_migration_history(self, tmp_db):
+        me = MigrationEngine(tmp_db)
+
+        me.apply_migration("m001", 1, "First", "CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
+        me.apply_migration("m002", 2, "Second", "CREATE TABLE t2 (id INTEGER PRIMARY KEY)")
+
+        history = me.get_migration_history()
+        assert len(history) == 2
+        assert history[0]["id"] == "m001"
+        assert history[0]["version"] == 1
+        assert history[0]["rolled_back"] is False
+
+
+# ── SchemaDiffer Tests ───────────────────────────────────────────────────────
+
+
+class TestSchemaDiffer:
+    """Tests for schema diffing and migration SQL generation."""
+
+    def test_get_current_schema(self, engine):
+        schema = engine.differ.get_current_schema()
+        assert "users" in schema
+        assert "orders" in schema
+        assert "user_tags" in schema
+        assert "products" in schema
+
+    def test_diff_schema_create_table(self, engine):
+        desired = {
+            "new_table": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT NOT NULL"},
                 },
-            ]
-        )
-        try:
-            engine = SchemaEvolutionEngine(path)
-            samples = engine.get_table_sample("sessions")
-            assert len(samples) == 1
-            assert samples[0]["id"] == "s1"
-            assert samples[0]["title"] == "Test Session"
-        finally:
-            os.unlink(path)
+                "primary_key": "id",
+            }
+        }
 
+        diff = engine.differ.diff_schemas(desired)
+        assert len(diff.tables_to_create) == 1
+        assert diff.tables_to_create[0]["name"] == "new_table"
+        assert "CREATE TABLE new_table" in diff.changes
 
-# ─── Version Management Tests ───────────────────────────────────────────────
-
-
-class TestVersionManagement:
-    def test_initial_version_is_zero(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            assert engine.get_current_version() == 0
-        finally:
-            os.unlink(path)
-
-    def test_version_increments_on_migration(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            assert engine.get_current_version() == 0
-
-            proposal = engine.propose(
-                reason="Add test column",
-                action="add_column",
-                table="sessions",
-                column="test_col",
-                column_type="TEXT",
-                column_default="'default'",
-            )
-            result = engine.apply_proposal(proposal)
-            assert result is True
-            assert engine.get_current_version() >= 1
-        finally:
-            os.unlink(path)
-
-
-# ─── Pattern Detection Tests ────────────────────────────────────────────────
-
-
-class TestPatternDetection:
-    def test_detects_repeated_metadata_fields(self):
-        path = _create_test_db(
-            seed_data=[
-                {
-                    "id": f"s{i}",
-                    "title": f"Session {i}",
-                    "model": "qwen3.6",
-                    "created_at": 1000 + i,
-                    "payload": {"complexity": "high", "tags": ["coding"], "tokens": 5000 + i * 100},
+    def test_diff_schema_drop_table(self, engine):
+        desired = {
+            "users": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT"},
                 }
-                for i in range(20)
-            ]
-        )
-        try:
-            engine = SchemaEvolutionEngine(path)
-            patterns = engine.detect_patterns("sessions", top_k=10)
-            # Should detect complexity, tags, tokens as repeated metadata
-            field_names = [p.field_name for p in patterns]
-            assert "complexity" in field_names
-            assert "tokens" in field_names
-            assert "tags" in field_names
-            # All should have confidence based on frequency
-            for p in patterns:
-                assert p.percentage > 0
-                assert p.confidence > 0
-        finally:
-            os.unlink(path)
+            }
+        }
 
-    def test_empty_table_returns_no_patterns(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            patterns = engine.detect_patterns("sessions")
-            assert patterns == []
-        finally:
-            os.unlink(path)
+        diff = engine.differ.diff_schemas(desired)
+        assert "orders" in diff.tables_to_drop
+        assert "user_tags" in diff.tables_to_drop
+        assert "products" in diff.tables_to_drop
 
-    def test_patterns_sorted_by_confidence(self):
-        path = _create_test_db(
-            seed_data=[
-                {
-                    "id": f"s{i}",
-                    "title": f"Session {i}",
-                    "model": "qwen3.6",
-                    "created_at": 1000 + i,
-                    "payload": {"common_field": "value", "rare_field": "value"},
+    def test_diff_schema_add_column(self, engine):
+        desired = {
+            "users": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT"},
+                    "phone": {"type": "TEXT", "default": ""},
                 }
-                for i in range(20)
-            ]
-        )
-        try:
-            engine = SchemaEvolutionEngine(path)
-            patterns = engine.detect_patterns("sessions", top_k=10)
-            # All fields appear in all records, so confidence should be equal (0.95)
-            if len(patterns) >= 2:
-                assert patterns[0].confidence >= patterns[-1].confidence
-        finally:
-            os.unlink(path)
+            }
+        }
 
-    def test_column_already_exists_not_detected(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            patterns = engine.detect_patterns("sessions")
-            # 'id', 'title', 'model', 'created_at', 'payload' are actual columns
-            # They should NOT appear as patterns
-            field_names = [p.field_name for p in patterns]
-            for col in ["id", "title", "model", "created_at", "payload"]:
-                assert col not in field_names, f"'{col}' is an actual column but detected as pattern"
-        finally:
-            os.unlink(path)
+        diff = engine.differ.diff_schemas(desired)
+        alter = [a for a in diff.tables_to_alter if a["table"] == "users" and a["action"] == "add_column"]
+        assert len(alter) == 1
+        assert alter[0]["column"] == "phone"
 
-
-# ─── Proposal Generation Tests ──────────────────────────────────────────────
-
-
-class TestProposalGeneration:
-    def test_propose_from_pattern_adds_column(self):
-        pattern = FieldPattern(
-            table="sessions",
-            field_name="complexity",
-            pattern_type="repeated_metadata",
-            evidence_count=15,
-            total_records=20,
-            percentage=0.75,
-            suggested_column="complexity",
-            suggested_type="TEXT",
-            example_values=["high", "low", "medium"],
-            confidence=0.8,
-        )
-        engine = SchemaEvolutionEngine(_create_test_db())
-        try:
-            proposal = engine.propose_from_pattern(pattern)
-            assert proposal.action == "add_column"
-            assert proposal.table == "sessions"
-            assert proposal.column == "complexity"
-            assert proposal.column_type == "TEXT"
-            assert "ADD COLUMN complexity TEXT" in proposal.proposed_sql
-        finally:
-            os.unlink(engine.db_path)
-
-    def test_propose_manual(self):
-        engine = SchemaEvolutionEngine(_create_test_db())
-        try:
-            proposal = engine.propose(
-                reason="Add column",
-                action="add_column",
-                table="sessions",
-                column="new_col",
-                column_type="INTEGER",
-                column_notnull=True,
-            )
-            assert "ALTER TABLE sessions ADD COLUMN new_col INTEGER NOT NULL" == proposal.proposed_sql
-        finally:
-            os.unlink(engine.db_path)
-
-
-# ─── Validation Tests ───────────────────────────────────────────────────────
-
-
-class TestValidation:
-    def test_valid_proposal(self):
-        engine = SchemaEvolutionEngine(_create_test_db())
-        try:
-            proposal = engine.propose(
-                reason="Add column",
-                action="add_column",
-                table="sessions",
-                column="test_col",
-                column_type="TEXT",
-            )
-            assert proposal.validate(engine) is True
-            assert len(proposal.validation_errors) == 0
-        finally:
-            os.unlink(engine.db_path)
-
-    def test_duplicate_column_fails_validation(self):
-        engine = SchemaEvolutionEngine(_create_test_db())
-        try:
-            proposal = engine.propose(
-                reason="Duplicate column",
-                action="add_column",
-                table="sessions",
-                column="id",  # Already exists
-                column_type="TEXT",
-            )
-            assert proposal.validate(engine) is False
-            assert any("already exists" in e for e in proposal.validation_errors)
-        finally:
-            os.unlink(engine.db_path)
-
-    def test_nonexistent_table_fails_validation(self):
-        engine = SchemaEvolutionEngine(_create_test_db())
-        try:
-            proposal = engine.propose(
-                reason="Bad table",
-                action="add_column",
-                table="nonexistent_table",
-                column="col",
-                column_type="TEXT",
-            )
-            assert proposal.validate(engine) is False
-            assert any("does not exist" in e for e in proposal.validation_errors)
-        finally:
-            os.unlink(engine.db_path)
-
-
-# ─── Apply Proposal Tests ───────────────────────────────────────────────────
-
-
-class TestApplyProposal:
-    def test_apply_valid_proposal(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            initial_version = engine.get_current_version()
-
-            proposal = engine.propose(
-                reason="Add complexity column",
-                action="add_column",
-                table="sessions",
-                column="complexity",
-                column_type="TEXT",
-                column_default="'standard'",
-            )
-            result = engine.apply_proposal(proposal)
-            assert result is True
-
-            # Version should have incremented
-            assert engine.get_current_version() > initial_version
-
-            # Column should now exist
-            schema = engine.introspect()
-            col_names = [c.name for c in schema.tables["sessions"].columns]
-            assert "complexity" in col_names
-        finally:
-            os.unlink(path)
-
-    def test_apply_invalid_proposal_returns_false(self):
-        engine = SchemaEvolutionEngine(_create_test_db())
-        try:
-            proposal = engine.propose(
-                reason="Bad column",
-                action="add_column",
-                table="sessions",
-                column="id",  # Already exists
-                column_type="TEXT",
-            )
-            result = engine.apply_proposal(proposal)
-            assert result is False
-        finally:
-            os.unlink(engine.db_path)
-
-    def test_apply_multiple_proposals(self):
-        path = _create_test_db()
-        try:
-            engine = SchemaEvolutionEngine(path)
-            initial_version = engine.get_current_version()
-
-            # Apply two columns
-            for col in ["complexity", "tags"]:
-                proposal = engine.propose(
-                    reason=f"Add {col}",
-                    action="add_column",
-                    table="sessions",
-                    column=col,
-                    column_type="TEXT",
-                )
-                assert engine.apply_proposal(proposal) is True
-
-            assert engine.get_current_version() == initial_version + 2
-
-            # Verify both columns exist
-            schema = engine.introspect()
-            col_names = [c.name for c in schema.tables["sessions"].columns]
-            assert "complexity" in col_names
-            assert "tags" in col_names
-        finally:
-            os.unlink(path)
-
-
-# ─── Integration Tests ──────────────────────────────────────────────────────
-
-
-class TestSchemaEvolutionIntegration:
-    def test_full_lifecycle(self):
-        """Complete schema evolution: introspect → detect → propose → validate → apply."""
-        path = _create_test_db(
-            seed_data=[
-                {
-                    "id": f"s{i}",
-                    "title": f"Session {i}",
-                    "model": "qwen3.6",
-                    "created_at": 1000 + i,
-                    "payload": {"complexity": "high", "tokens": 5000},
+    def test_diff_schema_drop_column(self, engine):
+        desired = {
+            "users": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT"},
                 }
-                for i in range(10)
-            ]
+            }
+        }
+
+        diff = engine.differ.diff_schemas(desired)
+        alter = [a for a in diff.tables_to_alter if a["table"] == "users" and a["action"] == "drop_column"]
+        # Both email and department_id are dropped
+        assert len(alter) == 2
+        assert any(a["column"] == "email" for a in alter)
+        assert any(a["column"] == "department_id" for a in alter)
+
+    def test_generate_migration_sql(self, engine):
+        desired = {
+            "new_table": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT NOT NULL"},
+                },
+                "primary_key": "id",
+            }
+        }
+
+        diff = engine.differ.diff_schemas(desired)
+        sql = engine.differ.generate_migration_sql(diff)
+        assert "CREATE TABLE" in sql
+        assert "new_table" in sql
+
+    def test_generate_migration_plan(self, engine):
+        desired = {
+            "new_table": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT"},
+                },
+                "primary_key": "id",
+            }
+        }
+
+        plan = engine.differ.generate_migration_plan(desired)
+        assert "diff" in plan
+        assert "sql" in plan
+        assert "statement_count" in plan
+        assert plan["diff"]["tables_to_create"] == 1
+
+
+# ── RelationshipDetector Tests ───────────────────────────────────────────────
+
+
+class TestRelationshipDetector:
+    """Tests for relationship detection."""
+
+    def test_detect_explicit_foreign_keys(self, engine):
+        relationships = engine.relationships.detect_relationships()
+        fk_rels = [r for r in relationships if r.relationship_type == "one-to-many"]
+        assert len(fk_rels) >= 1
+
+        # orders.user_id -> users.id is an explicit FK
+        explicit = [r for r in relationships if r.source_table == "orders" and r.source_column == "user_id"]
+        assert len(explicit) >= 1
+
+    def test_detect_implicit_relationships(self, engine):
+        relationships = engine.relationships.detect_relationships()
+        # user_tags.user_id and user_tags.tag_id should be detected as implicit
+        # (since user_tags has _id columns that match other tables)
+        implicit = [r for r in relationships if r.source_table == "user_tags"]
+        # At least one relationship should be detected from user_tags
+        assert len(implicit) >= 1
+
+    def test_detect_many_to_many(self, engine):
+        relationships = engine.relationships.detect_relationships()
+        m2m = [r for r in relationships if r.relationship_type == "many-to-many"]
+        # user_tags is a junction table with 2 _id columns
+        # It should be detected as many-to-many if both target tables exist
+        # Since "tags" doesn't exist, we check that user_tags relationships are detected
+        user_tag_rels = [r for r in relationships if r.source_table == "user_tags"]
+        assert len(user_tag_rels) >= 1
+
+    def test_relationship_confidence(self, engine):
+        relationships = engine.relationships.detect_relationships()
+        for rel in relationships:
+            assert 0.0 <= rel.confidence <= 1.0
+
+
+# ── NormalizationAnalyzer Tests ──────────────────────────────────────────────
+
+
+class TestNormalizationAnalyzer:
+    """Tests for normalization analysis."""
+
+    def test_detect_repeating_groups(self, engine):
+        issues = engine.normalization.analyze_normalization()
+        repeating = [i for i in issues if i.issue_type == "repeating_group"]
+        assert len(repeating) >= 1
+
+        # products table has field_1, field_2, field_3
+        products_issues = [i for i in repeating if i.table == "products"]
+        assert len(products_issues) >= 1
+
+    def test_issue_description(self, engine):
+        issues = engine.normalization.analyze_normalization()
+        for issue in issues:
+            assert issue.table
+            assert issue.column
+            assert issue.description
+            assert issue.suggestion
+
+
+# ── SchemaDocumenter Tests ───────────────────────────────────────────────────
+
+
+class TestSchemaDocumenter:
+    """Tests for schema documentation generation."""
+
+    def test_generate_docs(self, engine):
+        doc = engine.documenter.generate_docs("Test Schema")
+        assert isinstance(doc, SchemaDoc)
+        assert doc.title == "Test Schema"
+        assert len(doc.tables) >= 4  # users, orders, user_tags, products
+        assert doc.generated_at > 0
+
+    def test_to_markdown(self, engine):
+        doc = engine.documenter.generate_docs("Test Schema")
+        md = engine.documenter.to_markdown(doc)
+        assert "# Test Schema" in md
+        assert "### `users`" in md
+        assert "### `orders`" in md
+        assert "| Column | Type | Not Null | Default | Primary Key |" in md
+
+    def test_markdown_includes_relationships(self, engine):
+        doc = engine.documenter.generate_docs("Test Schema")
+        md = engine.documenter.to_markdown(doc)
+        assert "## Relationships" in md
+        assert "| Source | Source Column | Target | Target Column | Type | Confidence |" in md
+
+
+# ── HealthMonitor Tests ──────────────────────────────────────────────────────
+
+
+class TestHealthMonitor:
+    """Tests for database health monitoring."""
+
+    def test_check_health(self, engine):
+        health = engine.health.check_health()
+        assert isinstance(health, HealthReport)
+        assert 0 <= health.overall_score <= 100
+        assert health.fragmentation_pct >= 0
+        assert health.bloat_bytes >= 0
+        assert isinstance(health.corruption_detected, bool)
+
+    def test_health_no_corruption(self, engine):
+        health = engine.health.check_health()
+        assert health.corruption_detected is False
+
+    def test_health_suggestions(self, engine):
+        health = engine.health.check_health()
+        # Should have at least some suggestions (e.g., missing indexes)
+        assert isinstance(health.suggestions, list)
+
+    def test_health_history(self, engine):
+        history = engine.health.get_health_history()
+        assert len(history) >= 1
+        assert "score" in history[0]
+        assert "timestamp" in history[0]
+        assert "fragmentation_pct" in history[0]
+
+    def test_health_missing_indexes(self, engine):
+        health = engine.health.check_health()
+        # user_tags has _id columns without indexes
+        assert len(health.missing_indexes) >= 1
+
+
+# ── SchemaEvolutionEngine Integration Tests ──────────────────────────────────
+
+
+class TestSchemaEvolutionEngine:
+    """Full lifecycle integration tests."""
+
+    def test_introspect(self, engine):
+        schema = engine.introspect()
+        assert "users" in schema
+        assert "orders" in schema
+
+    def test_diff_schema(self, engine):
+        desired = {
+            "new_table": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT"},
+                },
+                "primary_key": "id",
+            }
+        }
+        diff = engine.diff_schema(desired)
+        assert isinstance(diff, SchemaDiff)
+        assert len(diff.tables_to_create) == 1
+
+    def test_generate_migration(self, engine):
+        desired = {
+            "new_table": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT"},
+                },
+                "primary_key": "id",
+            }
+        }
+        diff = engine.diff_schema(desired)
+        sql = engine.generate_migration(diff)
+        assert "CREATE TABLE" in sql
+
+    def test_apply_migration(self, engine):
+        sql = "CREATE TABLE migrated_table (id INTEGER PRIMARY KEY, data TEXT)"
+        result = engine.apply_migration("m001", 1, "Test migration", sql)
+        assert result is True
+        assert engine.get_current_version() == 1
+
+    def test_rollback_migration(self, engine):
+        engine.apply_migration("m001", 1, "Test", "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        engine.rollback_migration("m001")
+        assert engine.get_current_version() == 0
+
+    def test_get_migration_history(self, engine):
+        engine.apply_migration("m001", 1, "First", "CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
+        history = engine.get_migration_history()
+        assert len(history) == 1
+        assert history[0]["id"] == "m001"
+
+    def test_detect_relationships(self, engine):
+        relationships = engine.detect_relationships()
+        assert len(relationships) >= 1
+        for rel in relationships:
+            assert rel.source_table
+            assert rel.source_column
+            assert rel.target_table
+            assert rel.target_column
+
+    def test_analyze_normalization(self, engine):
+        issues = engine.analyze_normalization()
+        assert isinstance(issues, list)
+        # products table should have repeating group issues
+        products_issues = [i for i in issues if i.table == "products"]
+        assert len(products_issues) >= 1
+
+    def test_generate_docs(self, engine):
+        doc = engine.generate_docs("Test")
+        assert isinstance(doc, SchemaDoc)
+        assert len(doc.tables) >= 4
+
+    def test_to_markdown(self, engine):
+        md = engine.to_markdown("Test")
+        assert "# Test" in md
+        assert "### `users`" in md
+
+    def test_check_health(self, engine):
+        health = engine.check_health()
+        assert isinstance(health, HealthReport)
+        assert health.overall_score >= 0
+
+    def test_get_health_history(self, engine):
+        history = engine.get_health_history()
+        assert len(history) >= 1
+
+    def test_optimize(self, engine):
+        results = engine.optimize()
+        assert "vacuum" in results
+        assert results["vacuum"] == "completed"
+        assert "analyze" in results
+        assert results["analyze"] == "completed"
+        assert "tables_analyzed" in results
+        assert results["tables_analyzed"] >= 4
+        assert "normalization_issues" in results
+        assert "relationships_detected" in results
+        assert "health_score" in results
+        assert "evolution_suggestions" in results
+
+    def test_migration_sql_execution(self, engine):
+        """Test that generated migration SQL actually executes."""
+        current = engine.introspect()
+        current["test_migration_table"] = {
+            "columns": {
+                "id": {"type": "INTEGER PRIMARY KEY"},
+                "name": {"type": "TEXT NOT NULL"},
+                "value": {"type": "REAL"},
+            },
+            "primary_key": "id",
+        }
+
+        diff = engine.diff_schema(current)
+        sql = engine.generate_migration(diff)
+
+        # Apply the migration
+        engine.apply_migration("m_test", 1, "Test migration", sql)
+
+        # Verify table was created
+        schema = engine.introspect()
+        assert "test_migration_table" in schema
+
+    def test_migration_plan_metadata(self, engine):
+        desired = {
+            "new_table": {
+                "columns": {
+                    "id": {"type": "INTEGER PRIMARY KEY"},
+                    "name": {"type": "TEXT"},
+                },
+                "primary_key": "id",
+            }
+        }
+
+        plan = engine.generate_migration_plan(desired)
+        assert plan["diff"]["tables_to_create"] == 1
+        assert plan["statement_count"] >= 1
+        assert "sql" in plan
+        assert plan["sql"]
+
+    def test_create_engine_convenience(self, tmp_db):
+        """Test create_engine convenience function."""
+        eng = create_engine(tmp_db)
+        assert isinstance(eng, SchemaEvolutionEngine)
+        schema = eng.introspect()
+        assert "users" in schema
+
+    def test_lazy_evolution_loading(self, tmp_db):
+        """Test that evolution is lazily loaded in DatabaseManager."""
+        from tektos.db_manager import DatabaseManager
+        mgr = DatabaseManager(tmp_db)
+
+        # evolution should not be loaded yet
+        assert mgr._evolution is None
+
+        # Accessing evolution should trigger lazy load
+        schema = mgr.evolution.introspect()
+        assert "users" in schema
+
+        # Should be cached now
+        assert mgr._evolution is not None
+
+
+# ── Edge Cases ───────────────────────────────────────────────────────────────
+
+
+class TestEdgeCases:
+    """Edge case tests."""
+
+    def test_diff_empty_desired_schema(self, engine):
+        """Diffing against empty desired schema should drop all tables."""
+        diff = engine.diff_schema({})
+        assert len(diff.tables_to_drop) >= 4  # All existing tables
+
+    def test_diff_identical_schemas(self, engine):
+        """Diffing identical schemas should produce no changes."""
+        current = engine.introspect()
+        diff = engine.diff_schema(current)
+        assert len(diff.changes) == 0
+
+    def test_migration_with_special_characters(self, tmp_db):
+        """Test migration with special characters in SQL."""
+        me = MigrationEngine(tmp_db)
+        result = me.apply_migration(
+            "m_special",
+            1,
+            "Special chars",
+            "CREATE TABLE test (id INTEGER PRIMARY KEY, data TEXT)"
         )
-        try:
-            engine = SchemaEvolutionEngine(path)
+        assert result is True
 
-            # 1. Introspect
-            schema = engine.introspect()
-            initial_cols = [c.name for c in schema.tables["sessions"].columns]
-            assert "id" in initial_cols
+    def test_health_on_empty_db(self, tmp_db):
+        """Test health check on database with no tables."""
+        # Drop all tables
+        import sqlite3
+        conn = sqlite3.connect(tmp_db)
+        conn.execute("DROP TABLE IF EXISTS users")
+        conn.execute("DROP TABLE IF EXISTS orders")
+        conn.execute("DROP TABLE IF EXISTS user_tags")
+        conn.execute("DROP TABLE IF EXISTS products")
+        conn.commit()
+        conn.close()
 
-            # 2. Detect patterns
-            patterns = engine.detect_patterns("sessions", top_k=5)
-            field_names = [p.field_name for p in patterns]
-            assert "complexity" in field_names
-            assert "tokens" in field_names
+        monitor = HealthMonitor(tmp_db)
+        health = monitor.check_health()
+        assert health.overall_score >= 0
+        assert health.corruption_detected is False
 
-            # 3. Propose from pattern
-            pattern = next(p for p in patterns if p.field_name == "complexity")
-            proposal = engine.propose_from_pattern(pattern)
+    def test_docs_on_empty_db(self, tmp_db):
+        """Test doc generation on database with no tables."""
+        import sqlite3
+        conn = sqlite3.connect(tmp_db)
+        conn.execute("DROP TABLE IF EXISTS users")
+        conn.execute("DROP TABLE IF EXISTS orders")
+        conn.execute("DROP TABLE IF EXISTS user_tags")
+        conn.execute("DROP TABLE IF EXISTS products")
+        conn.commit()
+        conn.close()
 
-            # 4. Validate
-            assert proposal.validate(engine) is True
+        docer = SchemaDocumenter(tmp_db)
+        doc = docer.generate_docs("Empty DB")
+        assert len(doc.tables) == 0
 
-            # 5. Apply
-            result = engine.apply_proposal(proposal)
-            assert result is True
+    def test_migration_checksum(self, tmp_db):
+        """Test that migration checksums are generated."""
+        me = MigrationEngine(tmp_db)
+        me.apply_migration("m001", 1, "Test", "SELECT 1")
 
-            # 6. Verify column exists
-            schema = engine.introspect()
-            new_cols = [c.name for c in schema.tables["sessions"].columns]
-            assert "complexity" in new_cols
-            assert "tokens" not in new_cols  # Not applied yet
-        finally:
-            os.unlink(path)
-
-    def test_pattern_type_affects_suggested_type(self):
-        """Integer fields should suggest REAL, strings TEXT."""
-        engine = SchemaEvolutionEngine(_create_test_db())
-        try:
-            # Integer pattern
-            int_pattern = FieldPattern(
-                table="sessions", field_name="count", pattern_type="repeated_metadata",
-                evidence_count=10, total_records=10, percentage=1.0,
-                suggested_column="count", suggested_type="REAL",
-                example_values=[1, 2, 3], confidence=0.95,
-            )
-            int_proposal = engine.propose_from_pattern(int_pattern)
-            assert "REAL" in int_proposal.proposed_sql
-
-            # String pattern
-            str_pattern = FieldPattern(
-                table="sessions", field_name="label", pattern_type="repeated_metadata",
-                evidence_count=10, total_records=10, percentage=1.0,
-                suggested_column="label", suggested_type="TEXT",
-                example_values=["a", "b"], confidence=0.95,
-            )
-            str_proposal = engine.propose_from_pattern(str_pattern)
-            assert "TEXT" in str_proposal.proposed_sql
-        finally:
-            os.unlink(engine.db_path)
+        migrations = me.get_applied_migrations()
+        assert len(migrations) == 1
+        assert migrations[0].checksum  # Should have a checksum

@@ -77,6 +77,7 @@ class SelfImprovementAdapter:
         benchmark_dir: str | None = None,
         skill_dir: str | None = None,
         ws_event_emitter=None,  # Callable to emit events to WebSocket clients
+        skill_manager=None,  # SkillManager instance for skill creation
     ) -> None:
         self.experience_db = Path(experience_db or str(Path.home() / ".tektos/experience.jsonl"))
         self.meta_learning_db = Path(meta_learning_db or str(Path.home() / ".tektos/meta_learning.json"))
@@ -84,6 +85,7 @@ class SelfImprovementAdapter:
         self.skill_dir = Path(skill_dir or str(Path.home() / ".hermes/skills/"))
 
         self._ws_event_emitter = ws_event_emitter
+        self._skill_manager = skill_manager
 
         # Ensure directories exist
         for p in [self.experience_db, self.meta_learning_db, self.benchmark_dir]:
@@ -168,6 +170,25 @@ class SelfImprovementAdapter:
             except Exception:
                 logger.exception("[SELF-IMPROVEMENT] Reflection failed")
 
+        # Create skills from reflection output
+        created_skill_names: list[str] = []
+        if self._skill_manager:
+            try:
+                new_skills = self._skill_manager.create_skill_from_reflection(
+                    lessons=reflection.get("generalizable_lessons", []),
+                    what_worked=reflection.get("what_worked", []),
+                    what_failed=reflection.get("what_failed", []),
+                    what_to_avoid=reflection.get("what_to_avoid", []),
+                    recommendations=evaluation.get("recommendations", []),
+                )
+                created_skill_names = [s.name for s in new_skills]
+                logger.info(
+                    "[SELF-IMPROVEMENT] Created %d skills from session %s",
+                    len(created_skill_names), session_id,
+                )
+            except Exception:
+                logger.exception("[SELF-IMPROVEMENT] Skill creation failed")
+
         # Record meta-learning
         await self._record_meta_learning(
             model_used, task, success, evaluation["overall_score"],
@@ -196,7 +217,7 @@ class SelfImprovementAdapter:
             what_failed=reflection.get("what_failed", []),
             what_to_avoid=reflection.get("what_to_avoid", []),
             recommendations=evaluation.get("recommendations", []),
-            created_skills=reflection.get("created_skills", []),
+            created_skills=created_skill_names,
             meta_data=evaluation,
         )
 

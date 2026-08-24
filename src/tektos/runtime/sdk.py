@@ -44,6 +44,14 @@ from tektos.runtime.loop_safety import (
 )
 from tektos.runtime.session import LiveSession
 from tektos.store.event_store import append_event
+from tektos.metabolism import MetabolismEngine
+from tektos.runtime.immune_system import (
+    ImmuneContext,
+    ImmuneSystem,
+    ThreatSeverity,
+    get_immune_system,
+    reset_immune_system,
+)
 
 log = _log.getLogger("tektos.runtime")
 
@@ -238,9 +246,13 @@ class RuntimeSDK:
         self._lock = _asyncio.Lock()
         self._sandbox = SandboxProvider()
         self._loop_monitor = LoopSafetyMonitor(loop_safety_config or LoopSafetyConfig())
+        # Metabolism engine for resource monitoring
+        self._metabolism_engine = MetabolismEngine()
+        # Immune system — self-defending architecture
+        self._immune_system: ImmuneSystem | None = None
 
     async def start(self) -> None:
-        """Create the httpx client."""
+        """Create the httpx client and start the immune system."""
         self._client = httpx.AsyncClient(
             base_url=self._llm_base_url,
             timeout=httpx.Timeout(30.0, read=300.0),
@@ -254,6 +266,11 @@ class RuntimeSDK:
         except Exception as exc:
             log.warning(f"LLM endpoint not available at {self._llm_base_url}: {exc}")
             raise
+
+        # Start the immune system
+        self._immune_system = get_immune_system()
+        await self._immune_system.start()
+        log.info("[RuntimeSDK] Immune system started")
 
     async def stop(self) -> None:
         if self._client:
@@ -326,10 +343,35 @@ class RuntimeSDK:
         - tool.completed emitted exactly once per tool_id
         - seq assigned by event store, not passed through
         - Full agent loop: LLM → tools → LLM → ... until no tool_calls
+        - Immune system checks before each tool execution
         """
         _completed_tools: set[str] = set()  # guard against double-emit (bug #3)
         self._loop_monitor.reset()  # Reset timer for each new prompt
         log.info(f"[SDK] Starting _stream_llm for session {session.id[:8]}")
+
+        # Immune system context for this session
+        immune_ctx = ImmuneContext(
+            session_id=session.id,
+            task_description=prompt[:500],
+            context_max_tokens=128000,
+        )
+
+        # Check for prompt injection before first LLM call
+        if self._immune_system:
+            injection_threats = await self._immune_system._detectors["prompt_injection"].detect(immune_ctx)
+            if injection_threats:
+                log.warning(f"[SDK] Prompt injection detected in session {session.id[:8]}")
+                for t in injection_threats:
+                    await self._immune_system.responses.respond(t)
+                    immune_ctx.metadata["_injection_detected"] = True
+                # If injection detected, emit warning and break
+                if on_event:
+                    await on_event(session_failed(
+                        session.id,
+                        f"Prompt injection detected: {injection_threats[0].description}",
+                    ))
+                session.status = "failed"
+                return
 
         # Build conversation history
         messages = []
@@ -374,6 +416,27 @@ class RuntimeSDK:
                 break
 
             turn += 1
+
+            # Update immune context with current message count (proxy for token usage)
+            total_chars = sum(len(m.get("content", "") or "") + len(m.get("tool_calls", [])) * 100 for m in messages)
+            immune_ctx.context_tokens = total_chars
+            immune_ctx.model = self._llm_model
+
+            # Check for context overflow
+            if self._immune_system:
+                ctx_threats = await self._immune_system._detectors["context_collapse"].detect(immune_ctx)
+                if ctx_threats:
+                    log.warning(f"[SDK] Context threat in session {session.id[:8]}")
+                    for t in ctx_threats:
+                        await self._immune_system.responses.respond(t)
+                    if ctx_threats[0].severity >= ThreatSeverity.HIGH:
+                        if on_event:
+                            await on_event(session_failed(
+                                session.id,
+                                f"Context overflow: {ctx_threats[0].description}",
+                            ))
+                        session.status = "failed"
+                        return
 
             try:
                 # Build payload
@@ -551,7 +614,10 @@ class RuntimeSDK:
     ) -> str:
         """Handle tool completion. Emits tool.completed exactly once per tool_id.
 
-        Returns the tool output string to inject into the conversation.
+        Immune system checks run before execution:
+        - Dangerous command detection (bash)
+        - Secret exposure detection (all tools)
+        - Self-modification detection (file_write, bash)
         """
         # Guard against double-emit (PlexClaw bug #3 fix)
         if tool_id in completed_tools:
@@ -562,6 +628,57 @@ class RuntimeSDK:
             tool_input = _json.loads(tool_input_str) if tool_input_str else {}
         except _json.JSONDecodeError:
             tool_input = {}
+
+        # Run immune system checks before execution
+        if self._immune_system:
+            immune_ctx = ImmuneContext(
+                session_id=session.id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                task_description=session.title[:500] if session.title else "",
+            )
+
+            # Check dangerous commands
+            danger_threats = await self._immune_system._detectors["dangerous_command"].detect(immune_ctx)
+            if danger_threats:
+                log.warning(f"[SDK] Dangerous command detected in {session.id[:8]}: {danger_threats[0].description}")
+                for t in danger_threats:
+                    response = await self._immune_system.responses.respond(t)
+                    if t.metadata.get("_emergency") or t.metadata.get("_halted"):
+                        completed_tools.add(tool_id)
+                        await on_event(tool_completed(session.id, tool_id, "blocked", f"Blocked by immune system: {t.description}"))
+                        return f"BLOCKED: {t.description}"
+                # For HIGH severity, require approval
+                if danger_threats[0].severity >= ThreatSeverity.HIGH:
+                    if on_tool_approval:
+                        approved = await on_tool_approval(tool_id, f"immune_check:{danger_threats[0].category.value}")
+                        if not approved:
+                            completed_tools.add(tool_id)
+                            await on_event(tool_completed(session.id, tool_id, "rejected", "Tool blocked by immune system"))
+                            return "Tool blocked by immune system"
+
+            # Check secret exposure
+            secret_threats = await self._immune_system._detectors["secret_exposure"].detect(immune_ctx)
+            if secret_threats:
+                log.warning(f"[SDK] Secret exposure detected in {session.id[:8]}: {secret_threats[0].description}")
+                for t in secret_threats:
+                    response = await self._immune_system.responses.respond(t)
+                    completed_tools.add(tool_id)
+                    await on_event(tool_completed(session.id, tool_id, "blocked", f"Blocked by immune system: {t.description}"))
+                    return f"BLOCKED: {t.description}"
+
+            # Check self-modification
+            self_mod_threats = await self._immune_system._detectors["self_modification"].detect(immune_ctx)
+            if self_mod_threats:
+                log.warning(f"[SDK] Self-modification attempt in {session.id[:8]}: {self_mod_threats[0].description}")
+                for t in self_mod_threats:
+                    response = await self._immune_system.responses.respond(t)
+                    if on_tool_approval:
+                        approved = await on_tool_approval(tool_id, f"immune_check:self_modification")
+                        if not approved:
+                            completed_tools.add(tool_id)
+                            await on_event(tool_completed(session.id, tool_id, "rejected", "Self-modification blocked by immune system"))
+                            return "Self-modification blocked by immune system"
 
         # Check permission mode
         if session.permission_mode == "manual":
@@ -575,8 +692,13 @@ class RuntimeSDK:
                     completed_tools.add(tool_id)
                     await on_event(tool_completed(session.id, tool_id, "rejected", "Tool rejected by user"))
                     return "Tool rejected by user"
+            else:
+                # No approval callback provided — reject to prevent unauthorized execution
+                completed_tools.add(tool_id)
+                await on_event(tool_completed(session.id, tool_id, "rejected", "Tool approval callback not provided in manual mode"))
+                return "Tool rejected: no approval callback"
 
-        # Execute tool (actual execution via SandboxProvider)
+        # Execute tool (actual execution via SandboxProvider or MCP registry)
         try:
             result = await self._execute_tool(tool_name, tool_input)
             completed_tools.add(tool_id)  # Mark as completed BEFORE returning
@@ -589,7 +711,24 @@ class RuntimeSDK:
             return f"Error: {error_msg}"
 
     async def _execute_tool(self, tool_name: str, tool_input: dict[str, Any]) -> str:
-        """Execute a tool via the SandboxProvider."""
+        """Execute a tool via the SandboxProvider or MCP registry.
+
+        MCP tools take priority — if a tool is registered in the MCP registry,
+        invoke it there. Otherwise fall back to sandbox execution.
+        """
+        # Check MCP registry first
+        from tektos.runtime.mcp_integration import get_mcp_registry
+        registry = get_mcp_registry()
+        if tool_name in registry._tools:
+            result = await registry.invoke_tool(tool_name, tool_input)
+            if result.success:
+                log.info(f"[MCP] {tool_name} → {len(result.content)} chars")
+                return result.content
+            else:
+                log.error(f"[MCP] {tool_name} failed: {result.error}")
+                raise RuntimeError(f"MCP tool execution failed: {result.error}")
+
+        # Fall back to sandbox execution
         try:
             result = self._sandbox.execute(tool_name, tool_input)
             log.info(f"[TOOK] {tool_name} → {len(str(result))} chars")
@@ -599,28 +738,36 @@ class RuntimeSDK:
             raise RuntimeError(f"Tool execution failed: {exc}")
 
     async def _check_resources(self, session: LiveSession) -> None:
-        """Check GPU temp, disk, VRAM and emit warnings if needed."""
-        # GPU temperature check
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5,
-            )
-            gpu_temp = float(result.stdout.strip().split("\n")[0])
-        except Exception:
-            gpu_temp = 0
+        """Check GPU temp, disk, VRAM and emit warnings if needed.
 
-        if gpu_temp > 80:  # Operational ceiling
+        Delegates to MetabolismEngine for comprehensive resource monitoring.
+        """
+        # Delegate to MetabolismEngine for full resource assessment
+        health = self._metabolism_engine.assess_health()
+        state_dict = health.to_dict()
+
+        # Emit resource warnings based on MetabolismEngine assessment
+        if health.overall_health.value != "normal":
             await append_event(session.id, "resource.warning", {
-                "resource": "gpu_temp",
-                "current": gpu_temp,
-                "threshold": 80,
-                "message": f"GPU temperature {gpu_temp}°C exceeds operational ceiling (80°C)",
+                "resource": "overall",
+                "level": health.overall_health.value,
+                "details": state_dict,
             })
-            log.warning(f"GPU temp {gpu_temp}°C — above operational ceiling")
-        elif gpu_temp > 51:  # Yellow zone
-            log.info(f"GPU temp {gpu_temp}°C — in yellow zone (monitoring)")
+            log.warning(f"Resource alert: {health.overall_health.value}")
+
+        # Also check GPU temp specifically for backward compatibility
+        if health.gpu:
+            gpu_temp = health.gpu.temperature
+            if gpu_temp > 80:  # Operational ceiling
+                await append_event(session.id, "resource.warning", {
+                    "resource": "gpu_temp",
+                    "current": gpu_temp,
+                    "threshold": 80,
+                    "message": f"GPU temperature {gpu_temp}°C exceeds operational ceiling (80°C)",
+                })
+                log.warning(f"GPU temp {gpu_temp}°C — above operational ceiling")
+            elif gpu_temp > 51:  # Yellow zone
+                log.info(f"GPU temp {gpu_temp}°C — in yellow zone (monitoring)")
 
     async def interrupt(self, session: LiveSession) -> None:
         """Interrupt a running session."""

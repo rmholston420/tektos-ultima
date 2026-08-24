@@ -494,6 +494,7 @@ export default function App() {
                     onSendMessage={handleSendMessage}
                     onInterrupt={handleInterrupt}
                     onAttachFiles={handleAttachFiles}
+                    onVoiceTranscript={handleSendMessage}
                     visionAvailable={visionAvailable}
                     visionModel={visionModel}
                     onVisionAnalyze={handleVisionAnalyze}
