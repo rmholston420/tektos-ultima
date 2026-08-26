@@ -1,8 +1,13 @@
 /**
- * Tests for the TektosExternalStoreAdapter — bridges WebSocket to @assistant-ui/react.
+ * Tests for TektosExternalStoreAdapter — message management, streaming, versioning.
  */
 
 import { TektosExternalStoreAdapter, TektosExternalStoreAdapterWrapper } from "@/lib/tektos-store-adapter";
+
+// Mock @assistant-ui/react
+jest.mock("@assistant-ui/react", () => ({
+  fromThreadMessageLike: jest.fn((msg: any, id: string, status: any) => ({ ...msg, id, status })),
+}));
 
 describe("TektosExternalStoreAdapter", () => {
   let adapter: TektosExternalStoreAdapter;
@@ -12,46 +17,62 @@ describe("TektosExternalStoreAdapter", () => {
   });
 
   describe("initial state", () => {
-    it("starts with no messages", () => {
+    it("starts with empty messages", () => {
       expect(adapter.messages).toEqual([]);
-    });
-
-    it("starts not running", () => {
-      expect(adapter.isRunning).toBe(false);
     });
 
     it("starts with version 0", () => {
       expect(adapter.version).toBe(0);
     });
 
-    it("has onNew handler", () => {
-      expect(adapter.onNew).toBeDefined();
-      expect(typeof adapter.onNew).toBe("function");
+    it("starts with isRunning false", () => {
+      expect(adapter.isRunning).toBe(false);
     });
 
-    it("has onCancel handler", () => {
-      expect(adapter.onCancel).toBeDefined();
+    it("returns undefined for optional getters", () => {
+      expect(adapter.isLoading).toBeUndefined();
+      expect(adapter.isDisabled).toBeUndefined();
+      expect(adapter.isSendDisabled).toBeUndefined();
+      expect(adapter.suggestions).toEqual([]);
+      expect(adapter.state).toBeUndefined();
+      expect(adapter.extras).toBeUndefined();
+      expect(adapter.queue).toBeUndefined();
+      expect(adapter.onEdit).toBeUndefined();
+      expect(adapter.onDelete).toBeUndefined();
+      expect(adapter.onReload).toBeUndefined();
+      expect(adapter.onResume).toBeUndefined();
+      expect(adapter.onAddToolResult).toBeUndefined();
+      expect(adapter.onImport).toBeUndefined();
+      expect(adapter.onExportExternalState).toBeUndefined();
+      expect(adapter.onLoadExternalState).toBeUndefined();
+      expect(adapter.adapters).toBeUndefined();
+      expect(adapter.convertMessage).toBeUndefined();
+      expect(adapter.unstable_onBranchChange).toBeUndefined();
+      expect(adapter.unstable_capabilities).toBeUndefined();
+      expect(adapter.messageRepository).toBeUndefined();
+    });
+
+    it("returns no-op functions for onNew and onCancel", () => {
+      expect(typeof adapter.onNew).toBe("function");
       expect(typeof adapter.onCancel).toBe("function");
     });
   });
 
   describe("sendMessage", () => {
-    it("adds user and assistant messages", async () => {
-      const assistantId = await adapter.sendMessage("hello world");
-
-      expect(adapter.messages.length).toBe(2);
+    it("creates user and assistant messages", async () => {
+      const assistantId = await adapter.sendMessage("hello");
+      expect(adapter.messages).toHaveLength(2);
       expect(adapter.messages[0].role).toBe("user");
       expect(adapter.messages[1].role).toBe("assistant");
-      expect(assistantId).toMatch(/^assistant-/);
+      expect(assistantId).toBe(adapter.messages[1].id);
     });
 
-    it("sets isRunning to true", async () => {
+    it("sets isRunning to true after sendMessage", async () => {
       await adapter.sendMessage("hello");
       expect(adapter.isRunning).toBe(true);
     });
 
-    it("increments version", async () => {
-      expect(adapter.version).toBe(0);
+    it("increments version after sendMessage", async () => {
       await adapter.sendMessage("hello");
       expect(adapter.version).toBeGreaterThan(0);
     });
@@ -60,67 +81,48 @@ describe("TektosExternalStoreAdapter", () => {
       const id = await adapter.sendMessage("hello");
       expect(id).toMatch(/^assistant-/);
     });
-
-    it("user message has correct role and content", async () => {
-      await adapter.sendMessage("test content");
-      const userMsg = adapter.messages[0];
-      expect(userMsg.role).toBe("user");
-      expect(userMsg.content.length).toBeGreaterThan(0);
-    });
   });
 
   describe("addDelta", () => {
     it("appends text to last assistant message", async () => {
       await adapter.sendMessage("hello");
       adapter.addDelta(" world");
-
-      const assistantMsg = adapter.messages[1];
-      expect(assistantMsg.role).toBe("assistant");
-      expect(assistantMsg.content.length).toBeGreaterThan(0);
+      const content = adapter.messages[1].content[0] as { type: "text"; text: string };
+      expect(content.type).toBe("text");
+      expect(content.text).toBe(" world");
     });
 
-    it("increments version", () => {
+    it("does nothing when no assistant message", () => {
+      adapter.addDelta("orphan delta");
+      expect(adapter.messages).toHaveLength(0);
+    });
+
+    it("increments version after addDelta", async () => {
       const initialVersion = adapter.version;
+      await adapter.sendMessage("hello");
       adapter.addDelta("test");
       expect(adapter.version).toBeGreaterThan(initialVersion);
-    });
-
-    it("does nothing for non-assistant messages", async () => {
-      await adapter.sendMessage("hello");
-      const initialVersion = adapter.version;
-      // Push a user message directly to test the guard
-      adapter.sendMessage("user");
-      const beforeVersion = adapter.version;
-      adapter.addDelta("ignored");
-      // Version should only increment once (for sendMessage), not for addDelta on user msg
-      expect(adapter.version).toBe(beforeVersion + 1);
     });
   });
 
   describe("completeMessage", () => {
     it("sets isRunning to false", async () => {
       await adapter.sendMessage("hello");
-      expect(adapter.isRunning).toBe(true);
       adapter.completeMessage();
       expect(adapter.isRunning).toBe(false);
     });
 
-    it("increments version", () => {
+    it("increments version after completeMessage", async () => {
       const initialVersion = adapter.version;
+      await adapter.sendMessage("hello");
       adapter.completeMessage();
       expect(adapter.version).toBeGreaterThan(initialVersion);
-    });
-
-    it("does nothing when not running", () => {
-      adapter.completeMessage();
-      expect(adapter.isRunning).toBe(false);
     });
   });
 
   describe("interrupt", () => {
     it("sets isRunning to false", async () => {
       await adapter.sendMessage("hello");
-      expect(adapter.isRunning).toBe(true);
       adapter.interrupt();
       expect(adapter.isRunning).toBe(false);
     });
@@ -133,8 +135,9 @@ describe("TektosExternalStoreAdapter", () => {
       expect(onCancel).toHaveBeenCalled();
     });
 
-    it("increments version", () => {
+    it("increments version after interrupt", async () => {
       const initialVersion = adapter.version;
+      await adapter.sendMessage("hello");
       adapter.interrupt();
       expect(adapter.version).toBeGreaterThan(initialVersion);
     });
@@ -143,9 +146,8 @@ describe("TektosExternalStoreAdapter", () => {
   describe("clear", () => {
     it("removes all messages", async () => {
       await adapter.sendMessage("hello");
-      expect(adapter.messages.length).toBe(2);
       adapter.clear();
-      expect(adapter.messages).toEqual([]);
+      expect(adapter.messages).toHaveLength(0);
     });
 
     it("sets isRunning to false", async () => {
@@ -154,111 +156,127 @@ describe("TektosExternalStoreAdapter", () => {
       expect(adapter.isRunning).toBe(false);
     });
 
-    it("increments version", () => {
+    it("increments version after clear", async () => {
       const initialVersion = adapter.version;
+      await adapter.sendMessage("hello");
       adapter.clear();
       expect(adapter.version).toBeGreaterThan(initialVersion);
     });
   });
 
   describe("loadMessages", () => {
-    it("loads historical messages", async () => {
-      // Use sendMessage to set up, then clear and load
-      await adapter.sendMessage("hello");
-      adapter.clear();
-      expect(adapter.messages.length).toBe(0);
-      // loadMessages takes RawMessage[] — we test via the public API
-      // by verifying clear followed by sendMessage works correctly
-      await adapter.sendMessage("loaded");
-      expect(adapter.messages.length).toBe(2);
+    it("loads historical messages", () => {
+      const msgs = [
+        { id: "user-1", role: "user" as const, content: [{ type: "text" as const, text: "hi" }], createdAt: new Date() },
+        { id: "assistant-1", role: "assistant" as const, content: [{ type: "text" as const, text: "hello" }], createdAt: new Date() },
+      ];
+      adapter.loadMessages(msgs);
+      expect(adapter.messages).toHaveLength(2);
+      expect(adapter.messages[0].role).toBe("user");
+      expect(adapter.messages[1].role).toBe("assistant");
     });
 
-    it("sets isRunning to false", async () => {
-      await adapter.sendMessage("hello");
-      adapter.clear();
+    it("sets isRunning to false", () => {
+      adapter.loadMessages([]);
       expect(adapter.isRunning).toBe(false);
     });
 
-    it("increments version", () => {
+    it("increments version after loadMessages", async () => {
       const initialVersion = adapter.version;
-      adapter.clear();
+      await adapter.sendMessage("hello");
+      adapter.loadMessages([]);
       expect(adapter.version).toBeGreaterThan(initialVersion);
     });
   });
 
   describe("isRunning setter", () => {
-    it("sets isRunning", async () => {
-      await adapter.sendMessage("hello");
-      adapter.isRunning = false;
-      expect(adapter.isRunning).toBe(false);
-    });
-
-    it("does not notify when value unchanged", async () => {
-      await adapter.sendMessage("hello");
-      const initialVersion = adapter.version;
-      adapter.isRunning = true; // already true
-      expect(adapter.version).toBe(initialVersion);
-    });
-  });
-
-  describe("subscribe", () => {
-    it("registers subscriber", async () => {
-      await adapter.sendMessage("hello");
+    it("notifies subscribers when isRunning changes", () => {
       const listener = jest.fn();
-      const unsubscribe = adapter.subscribe(listener);
-
-      adapter.isRunning = false; // triggers notify via setter
-
+      adapter.subscribe(listener);
+      adapter.isRunning = true;
       expect(listener).toHaveBeenCalled();
-      unsubscribe();
     });
 
-    it("unsubscribes correctly", async () => {
-      await adapter.sendMessage("hello");
+    it("does not notify when isRunning is unchanged", () => {
       const listener = jest.fn();
-      const unsubscribe = adapter.subscribe(listener);
-
-      unsubscribe();
-      adapter.isRunning = false;
-
+      adapter.subscribe(listener);
+      adapter.isRunning = false; // Already false
       expect(listener).not.toHaveBeenCalled();
     });
   });
 
-  describe("message status", () => {
-    it("marks last assistant as running when streaming", async () => {
-      await adapter.sendMessage("hello");
-      const msgs = adapter.messages;
-      expect(msgs.length).toBe(2);
-      expect(msgs[1].role).toBe("assistant");
-      // Status should be defined (running while streaming)
-      expect(msgs[1].status).toBeDefined();
+  describe("subscribe", () => {
+    it("calls listener on notify", () => {
+      const listener = jest.fn();
+      const unsubscribe = adapter.subscribe(listener);
+      adapter.isRunning = true;
+      expect(listener).toHaveBeenCalled();
+      unsubscribe();
+      adapter.isRunning = false;
     });
 
-    it("marks assistant as complete when not streaming", async () => {
-      await adapter.sendMessage("hello");
-      adapter.completeMessage();
-      const msgs = adapter.messages;
-      expect(msgs[1].role).toBe("assistant");
-      expect(msgs[1].status).toBeDefined();
+    it("returns unsubscribe function", () => {
+      const listener = jest.fn();
+      const unsubscribe = adapter.subscribe(listener);
+      adapter.isRunning = true;
+      expect(listener).toHaveBeenCalledTimes(1);
+      unsubscribe();
+      adapter.isRunning = false;
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("onNew and onCancel setters", () => {
+    it("sets onNew handler", () => {
+      const onNew = jest.fn();
+      adapter.onNew = onNew;
+      expect(adapter.onNew).toBe(onNew);
     });
 
-    it("returns new array reference on each access", () => {
+    it("sets onCancel handler", () => {
+      const onCancel = jest.fn();
+      adapter.onCancel = onCancel;
+      expect(adapter.onCancel).toBe(onCancel);
+    });
+  });
+
+  describe("messages getter", () => {
+    it("returns new array reference each time", async () => {
+      await adapter.sendMessage("hello");
       const msgs1 = adapter.messages;
       const msgs2 = adapter.messages;
       expect(msgs1).not.toBe(msgs2);
     });
+
+    it("marks last assistant message as running when isRunning is true", async () => {
+      await adapter.sendMessage("hello");
+      const msgs = adapter.messages;
+      expect(msgs[1].status?.type).toBe("running");
+    });
+
+    it("marks assistant message as complete when isRunning is false", async () => {
+      await adapter.sendMessage("hello");
+      adapter.completeMessage();
+      const msgs = adapter.messages;
+      expect(msgs[1].status?.type).toBe("complete");
+    });
   });
 
-  describe("getter properties", () => {
-    it("returns undefined for optional properties", () => {
-      expect(adapter.isLoading).toBeUndefined();
-      expect(adapter.isDisabled).toBeUndefined();
-      expect(adapter.isSendDisabled).toBeUndefined();
-      expect(adapter.state).toBeUndefined();
-      expect(adapter.extras).toBeUndefined();
-      expect(adapter.queue).toBeUndefined();
-      expect(adapter.suggestions).toEqual([]);
+  describe("_copyFrom", () => {
+    it("copies state from another adapter", () => {
+      const other = new TektosExternalStoreAdapter();
+      (other as any)._messages = [
+        { id: "user-1", role: "user", content: [{ type: "text", text: "hi" }], createdAt: new Date() },
+      ];
+      (other as any)._isRunning = true;
+      (other as any)._version = 5;
+      (other as any)._onNewFn = jest.fn();
+      (other as any)._onCancelFn = jest.fn();
+
+      adapter._copyFrom(other);
+      expect((adapter as any)._messages).toHaveLength(1);
+      expect(adapter.isRunning).toBe(true);
+      expect(adapter.version).toBe(5);
     });
   });
 });
@@ -272,69 +290,71 @@ describe("TektosExternalStoreAdapterWrapper", () => {
     wrapper = new TektosExternalStoreAdapterWrapper(adapter);
   });
 
-  describe("delegation", () => {
-    it("delegates messages to underlying adapter", async () => {
-      await adapter.sendMessage("hello");
-      expect(wrapper.messages.length).toBe(2);
-    });
-
-    it("delegates version to underlying adapter", () => {
-      expect(wrapper.version).toBe(adapter.version);
-    });
-
-    it("delegates isRunning to underlying adapter", async () => {
-      await adapter.sendMessage("hello");
-      expect(wrapper.isRunning).toBe(true);
-    });
-
-    it("sets isRunning on underlying adapter", async () => {
-      await adapter.sendMessage("hello");
-      wrapper.isRunning = false;
-      expect(adapter.isRunning).toBe(false);
-    });
-
-    it("delegates onNew to underlying adapter", () => {
-      expect(wrapper.onNew).toBe(adapter.onNew);
-    });
-
-    it("delegates onCancel to underlying adapter", () => {
-      expect(wrapper.onCancel).toBe(adapter.onCancel);
-    });
-
-    it("sets onNew on underlying adapter", () => {
-      const fn = () => Promise.resolve();
-      wrapper.onNew = fn;
-      expect(adapter.onNew).toBe(fn);
-    });
-
-    it("sets onCancel on underlying adapter", () => {
-      const fn = () => Promise.resolve();
-      wrapper.onCancel = fn;
-      expect(adapter.onCancel).toBe(fn);
-    });
-
-    it("delegates subscribe to underlying adapter", async () => {
-      await adapter.sendMessage("hello");
-      const listener = jest.fn();
-      const unsubscribe = wrapper.subscribe(listener);
-      expect(typeof unsubscribe).toBe("function");
-      unsubscribe();
-    });
-
-    it("returns undefined for optional properties", () => {
-      expect(wrapper.isLoading).toBeUndefined();
-      expect(wrapper.isDisabled).toBeUndefined();
-      expect(wrapper.isSendDisabled).toBeUndefined();
-      expect(wrapper.state).toBeUndefined();
-      expect(wrapper.extras).toBeUndefined();
-      expect(wrapper.queue).toBeUndefined();
-      expect(wrapper.suggestions).toEqual([]);
-    });
+  it("delegates messages to underlying adapter", () => {
+    expect(wrapper.messages).toEqual(adapter.messages);
   });
 
-  describe("different object identity", () => {
-    it("has different identity than underlying adapter", () => {
-      expect(wrapper).not.toBe(adapter);
-    });
+  it("delegates version to underlying adapter", () => {
+    expect(wrapper.version).toBe(adapter.version);
+  });
+
+  it("delegates isRunning to underlying adapter", () => {
+    expect(wrapper.isRunning).toBe(adapter.isRunning);
+  });
+
+  it("sets isRunning on underlying adapter", () => {
+    wrapper.isRunning = true;
+    expect(adapter.isRunning).toBe(true);
+  });
+
+  it("delegates onNew to underlying adapter", () => {
+    expect(wrapper.onNew).toBe(adapter.onNew);
+  });
+
+  it("delegates onCancel to underlying adapter", () => {
+    expect(wrapper.onCancel).toBe(adapter.onCancel);
+  });
+
+  it("sets onNew on underlying adapter", () => {
+    const onNew = jest.fn();
+    wrapper.onNew = onNew;
+    expect(adapter.onNew).toBe(onNew);
+  });
+
+  it("sets onCancel on underlying adapter", () => {
+    const onCancel = jest.fn();
+    wrapper.onCancel = onCancel;
+    expect(adapter.onCancel).toBe(onCancel);
+  });
+
+  it("delegates subscribe to underlying adapter", () => {
+    const listener = jest.fn();
+    const unsubscribe = wrapper.subscribe(listener);
+    adapter.isRunning = true;
+    expect(listener).toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("returns undefined for optional getters", () => {
+    expect(wrapper.isLoading).toBeUndefined();
+    expect(wrapper.isDisabled).toBeUndefined();
+    expect(wrapper.isSendDisabled).toBeUndefined();
+    expect(wrapper.suggestions).toEqual([]);
+    expect(wrapper.state).toBeUndefined();
+    expect(wrapper.extras).toBeUndefined();
+    expect(wrapper.queue).toBeUndefined();
+    expect(wrapper.onEdit).toBeUndefined();
+    expect(wrapper.onDelete).toBeUndefined();
+    expect(wrapper.onReload).toBeUndefined();
+    expect(wrapper.onResume).toBeUndefined();
+    expect(wrapper.onAddToolResult).toBeUndefined();
+    expect(wrapper.onImport).toBeUndefined();
+    expect(wrapper.onExportExternalState).toBeUndefined();
+    expect(wrapper.onLoadExternalState).toBeUndefined();
+    expect(wrapper.adapters).toBeUndefined();
+    expect(wrapper.convertMessage).toBeUndefined();
+    expect(wrapper.unstable_onBranchChange).toBeUndefined();
+    expect(wrapper.unstable_capabilities).toBeUndefined();
+    expect(wrapper.messageRepository).toBeUndefined();
   });
 });
