@@ -4,7 +4,7 @@ ExecutionArtifact, ExecutionStep, ExecutionRecord, CodingAgentFeedback)."""
 import pytest
 from datetime import datetime, timezone
 
-from src.tektos.agents.coding_agent.models import (
+from tektos.agents.coding_agent.models import (
     ArtifactType,
     CodingAgentFeedback,
     ExecutionArtifact,

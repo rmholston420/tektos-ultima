@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.tektos.event_bus import (
+from tektos.event_bus import (
     EventBus,
     publish,
     subscribe,

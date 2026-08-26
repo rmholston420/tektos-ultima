@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from src.tektos.runtime.embedder import EmbedderClient
+from tektos.runtime.embedder import EmbedderClient
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +395,7 @@ class ContextCompactor:
             return messages
 
         # Compute similarities
-        from src.tektos.runtime.embedder import cosine_similarity
+        from tektos.runtime.embedder import cosine_similarity
         scored: list[tuple[float, int]] = []
         for i, vec in enumerate(msg_vecs):
             sim = cosine_similarity(query_vec, vec)

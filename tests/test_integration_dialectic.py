@@ -13,29 +13,30 @@ No mocks for the loop itself — only the LLM-dependent parts are mocked
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from src.tektos.agents.coding_agent.executor import Executor
-from src.tektos.agents.coding_agent.models import (
+from tektos.agents.coding_agent.executor import Executor
+from tektos.agents.coding_agent.models import (
     ExecutionArtifact,
     ExecutionStatus,
     ExecutionTestReport,
 )
-from src.tektos.agents.manager.guardrails import GUARDRAIL_RULES
-from src.tektos.agents.manager.metrics import PrimeMoverMetrics
-from src.tektos.agents.manager.orchestrator import Manager
-from src.tektos.agents.planner.models import (
+from tektos.agents.manager.guardrails import GUARDRAIL_RULES
+from tektos.agents.manager.metrics import PrimeMoverMetrics
+from tektos.agents.manager.orchestrator import Manager
+from tektos.agents.planner.models import (
     ArchitectureChoice,
     BuildSpec,
     LanguageGame,
     SpecPhase,
 )
-from src.tektos.agents.planner.orchestrator import Planner
-from src.tektos.memory.memory_system import MemorySystem
-from src.tektos.memory.reflection_engine import ReflectionEngine, ReflectionState
-from src.tektos.memory.synthesis_engine import SynthesisEngine, SynthesisFeedback
+from tektos.agents.planner.orchestrator import Planner
+from tektos.memory.memory_system import MemorySystem
+from tektos.memory.reflection_engine import ReflectionEngine, ReflectionState
+from tektos.memory.synthesis_engine import SynthesisEngine, SynthesisFeedback
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -140,7 +141,11 @@ def _run_synthesis(
     record: dict,
 ) -> list[SynthesisFeedback]:
     """Run the SynthesisEngine on thesis + antithesis."""
-    memory = MemorySystem()
+    import tempfile
+    from tektos.memory.persistence import MemoryPersistence
+    tmpdb = Path(tempfile.mkdtemp()) / "test_memory.db"
+    persistence = MemoryPersistence(db_path=tmpdb)
+    memory = MemorySystem(persistence=persistence)
     reflection = ReflectionEngine(memory_system=memory)
 
     # Create a reflection state from execution reality
@@ -394,7 +399,11 @@ class TestLoopSelfImprovement:
 
     def test_synthesis_can_guide_next_spec(self):
         """SynthesisEngine.guide_next_spec incorporates syntheses into future planning."""
-        memory = MemorySystem()
+        import tempfile
+        from tektos.memory.persistence import MemoryPersistence
+        tmpdb = Path(tempfile.mkdtemp()) / "test_memory.db"
+        persistence = MemoryPersistence(db_path=tmpdb)
+        memory = MemorySystem(persistence=persistence)
         reflection = ReflectionEngine(memory_system=memory)
         reflection_state = reflection.run_reflection(
             focus="test loop self-improvement",

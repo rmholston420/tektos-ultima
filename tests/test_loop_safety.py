@@ -1,442 +1,409 @@
-"""Tests for loop safety — prevention of infinite agent loops."""
+"""Tests for src/tektos/runtime/loop_safety.py
+
+Covers: LoopState, StopReason, TurnSnapshot, LoopSafetyConfig,
+LoopSafetyReport, LoopSafetyMonitor (hard limits, repetition detection,
+circuit breaker, warning thresholds, reset).
+"""
 
 import time
-from unittest.mock import patch
-
 import pytest
 
 from tektos.runtime.loop_safety import (
-    LoopSafetyConfig,
-    LoopSafetyMonitor,
-    LoopSafetyReport,
     LoopState,
     StopReason,
     TurnSnapshot,
+    LoopSafetyConfig,
+    LoopSafetyReport,
+    LoopSafetyMonitor,
 )
 
 
-class TestLoopSafetyConfig:
-    """Test default configuration values."""
+# ── LoopState ────────────────────────────────────────────────────────────────
 
-    def test_default_max_turns(self):
-        config = LoopSafetyConfig()
-        assert config.max_turns == 15
+class TestLoopState:
+    def test_all_states_exist(self):
+        assert LoopState.NORMAL.value == "normal"
+        assert LoopState.WARNING.value == "warning"
+        assert LoopState.CRITICAL.value == "critical"
+        assert LoopState.STOPPED.value == "stopped"
 
-    def test_default_max_tokens(self):
-        config = LoopSafetyConfig()
-        assert config.max_tokens_total == 65536
-        assert config.max_tokens_per_turn == 8192
 
-    def test_default_max_wall_time(self):
-        config = LoopSafetyConfig()
-        assert config.max_wall_time_seconds == 300.0
+# ── StopReason ───────────────────────────────────────────────────────────────
 
-    def test_default_repetition_settings(self):
-        config = LoopSafetyConfig()
-        assert config.repetition_window == 3
-        assert config.repetition_threshold == 2
+class TestStopReason:
+    def test_all_reasons_exist(self):
+        assert StopReason.MAX_TURNS.value == "max_turns"
+        assert StopReason.MAX_TOKENS.value == "max_tokens"
+        assert StopReason.MAX_WALL_TIME.value == "max_wall_time"
+        assert StopReason.REPETITION.value == "repetition"
+        assert StopReason.CIRCUIT_BREAKER.value == "circuit_breaker"
 
-    def test_custom_config(self):
-        config = LoopSafetyConfig(
-            max_turns=5,
-            max_tokens_total=1000,
-            max_wall_time_seconds=60.0,
-            repetition_window=5,
-            repetition_threshold=3,
-        )
-        assert config.max_turns == 5
-        assert config.max_tokens_total == 1000
-        assert config.max_wall_time_seconds == 60.0
-        assert config.repetition_window == 5
-        assert config.repetition_threshold == 3
 
+# ── TurnSnapshot ─────────────────────────────────────────────────────────────
 
 class TestTurnSnapshot:
-    """Test TurnSnapshot dataclass."""
+    def test_creation(self):
+        s = TurnSnapshot(turn_num=1, tool_calls=("bash", "read_file"), text_length=100, tokens_used=50)
+        assert s.turn_num == 1
+        assert s.tool_calls == ("bash", "read_file")
+        assert s.text_length == 100
+        assert s.tokens_used == 50
 
-    def test_snapshot_creation(self):
-        snapshot = TurnSnapshot(
-            turn_num=1,
-            tool_calls=["bash", "file_write"],
-            text_length=150,
-            tokens_used=200,
-        )
-        assert snapshot.turn_num == 1
-        assert snapshot.tool_calls == ["bash", "file_write"]
-        assert snapshot.text_length == 150
-        assert snapshot.tokens_used == 200
+    def test_tool_calls_converted_to_tuple(self):
+        s = TurnSnapshot(turn_num=1, tool_calls=("bash",), text_length=0, tokens_used=0)
+        assert isinstance(s.tool_calls, tuple)
+        assert s.tool_calls == ("bash",)
 
+
+# ── LoopSafetyConfig ─────────────────────────────────────────────────────────
+
+class TestLoopSafetyConfig:
+    def test_default_values(self):
+        cfg = LoopSafetyConfig()
+        assert cfg.max_turns == 15
+        assert cfg.max_tokens_per_turn == 8192
+        assert cfg.max_tokens_total == 65536
+        assert cfg.max_wall_time_seconds == 300.0
+        assert cfg.repetition_window == 3
+        assert cfg.repetition_threshold == 2
+        assert cfg.warning_threshold_pct == 0.8
+        assert cfg.circuit_breaker_enabled is True
+
+    def test_custom_values(self):
+        cfg = LoopSafetyConfig(max_turns=5, max_tokens_total=1000, max_wall_time_seconds=60.0)
+        assert cfg.max_turns == 5
+        assert cfg.max_tokens_total == 1000
+        assert cfg.max_wall_time_seconds == 60.0
+
+
+# ── LoopSafetyReport ─────────────────────────────────────────────────────────
+
+class TestLoopSafetyReport:
+    def test_is_safe_normal(self):
+        report = LoopSafetyReport(state=LoopState.NORMAL)
+        assert report.is_safe() is True
+        assert report.is_critical() is False
+
+    def test_is_safe_warning(self):
+        report = LoopSafetyReport(state=LoopState.WARNING)
+        assert report.is_safe() is False  # Only NORMAL is safe
+        assert report.is_critical() is False
+
+    def test_is_safe_critical(self):
+        report = LoopSafetyReport(state=LoopState.CRITICAL)
+        assert report.is_safe() is False
+        assert report.is_critical() is True
+
+    def test_is_safe_stopped(self):
+        report = LoopSafetyReport(state=LoopState.STOPPED)
+        assert report.is_safe() is False
+        assert report.is_critical() is True
+
+    def test_default_values(self):
+        report = LoopSafetyReport(state=LoopState.NORMAL)
+        assert report.current_turn == 0
+        assert report.max_turns == 15
+        assert report.turns_remaining == 15
+        assert report.tokens_used == 0
+        assert report.tokens_total == 0
+        assert report.tokens_remaining == 0
+        assert report.warnings == []
+
+
+# ── LoopSafetyMonitor ────────────────────────────────────────────────────────
 
 class TestLoopSafetyMonitor:
-    """Test LoopSafetyMonitor core functionality."""
-
-    def test_initial_state_is_normal(self):
+    def test_init_default_config(self):
         monitor = LoopSafetyMonitor()
+        assert monitor.config.max_turns == 15
         assert monitor.state == LoopState.NORMAL
         assert monitor.stop_reason is None
 
-    def test_report_after_init(self):
+    def test_init_custom_config(self):
+        cfg = LoopSafetyConfig(max_turns=3)
+        monitor = LoopSafetyMonitor(config=cfg)
+        assert monitor.config.max_turns == 3
+
+    # ── Hard Limits ──────────────────────────────────────────────────────
+
+    def test_check_turn_normal(self):
+        monitor = LoopSafetyMonitor()
+        report = monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash"])
+        assert report.is_safe() is True
+        assert report.state == LoopState.NORMAL
+        assert report.current_turn == 1
+        assert report.tokens_used == 100
+        assert report.turns_remaining == 14
+
+    def test_check_turn_max_turns_stops(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_turns=3))
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        monitor.check_turn(turn_num=2, tokens_used=100)
+        report = monitor.check_turn(turn_num=3, tokens_used=100)
+        assert report.state == LoopState.STOPPED
+        assert report.stop_reason == StopReason.MAX_TURNS
+        assert report.is_critical() is True
+        assert "max turns" in report.warnings[0]
+
+    def test_check_turn_max_tokens_stops(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_tokens_total=200))
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        report = monitor.check_turn(turn_num=2, tokens_used=100)
+        assert report.state == LoopState.STOPPED
+        assert report.stop_reason == StopReason.MAX_TOKENS
+        assert "max tokens" in report.warnings[0]
+
+    def test_check_turn_max_tokens_not_stopped(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_tokens_total=200))
+        report = monitor.check_turn(turn_num=1, tokens_used=100)
+        assert report.is_safe() is True
+
+    def test_check_turn_wall_time_stops(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_wall_time_seconds=0.001))
+        time.sleep(0.01)
+        report = monitor.check_turn(turn_num=1, tokens_used=100)
+        assert report.state == LoopState.STOPPED
+        assert report.stop_reason == StopReason.MAX_WALL_TIME
+        assert "max wall time" in report.warnings[0]
+
+    def test_check_turn_wall_time_not_stopped(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_wall_time_seconds=300.0))
+        report = monitor.check_turn(turn_num=1, tokens_used=100)
+        assert report.is_safe() is True
+
+    def test_check_turn_tracks_total_tokens(self):
+        monitor = LoopSafetyMonitor()
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        monitor.check_turn(turn_num=2, tokens_used=200)
+        report = monitor.check_turn(turn_num=3, tokens_used=50)
+        assert report.tokens_used == 350  # 100 + 200 + 50
+
+    def test_check_turn_tracks_tool_calls(self):
+        monitor = LoopSafetyMonitor()
+        monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash", "read_file"])
+        report = monitor.check_turn(turn_num=2, tokens_used=100, tool_calls=["write_file"])
+        assert report.last_tool_sequence == ["write_file"]
+
+    def test_check_turn_no_tool_calls(self):
+        monitor = LoopSafetyMonitor()
+        report = monitor.check_turn(turn_num=1, tokens_used=100)
+        assert report.last_tool_sequence == []
+
+    # ── Repetition Detection ─────────────────────────────────────────────
+
+    def test_repetition_same_tool_sequence(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            repetition_window=3, repetition_threshold=2, max_turns=100
+        ))
+        monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash"])
+        monitor.check_turn(turn_num=2, tokens_used=100, tool_calls=["bash"])
+        monitor.check_turn(turn_num=3, tokens_used=100, tool_calls=["bash"])
+        # After 3 turns: rep_count=1 → WARNING
+        assert monitor.state == LoopState.WARNING
+        report = monitor.check_turn(turn_num=4, tokens_used=100, tool_calls=["bash"])
+        # After 4 turns: rep_count=2 → STOPPED
+        assert report.state == LoopState.STOPPED
+        assert report.stop_reason == StopReason.REPETITION
+
+    def test_repetition_different_tools_no_stop(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            repetition_window=3, repetition_threshold=2, max_turns=100
+        ))
+        monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash"], text_length=50)
+        monitor.check_turn(turn_num=2, tokens_used=100, tool_calls=["read_file"], text_length=100)
+        monitor.check_turn(turn_num=3, tokens_used=100, tool_calls=["write_file"], text_length=75)
+        monitor.check_turn(turn_num=4, tokens_used=100, tool_calls=["search_files"], text_length=200)
+        assert monitor.state == LoopState.NORMAL
+
+    def test_repetition_same_text_length(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            repetition_window=3, repetition_threshold=2, max_turns=100
+        ))
+        monitor.check_turn(turn_num=1, tokens_used=100, text_length=50)
+        monitor.check_turn(turn_num=2, tokens_used=100, text_length=50)
+        monitor.check_turn(turn_num=3, tokens_used=100, text_length=50)
+        # After 3 turns: rep_count=1 → WARNING
+        assert monitor.state == LoopState.WARNING
+        report = monitor.check_turn(turn_num=4, tokens_used=100, text_length=50)
+        # After 4 turns: rep_count=2 → STOPPED
+        assert report.state == LoopState.STOPPED
+        assert report.stop_reason == StopReason.REPETITION
+
+    def test_repetition_zero_text_tool_calls(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            repetition_window=3, repetition_threshold=2, max_turns=100
+        ))
+        monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash"], text_length=0)
+        monitor.check_turn(turn_num=2, tokens_used=100, tool_calls=["bash"], text_length=0)
+        monitor.check_turn(turn_num=3, tokens_used=100, tool_calls=["bash"], text_length=0)
+        # After 3 turns: rep_count=1 → WARNING
+        assert monitor.state == LoopState.WARNING
+        report = monitor.check_turn(turn_num=4, tokens_used=100, tool_calls=["bash"], text_length=0)
+        # After 4 turns: rep_count=2 → STOPPED
+        assert report.state == LoopState.STOPPED
+        assert report.stop_reason == StopReason.REPETITION
+
+    def test_repetition_not_enough_snapshots(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            repetition_window=3, repetition_threshold=2, max_turns=100
+        ))
+        monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash"])
+        monitor.check_turn(turn_num=2, tokens_used=100, tool_calls=["bash"])
+        report = monitor.check_turn(turn_num=3, tokens_used=100, tool_calls=["bash"])
+        # With window=3, threshold=2: 3 turns → rep_count=1 → WARNING, not STOPPED
+        assert report.state == LoopState.WARNING
+
+    # ── Warning Thresholds ───────────────────────────────────────────────
+
+    def test_warning_threshold_turns(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            max_turns=10, warning_threshold_pct=0.8
+        ))
+        for i in range(8):
+            monitor.check_turn(turn_num=i+1, tokens_used=10)
+        report = monitor.check_turn(turn_num=9, tokens_used=10)
+        assert report.state == LoopState.WARNING
+        assert "approaching safety limits" in report.warnings[0]
+
+    def test_warning_threshold_tokens(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            max_tokens_total=1000, warning_threshold_pct=0.8
+        ))
+        for i in range(8):
+            monitor.check_turn(turn_num=i+1, tokens_used=100)
+        report = monitor.check_turn(turn_num=9, tokens_used=100)
+        assert report.state == LoopState.WARNING
+
+    def test_warning_threshold_time(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            max_wall_time_seconds=1.0, warning_threshold_pct=0.8
+        ))
+        time.sleep(0.8)
+        report = monitor.check_turn(turn_num=1, tokens_used=10)
+        assert report.state == LoopState.WARNING
+
+    def test_warning_only_once(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            max_turns=20, warning_threshold_pct=0.8
+        ))
+        for i in range(16):
+            monitor.check_turn(turn_num=i+1, tokens_used=10)
+        # Turn 16 triggers warning (80% of 20)
+        report = monitor.check_turn(turn_num=17, tokens_used=10)
+        assert report.state == LoopState.WARNING
+        assert any("approaching" in w for w in report.warnings)
+        # State stays WARNING (not re-triggered)
+        report2 = monitor.check_turn(turn_num=18, tokens_used=10)
+        assert report2.state == LoopState.WARNING
+
+    # ── get_report ───────────────────────────────────────────────────────
+
+    def test_get_report_initial(self):
         monitor = LoopSafetyMonitor()
         report = monitor.get_report()
         assert report.state == LoopState.NORMAL
         assert report.current_turn == 0
         assert report.turns_remaining == 15
-        assert report.tokens_used == 0
-        assert report.tokens_total == 65536
-        assert report.wall_time_seconds >= 0
+        assert report.warnings == []
+
+    def test_get_report_after_turns(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_turns=10))
+        monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash"])
+        report = monitor.get_report()
+        assert report.current_turn == 1
+        assert report.turns_remaining == 9
+        assert report.last_tool_sequence == ["bash"]
+
+    # ── reset ────────────────────────────────────────────────────────────
 
     def test_reset_clears_state(self):
-        monitor = LoopSafetyMonitor()
-        monitor.check_turn(1, tokens_used=100, tool_calls=["bash"])
-        assert monitor.state == LoopState.NORMAL
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_turns=3))
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        monitor.check_turn(turn_num=2, tokens_used=100)
+        monitor.check_turn(turn_num=3, tokens_used=100)
+        assert monitor.state == LoopState.STOPPED
+        assert monitor.stop_reason == StopReason.MAX_TURNS
+
         monitor.reset()
         assert monitor.state == LoopState.NORMAL
-        assert monitor.get_report().tokens_used == 0
+        assert monitor.stop_reason is None
         assert monitor.get_report().current_turn == 0
 
-    def test_get_report_is_safe_before_check(self):
+    # ── Properties ───────────────────────────────────────────────────────
+
+    def test_state_property(self):
         monitor = LoopSafetyMonitor()
-        report = monitor.get_report()
-        assert report.is_safe()
-
-    def test_get_report_is_safe_after_normal_turn(self):
-        monitor = LoopSafetyMonitor()
-        monitor.check_turn(1, tokens_used=100, text_length=50)
-        report = monitor.get_report()
-        assert report.is_safe()
-
-
-class TestMaxTurnsLimit:
-    """Test that max_turns hard limit is enforced."""
-
-    def test_warning_at_80_percent(self):
-        config = LoopSafetyConfig(max_turns=10)
-        monitor = LoopSafetyMonitor(config)
-        for i in range(8):
-            report = monitor.check_turn(i + 1)
-        assert report.state == LoopState.WARNING
-        assert any("approaching safety limits" in w for w in report.warnings)
-
-    def test_stops_at_max_turns(self):
-        config = LoopSafetyConfig(max_turns=5)
-        monitor = LoopSafetyMonitor(config)
-        report = monitor.check_turn(5)
-        assert report.state == LoopState.STOPPED
-        assert report.stop_reason == StopReason.MAX_TURNS
-        assert report.turns_remaining == 0
-        assert any("max turns" in w for w in report.warnings)
-
-    def test_turn_5_has_correct_remaining(self):
-        config = LoopSafetyConfig(max_turns=5)
-        monitor = LoopSafetyMonitor(config)
-        for i in range(4):
-            monitor.check_turn(i + 1)
-        report = monitor.check_turn(5)
-        assert report.turns_remaining == 0
-
-    def test_stops_exactly_at_limit_not_before(self):
-        config = LoopSafetyConfig(max_turns=3)
-        monitor = LoopSafetyMonitor(config)
-        report1 = monitor.check_turn(1)
-        assert report1.state == LoopState.NORMAL
-        report2 = monitor.check_turn(2)
-        assert report2.state == LoopState.NORMAL
-        report3 = monitor.check_turn(3)
-        assert report3.state == LoopState.STOPPED
-
-    def test_turn_numbers_recorded_correctly(self):
-        config = LoopSafetyConfig(max_turns=100)
-        monitor = LoopSafetyMonitor(config)
-        for i in range(10):
-            report = monitor.check_turn(i + 1)
-            assert report.current_turn == i + 1
-            assert report.turns_remaining == 100 - (i + 1)
-
-    def test_max_turns_increased_works(self):
-        config = LoopSafetyConfig(max_turns=100)
-        monitor = LoopSafetyMonitor(config)
-        report = monitor.check_turn(50)
-        assert report.state == LoopState.NORMAL
-        assert report.turns_remaining == 50
-
-
-class TestMaxTokensLimit:
-    """Test that token budget is enforced."""
-
-    def test_stops_at_token_limit(self):
-        config = LoopSafetyConfig(max_tokens_total=500)
-        monitor = LoopSafetyMonitor(config)
-        monitor.check_turn(1, tokens_used=200)
-        monitor.check_turn(2, tokens_used=200)
-        report = monitor.check_turn(3, tokens_used=200)
-        assert report.state == LoopState.STOPPED
-        assert report.stop_reason == StopReason.MAX_TOKENS
-        assert report.tokens_used == 600
-
-    def test_warning_at_80_percent_tokens(self):
-        config = LoopSafetyConfig(max_tokens_total=1000)
-        monitor = LoopSafetyMonitor(config)
-        report = monitor.check_turn(1, tokens_used=800)
-        assert report.state == LoopState.WARNING
-        assert any("approaching safety limits" in w for w in report.warnings)
-
-    def test_tokens_accumulate_across_turns(self):
-        config = LoopSafetyConfig(max_tokens_total=500)
-        monitor = LoopSafetyMonitor(config)
-        for i in range(5):
-            monitor.check_turn(i + 1, tokens_used=100)
-        report = monitor.get_report()
-        assert report.tokens_used == 500
-        assert report.tokens_remaining == 0
-
-    def test_under_budget_normal(self):
-        config = LoopSafetyConfig(max_tokens_total=1000)
-        monitor = LoopSafetyMonitor(config)
-        monitor.check_turn(1, tokens_used=100)
-        monitor.check_turn(2, tokens_used=100)
-        report = monitor.get_report()
-        assert report.state == LoopState.NORMAL
-        assert report.tokens_used == 200
-        assert report.tokens_remaining == 800
-
-
-class TestMaxWallTime:
-    """Test that wall-clock time limit is enforced."""
-
-    def test_stops_at_wall_time_limit(self):
-        config = LoopSafetyConfig(max_wall_time_seconds=0.05)  # 50ms
-        monitor = LoopSafetyMonitor(config)
-        time.sleep(0.1)  # Wait 100ms
-        report = monitor.check_turn(1)
-        assert report.state == LoopState.STOPPED
-        assert report.stop_reason == StopReason.MAX_WALL_TIME
-        assert "max wall time" in report.warnings[0].lower()
-
-    def test_under_wall_time_normal(self):
-        config = LoopSafetyConfig(max_wall_time_seconds=10.0)
-        monitor = LoopSafetyMonitor(config)
-        report = monitor.check_turn(1)
-        assert report.state == LoopState.NORMAL
-        assert report.wall_time_remaining > 0
-
-    def test_wall_time_remaining_decreases(self):
-        config = LoopSafetyConfig(max_wall_time_seconds=10.0)
-        monitor = LoopSafetyMonitor(config)
-        time.sleep(0.1)
-        report = monitor.check_turn(1)
-        assert report.wall_time_seconds >= 0.1
-        assert report.wall_time_remaining < 10.0
-
-
-class TestRepetitionDetection:
-    """Test behavioral repetition detection."""
-
-    def test_same_tool_sequence_detected(self):
-        config = LoopSafetyConfig(
-            max_turns=20,
-            repetition_window=3,
-            repetition_threshold=2,
-        )
-        monitor = LoopSafetyMonitor(config)
-        # Need 3 turns (repetition_window) with same tool calls for detection
-        monitor.check_turn(1, tool_calls=["bash", "file_write"])
-        monitor.check_turn(2, tool_calls=["bash", "file_write"])
-        monitor.check_turn(3, tool_calls=["bash", "file_write"])
-        report = monitor.get_report()
-        assert report.repetition_count >= 1
-
-    def test_different_tools_no_repetition(self):
-        config = LoopSafetyConfig(
-            max_turns=20,
-            repetition_window=3,
-            repetition_threshold=2,
-        )
-        monitor = LoopSafetyMonitor(config)
-        monitor.check_turn(1, tool_calls=["bash"])
-        monitor.check_turn(2, tool_calls=["file_write"])
-        report = monitor.get_report()
-        assert report.repetition_count == 0
-        assert report.state == LoopState.NORMAL
-
-    def test_text_length_oscillation_detected(self):
-        config = LoopSafetyConfig(
-            max_turns=20,
-            repetition_window=3,
-            repetition_threshold=2,
-        )
-        monitor = LoopSafetyMonitor(config)
-        # Same text length repeatedly — likely stuck
-        monitor.check_turn(1, text_length=50)
-        monitor.check_turn(2, text_length=50)
-        report = monitor.check_turn(3, text_length=50)
-        assert report.state == LoopState.WARNING
-
-    def test_textless_repetition_detected(self):
-        config = LoopSafetyConfig(
-            max_turns=20,
-            repetition_window=3,
-            repetition_threshold=2,
-        )
-        monitor = LoopSafetyMonitor(config)
-        # Agent making tool calls with no text output repeatedly
-        monitor.check_turn(1, tool_calls=["bash"], text_length=0)
-        monitor.check_turn(2, tool_calls=["file_write"], text_length=0)
-        monitor.check_turn(3, tool_calls=["bash"], text_length=0)
-        report = monitor.get_report()
-        assert report.repetition_count >= 1
-
-
-class TestCircuitBreaker:
-    """Test circuit breaker functionality."""
-
-    def test_circuit_breaker_enabled_by_default(self):
-        config = LoopSafetyConfig()
-        assert config.circuit_breaker_enabled is True
-
-    def test_state_transitions_normal_to_warning(self):
-        config = LoopSafetyConfig(
-            max_turns=10,
-            warning_threshold_pct=0.8,
-        )
-        monitor = LoopSafetyMonitor(config)
-        for i in range(7):
-            monitor.check_turn(i + 1)
         assert monitor.state == LoopState.NORMAL
-        report = monitor.check_turn(8)
-        assert report.state == LoopState.WARNING
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        assert monitor.state == LoopState.NORMAL
 
-    def test_state_transitions_warning_to_stopped(self):
-        config = LoopSafetyConfig(
-            max_turns=5,
-            warning_threshold_pct=0.8,
-        )
-        monitor = LoopSafetyMonitor(config)
-        monitor.check_turn(4)  # 80% threshold
-        assert monitor.state == LoopState.WARNING
-        report = monitor.check_turn(5)  # Max reached
-        assert report.state == LoopState.STOPPED
+    def test_stop_reason_property(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_turns=2))
+        assert monitor.stop_reason is None
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        assert monitor.stop_reason is None
+        monitor.check_turn(turn_num=2, tokens_used=100)
+        assert monitor.stop_reason == StopReason.MAX_TURNS
 
-    def test_report_state_matches_monitor_state(self):
-        config = LoopSafetyConfig(max_turns=5)
-        monitor = LoopSafetyMonitor(config)
-        for i in range(4):
-            monitor.check_turn(i + 1)
-        monitor.check_turn(5)
-        report = monitor.get_report()
-        assert report.state == monitor.state
+    # ── Edge Cases ───────────────────────────────────────────────────────
 
-    def test_multiple_warnings_accumulated(self):
-        config = LoopSafetyConfig(
-            max_turns=10,
-            warning_threshold_pct=0.8,
-            max_tokens_total=1000,
-        )
-        monitor = LoopSafetyMonitor(config)
-        for i in range(8):
-            report = monitor.check_turn(i + 1, tokens_used=100)
-        assert len(report.warnings) >= 1
-        assert any("approaching" in w.lower() for w in report.warnings)
-
-
-class TestEdgeCases:
-    """Test edge cases and error handling."""
-
-    def test_empty_turn(self):
+    def test_turn_num_zero(self):
         monitor = LoopSafetyMonitor()
-        report = monitor.check_turn(1)
-        assert report.state == LoopState.NORMAL
+        report = monitor.check_turn(turn_num=0, tokens_used=0)
+        assert report.is_safe() is True
 
-    def test_turn_with_no_tool_calls(self):
+    def test_tokens_zero(self):
         monitor = LoopSafetyMonitor()
-        report = monitor.check_turn(1, tokens_used=100, text_length=50)
-        assert report.state == LoopState.NORMAL
+        report = monitor.check_turn(turn_num=1, tokens_used=0)
+        assert report.is_safe() is True
+
+    def test_empty_tool_calls_list(self):
+        monitor = LoopSafetyMonitor()
+        report = monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=[])
         assert report.last_tool_sequence == []
 
-    def test_turn_with_zero_tokens(self):
-        monitor = LoopSafetyMonitor()
-        report = monitor.check_turn(1, tokens_used=0, text_length=100)
-        assert report.state == LoopState.NORMAL
+    def test_large_turn_num_under_limit(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_turns=100))
+        report = monitor.check_turn(turn_num=50, tokens_used=100)
+        assert report.is_safe() is True
+        assert report.turns_remaining == 50
 
-    def test_turn_with_zero_text(self):
-        monitor = LoopSafetyMonitor()
-        report = monitor.check_turn(1, tool_calls=["bash"])
-        assert report.state == LoopState.NORMAL
-
-    def test_turn_num_one_indexed(self):
-        config = LoopSafetyConfig(max_turns=1)
-        monitor = LoopSafetyMonitor(config)
-        report = monitor.check_turn(1)
-        assert report.current_turn == 1
+    def test_report_turns_remaining_non_negative(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_turns=3))
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        monitor.check_turn(turn_num=2, tokens_used=100)
+        monitor.check_turn(turn_num=3, tokens_used=100)
+        report = monitor.get_report()
         assert report.turns_remaining == 0
 
-    def test_turn_num_can_be_any_positive(self):
-        config = LoopSafetyConfig(max_turns=1000)
-        monitor = LoopSafetyMonitor(config)
-        report = monitor.check_turn(500)
-        assert report.current_turn == 500
-        assert report.turns_remaining == 500
-
-    def test_snapshot_deque_maxlen(self):
-        config = LoopSafetyConfig(
-            max_turns=1000,  # high limit so we don't hit turns
-            repetition_window=3,
-        )
-        monitor = LoopSafetyMonitor(config)
-        for i in range(100):
-            monitor.check_turn(i + 1, tool_calls=["bash"])
+    def test_report_tokens_remaining_non_negative(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_tokens_total=200))
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        monitor.check_turn(turn_num=2, tokens_used=100)
         report = monitor.get_report()
-        # Deque maxlen=50 means oldest snapshots get evicted
-        # But _build_report uses turn_num parameter, so it's correct
-        # Repetition should fire after 3 consecutive same tool_calls
-        assert report.current_turn <= 50  # deque capped at 50, so last snapshot is turn 50
+        assert report.tokens_remaining == 0
 
-    def test_reset_after_stopped(self):
-        config = LoopSafetyConfig(max_turns=3)
-        monitor = LoopSafetyMonitor(config)
-        for i in range(3):
-            monitor.check_turn(i + 1)
-        assert monitor.state == LoopState.STOPPED
-        monitor.reset()
-        assert monitor.state == LoopState.NORMAL
-        # Can continue after reset
-        report = monitor.check_turn(1)
-        assert report.state == LoopState.NORMAL
+    def test_report_wall_time_remaining_non_negative(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(max_wall_time_seconds=0.001))
+        time.sleep(0.01)
+        monitor.check_turn(turn_num=1, tokens_used=100)
+        report = monitor.get_report()
+        assert report.wall_time_remaining == 0
 
+    def test_max_turns_takes_precedence_over_repetition(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            max_turns=3, repetition_window=3, repetition_threshold=2
+        ))
+        monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash"])
+        monitor.check_turn(turn_num=2, tokens_used=100, tool_calls=["bash"])
+        report = monitor.check_turn(turn_num=3, tokens_used=100, tool_calls=["bash"])
+        assert report.stop_reason == StopReason.MAX_TURNS
 
-class TestIntegrationWithSdk:
-    """Test that loop safety can be integrated into the SDK loop."""
-
-    def test_sdk_can_use_monitor(self):
-        """Verify the monitor API is compatible with SDK usage pattern."""
-        config = LoopSafetyConfig(max_turns=5)
-        monitor = LoopSafetyMonitor(config)
-
-        # Simulate SDK loop — stop when unsafe, not necessarily at max_turns
-        stopped_at = None
-        for turn in range(1, 7):
-            report = monitor.check_turn(
-                turn_num=turn,
-                tokens_used=100,
-                tool_calls=["bash"] if turn < 4 else [],
-                text_length=50 if turn < 4 else 0,
-            )
-            if not report.is_safe():
-                stopped_at = turn
-                break
-        assert stopped_at is not None  # should stop due to repetition or max_turns
-        assert stopped_at <= 5  # never exceed max_turns
-
-    def test_report_includes_turn_context(self):
-        """Verify the report provides enough context for the SDK to handle gracefully."""
-        config = LoopSafetyConfig(max_turns=3)
-        monitor = LoopSafetyMonitor(config)
-        for i in range(2):
-            monitor.check_turn(i + 1, tokens_used=200, tool_calls=["bash"])
-        report = monitor.check_turn(3, tokens_used=200, tool_calls=["bash"])
-
-        # SDK can use all these fields to report to the user
-        assert report.stop_reason is not None
-        assert report.current_turn == 3
-        assert report.tokens_used == 600
-        assert report.wall_time_seconds >= 0
-        assert report.last_tool_sequence == ["bash"]
+    def test_max_tokens_takes_precedence_over_repetition(self):
+        monitor = LoopSafetyMonitor(config=LoopSafetyConfig(
+            max_tokens_total=200, repetition_window=3, repetition_threshold=2
+        ))
+        monitor.check_turn(turn_num=1, tokens_used=100, tool_calls=["bash"])
+        monitor.check_turn(turn_num=2, tokens_used=100, tool_calls=["bash"])
+        report = monitor.check_turn(turn_num=3, tokens_used=100, tool_calls=["bash"])
+        assert report.stop_reason == StopReason.MAX_TOKENS

@@ -185,7 +185,12 @@ class EvaluationHarness:
     async def _run_custom_evaluation(self, evaluation: EvaluationResult) -> None:
         """Run custom evaluation."""
         # Run custom evaluation based on metrics
-        evaluation.score = 0.0
+        if evaluation.metrics:
+            # Average all metric values as the score
+            values = [v for v in evaluation.metrics.values() if isinstance(v, (int, float))]
+            evaluation.score = sum(values) / len(values) if values else 0.0
+        else:
+            evaluation.score = 0.0
         evaluation.details = {
             "custom_metrics": evaluation.metrics,
         }

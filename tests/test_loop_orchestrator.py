@@ -3,9 +3,9 @@
 import pytest
 import tempfile
 
-from src.tektos.agents.self_improvement.loop_orchestrator import LoopCycle, SelfImprovementLoop
-from src.tektos.agents.planner.models import BuildSpec, ArchitectureChoice
-from src.tektos.memory.synthesis_engine import SynthesisFeedback
+from tektos.agents.self_improvement.loop_orchestrator import LoopCycle, SelfImprovementLoop
+from tektos.agents.planner.models import BuildSpec, ArchitectureChoice
+from tektos.memory.synthesis_engine import SynthesisFeedback
 
 
 class TestLoopCycle:

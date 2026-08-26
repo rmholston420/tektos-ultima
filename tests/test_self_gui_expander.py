@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.tektos.self_modification.self_gui_expander import (
+from tektos.self_modification.self_gui_expander import (
     GUIChange,
     GUIExpansionPlan,
     SelfGUIExpander,

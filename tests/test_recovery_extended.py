@@ -36,7 +36,7 @@ class TestGetAllSessionIds:
             mock_conn.execute.return_value.fetchall.return_value = [
                 ("session-1",), ("session-2",),
             ]
-            with patch("tektos.recovery.sqlite3.connect", return_value=mock_conn):
+            with patch("tektos.recovery.auto_recovery.sqlite3.connect", return_value=mock_conn):
                 from tektos.recovery import _get_all_session_ids
                 result = _get_all_session_ids()
                 assert result == ["session-1", "session-2"]
@@ -45,7 +45,7 @@ class TestGetAllSessionIds:
     def test_get_all_session_ids_exception(self):
         """Test _get_all_session_ids handles DB errors."""
         with patch("tektos.store.event_store.get_db_path", return_value="/tmp/test.db"):
-            with patch("tektos.recovery.sqlite3.connect", side_effect=Exception("DB down")):
+            with patch("tektos.recovery.auto_recovery.sqlite3.connect", side_effect=Exception("DB down")):
                 from tektos.recovery import _get_all_session_ids
                 result = _get_all_session_ids()
                 assert result == []
@@ -128,7 +128,7 @@ class TestRecoverStateLoadError:
         """Test recover() captures state load failure in errors."""
         session_manager = MagicMock()
 
-        with patch("tektos.recovery._get_all_session_ids", return_value=[]):
+        with patch("tektos.recovery.auto_recovery._get_all_session_ids", return_value=[]):
             with patch.object(AutoRecoveryManager, "_load_state", new_callable=AsyncMock, side_effect=Exception("State corrupt")):
                 manager = AutoRecoveryManager(session_manager=session_manager)
                 report = await manager.recover()
@@ -148,7 +148,7 @@ class TestRecoverSessionScanError:
         """Test recover() handles session scan failure gracefully."""
         session_manager = MagicMock()
 
-        with patch("tektos.recovery._get_all_session_ids", side_effect=Exception("DB query failed")):
+        with patch("tektos.recovery.auto_recovery._get_all_session_ids", side_effect=Exception("DB query failed")):
             manager = AutoRecoveryManager(session_manager=session_manager)
             report = await manager.recover()
 
@@ -170,7 +170,7 @@ class TestRecoverGatewayRestore:
         gateway_manager = MagicMock()
         gateway_manager.restore = AsyncMock(return_value=["telegram"])
 
-        with patch("tektos.recovery._get_all_session_ids", return_value=[]):
+        with patch("tektos.recovery.auto_recovery._get_all_session_ids", return_value=[]):
             manager = AutoRecoveryManager(
                 session_manager=session_manager,
                 gateway_manager=gateway_manager,
@@ -187,7 +187,7 @@ class TestRecoverGatewayRestore:
         gateway_manager = MagicMock()
         gateway_manager.restore = AsyncMock(side_effect=Exception("Gateway down"))
 
-        with patch("tektos.recovery._get_all_session_ids", return_value=[]):
+        with patch("tektos.recovery.auto_recovery._get_all_session_ids", return_value=[]):
             manager = AutoRecoveryManager(
                 session_manager=session_manager,
                 gateway_manager=gateway_manager,
@@ -214,11 +214,11 @@ class TestRecoverSessionsInterruptConfig:
             "payload": {"status": "interrupted"},
         }
 
-        with patch("tektos.recovery._get_all_session_ids", return_value=["session1"]):
+        with patch("tektos.recovery.auto_recovery._get_all_session_ids", return_value=["session1"]):
             async def mock_get_events(*args, **kwargs):
                 return [interrupted_event]
 
-            with patch("tektos.recovery.get_events", side_effect=mock_get_events):
+            with patch("tektos.recovery.auto_recovery.get_events", side_effect=mock_get_events):
                 manager = AutoRecoveryManager(
                     session_manager=session_manager,
                     config=config,
@@ -258,8 +258,8 @@ class TestRecoverSessionsUnknown:
             get_events_calls[1] += 1
             return [unknown_event]
 
-        with patch("tektos.recovery._get_all_session_ids", return_value=["session1"]):
-            with patch("tektos.recovery.get_events", side_effect=mock_get_events):
+        with patch("tektos.recovery.auto_recovery._get_all_session_ids", return_value=["session1"]):
+            with patch("tektos.recovery.auto_recovery.get_events", side_effect=mock_get_events):
                 with patch("tektos.store.event_store.append_event", new_callable=AsyncMock):
                     manager = AutoRecoveryManager(session_manager=session_manager)
                     report = await manager.recover()
@@ -279,11 +279,11 @@ class TestRecoverSessionsUnknown:
             "payload": {"status": "processing"},
         }
 
-        with patch("tektos.recovery._get_all_session_ids", return_value=["session1"]):
+        with patch("tektos.recovery.auto_recovery._get_all_session_ids", return_value=["session1"]):
             async def mock_get_events(*args, **kwargs):
                 return [unknown_event]
 
-            with patch("tektos.recovery.get_events", side_effect=mock_get_events):
+            with patch("tektos.recovery.auto_recovery.get_events", side_effect=mock_get_events):
                 manager = AutoRecoveryManager(
                     session_manager=session_manager,
                     config=config,
@@ -304,11 +304,11 @@ class TestRecoverSessionsNoEvents:
         """Test session with no events is skipped (continue path)."""
         session_manager = MagicMock()
 
-        with patch("tektos.recovery._get_all_session_ids", return_value=["session1"]):
+        with patch("tektos.recovery.auto_recovery._get_all_session_ids", return_value=["session1"]):
             async def mock_get_events(*args, **kwargs):
                 return []
 
-            with patch("tektos.recovery.get_events", side_effect=mock_get_events):
+            with patch("tektos.recovery.auto_recovery.get_events", side_effect=mock_get_events):
                 manager = AutoRecoveryManager(session_manager=session_manager)
                 report = await manager.recover()
 
@@ -343,7 +343,7 @@ class TestRestartSessionFallback:
         # Remove recover_session attribute
         del session_manager.recover_session
 
-        with patch("tektos.recovery.get_events", return_value=[]):
+        with patch("tektos.recovery.auto_recovery.get_events", return_value=[]):
             with patch("tektos.store.event_store.append_event", new_callable=AsyncMock):
                 manager = AutoRecoveryManager(session_manager=session_manager)
                 await manager._restart_session("test-session")

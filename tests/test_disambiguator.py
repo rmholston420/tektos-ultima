@@ -2,14 +2,14 @@
 
 import pytest
 
-from src.tektos.agents.planner.language_game import LanguageGame
-from src.tektos.agents.planner.disambiguator import (
+from tektos.agents.planner.language_game import LanguageGame
+from tektos.agents.planner.disambiguator import (
     find_ambiguities,
     find_vague_terms,
     resolve_ambiguities,
     generate_clarifying_questions,
 )
-from src.tektos.agents.planner.models import Ambiguity, AmbiguityResolution, ClarifyingQuestion
+from tektos.agents.planner.models import Ambiguity, AmbiguityResolution, ClarifyingQuestion
 
 
 class TestFindAmbiguities:

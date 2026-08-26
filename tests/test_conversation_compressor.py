@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.tektos.runtime.conversation_compressor import (
+from tektos.runtime.conversation_compressor import (
     CompressedMessage,
     ConversationCompressor,
 )

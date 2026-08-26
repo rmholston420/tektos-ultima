@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.tektos.runtime.context_monitor import (
+from tektos.runtime.context_monitor import (
     estimate_tokens,
     estimate_message_tokens,
     estimate_session_tokens,

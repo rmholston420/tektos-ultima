@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.tektos.memory.neo4j_memory import (
+from tektos.memory.neo4j_memory import (
     Neo4jMemoryConfig,
     Neo4jProceduralMemory,
 )
@@ -45,7 +45,7 @@ class TestNeo4jProceduralMemory:
     """Tests for Neo4j/DozerDB-backed procedural memory."""
     
     @pytest.mark.skip(reason="Conftest mock infrastructure makes 'not available' simulation impossible — always returns fake neo4j")
-    @patch("src.tektos.memory.neo4j_memory._Neo4j", None)
+    @patch("tektos.memory.neo4j_memory._Neo4j", None)
     def test_neo4j_not_available(self):
         """Test graceful degradation when neo4j driver is not installed."""
         import sys
@@ -54,7 +54,7 @@ class TestNeo4jProceduralMemory:
             del sys.modules[k]
         
         import importlib
-        import src.tektos.memory.neo4j_memory as neo4j_mod
+        import tektos.memory.neo4j_memory as neo4j_mod
         importlib.reload(neo4j_mod)
         
         proc_memory = neo4j_mod.Neo4jProceduralMemory()
@@ -103,7 +103,7 @@ class TestNeo4jProceduralMemory:
         result = proc_memory.get_skill_enhancements("test-skill")
         assert result == []
     
-    @patch("src.tektos.memory.neo4j_memory._Neo4j", None)
+    @patch("tektos.memory.neo4j_memory._Neo4j", None)
     def test_proc_memory_methods_with_mock(self):
         """Test procedural memory methods with mocked Neo4j driver."""
         import sys
@@ -112,7 +112,7 @@ class TestNeo4jProceduralMemory:
             del sys.modules[k]
         
         import importlib
-        import src.tektos.memory.neo4j_memory as neo4j_mod
+        import tektos.memory.neo4j_memory as neo4j_mod
         importlib.reload(neo4j_mod)
         
         proc_memory = neo4j_mod.Neo4jProceduralMemory()

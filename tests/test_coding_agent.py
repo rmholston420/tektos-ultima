@@ -21,8 +21,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.tektos.agents.coding_agent.executor import Executor
-from src.tektos.agents.coding_agent.models import (
+from tektos.agents.coding_agent.executor import Executor
+from tektos.agents.coding_agent.models import (
     ArtifactType,
     CodingAgentFeedback,
     ExecutionArtifact,
@@ -31,7 +31,7 @@ from src.tektos.agents.coding_agent.models import (
     ExecutionStep,
     ExecutionTestReport,
 )
-from src.tektos.agents.planner.models import BuildSpec, SpecPhase
+from tektos.agents.planner.models import BuildSpec, SpecPhase
 
 # ---------------------------------------------------------------------------
 # Helpers

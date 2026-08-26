@@ -4,7 +4,7 @@ import os
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from src.tektos.auth import (
+from tektos.auth import (
     _API_KEY_ENABLED,
     _API_KEY,
     verify_api_key,
@@ -23,7 +23,7 @@ class TestAPIKeyStatus:
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true"}, clear=False):
             # Re-import to pick up env
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             status = auth_module.get_api_key_status()
             assert status["enabled"] is True
@@ -32,7 +32,7 @@ class TestAPIKeyStatus:
     def test_enabled_with_key(self):
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true", "TEKTOS_API_KEY": "secret123"}, clear=False):
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             status = auth_module.get_api_key_status()
             assert status["enabled"] is True
@@ -49,7 +49,7 @@ class TestVerifyApiKey:
     async def test_valid_header(self):
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true", "TEKTOS_API_KEY": "secret123"}, clear=False):
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             request = MagicMock()
             request.headers.get.return_value = "secret123"
@@ -61,7 +61,7 @@ class TestVerifyApiKey:
     async def test_invalid_header(self):
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true", "TEKTOS_API_KEY": "secret123"}, clear=False):
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             request = MagicMock()
             request.headers.get.return_value = "wrong"
@@ -72,7 +72,7 @@ class TestVerifyApiKey:
     async def test_no_header_falls_to_query(self):
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true", "TEKTOS_API_KEY": "secret123"}, clear=False):
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             request = MagicMock()
             request.headers.get.return_value = None
@@ -84,7 +84,7 @@ class TestVerifyApiKey:
     async def test_no_key_returns_none(self):
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true", "TEKTOS_API_KEY": "secret123"}, clear=False):
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             request = MagicMock()
             request.headers.get.return_value = None
@@ -96,7 +96,7 @@ class TestVerifyApiKey:
     async def test_query_param_invalid(self):
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true", "TEKTOS_API_KEY": "secret123"}, clear=False):
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             request = MagicMock()
             request.headers.get.return_value = None
@@ -118,7 +118,7 @@ class TestAPIKeyMiddleware:
     async def test_valid_key_passes_through(self):
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true", "TEKTOS_API_KEY": "secret123"}, clear=False):
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             middleware = auth_module.APIKeyMiddleware(MagicMock())
             request = MagicMock()
@@ -131,7 +131,7 @@ class TestAPIKeyMiddleware:
     async def test_no_key_passes_through(self):
         with patch.dict(os.environ, {"TEKTOS_API_KEY_ENABLED": "true", "TEKTOS_API_KEY": "secret123"}, clear=False):
             import importlib
-            import src.tektos.auth as auth_module
+            import tektos.auth as auth_module
             importlib.reload(auth_module)
             middleware = auth_module.APIKeyMiddleware(MagicMock())
             request = MagicMock()

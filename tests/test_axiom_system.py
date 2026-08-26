@@ -5,7 +5,7 @@ import tempfile
 import yaml
 from pathlib import Path
 
-from src.tektos.axioms import (
+from tektos.axioms import (
     Axiom,
     AxiomSystem,
     load_axioms,

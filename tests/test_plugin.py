@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.tektos.plugin import Plugin, PluginConfig, PluginRegistry
+from tektos.plugin import Plugin, PluginConfig, PluginRegistry
 
 
 # ---------------------------------------------------------------------------

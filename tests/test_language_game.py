@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.tektos.agents.planner.language_game import (
+from tektos.agents.planner.language_game import (
     LanguageGame,
     classify_language_game,
     get_language_game_description,

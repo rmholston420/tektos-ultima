@@ -39,7 +39,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from src.tektos.memory.memory_system import (
+from tektos.memory.memory_system import (
     DreamState,
     DreamResult,
     DreamtimeEngine,

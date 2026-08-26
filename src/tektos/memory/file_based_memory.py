@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.tektos.runtime.embedder import EmbedderClient
+from tektos.runtime.embedder import EmbedderClient
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +372,7 @@ class FileBasedMemory:
             return self._keyword_recall(query, top_k)
 
         # Compute cosine similarity
-        from src.tektos.runtime.embedder import cosine_similarity
+        from tektos.runtime.embedder import cosine_similarity
         scored: list[tuple[float, MemoryEntry]] = []
         for i, vec in enumerate(entry_vecs):
             sim = cosine_similarity(query_vec, vec)

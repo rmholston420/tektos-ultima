@@ -14,18 +14,18 @@ from pathlib import Path
 
 import pytest
 
-from src.tektos.agents.planner.language_game import (
+from tektos.agents.planner.language_game import (
     LanguageGame,
     classify_language_game,
     get_language_game_description,
 )
-from src.tektos.agents.planner.disambiguator import (
+from tektos.agents.planner.disambiguator import (
     find_ambiguities,
     find_vague_terms,
     generate_clarifying_questions,
     resolve_ambiguities,
 )
-from src.tektos.agents.planner.models import (
+from tektos.agents.planner.models import (
     Ambiguity,
     AmbiguityResolution,
     ArchitectureChoice,
@@ -35,16 +35,16 @@ from src.tektos.agents.planner.models import (
     PlannerOutput,
     SpecPhase,
 )
-from src.tektos.agents.planner.orchestrator import Planner
-from src.tektos.agents.planner.spec_generator import (
+from tektos.agents.planner.orchestrator import Planner
+from tektos.agents.planner.spec_generator import (
     generate_spec,
 )
-from src.tektos.agents.planner.template_selector import (
+from tektos.agents.planner.template_selector import (
     TEMPLATES,
     choose_best_template,
     select_best_templates,
 )
-from src.tektos.agents.planner.translator import (
+from tektos.agents.planner.translator import (
     translate_to_technical_english,
     add_spec_context,
 )

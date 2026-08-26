@@ -41,13 +41,19 @@ const DynamicNervousSystemPanel = dynamic(() => import("@/components/panels/Nerv
 const DynamicToolsPanel = dynamic(() => import("@/components/panels/ToolsPanel").then((m) => m.ToolsPanel), { ssr: false });
 const DynamicMetabolismPanel = dynamic(() => import("@/components/panels/MetabolismPanel").then((m) => m.MetabolismPanel), { ssr: false });
 const DynamicSchemaEvolutionPanel = dynamic(() => import("@/components/panels/SchemaEvolutionPanel").then((m) => m.SchemaEvolutionPanel), { ssr: false });
+const DynamicImmuneSystemPanel = dynamic(() => import("@/components/panels/ImmuneSystemPanel").then((m) => m.ImmuneSystemPanel), { ssr: false });
+const DynamicDatabasePanel = dynamic(() => import("@/components/panels/DatabasePanel").then((m) => m.DatabasePanel), { ssr: false });
+const DynamicSelfRepairPanel = dynamic(() => import("@/components/panels/SelfRepairPanel").then((m) => m.SelfRepairPanel), { ssr: false });
+const DynamicThermalPanel = dynamic(() => import("@/components/panels/ThermalPanel").then((m) => m.ThermalPanel), { ssr: false });
+const DynamicSelfImprovementPanel = dynamic(() => import("@/components/panels/SelfImprovementPanel").then((m) => m.SelfImprovementPanel), { ssr: false });
+const DynamicPlannerPanel = dynamic(() => import("@/components/panels/PlannerPanel").then((m) => m.PlannerPanel), { ssr: false });
 
 // ---------------------------------------------------------------------------
 // Page types
 // ---------------------------------------------------------------------------
 
 type PageType = "chat" | "dashboard";
-type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "schema" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings";
+type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "schema" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings" | "immune" | "database" | "self_repair" | "thermal" | "self_improvement" | "planner";
 
 const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "overview", label: "Overview", icon: "◈" },
@@ -68,6 +74,12 @@ const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "logs", label: "Logs", icon: "▤" },
   { id: "scheduling", label: "Schedule", icon: "⏱" },
   { id: "settings", label: "Settings", icon: "⚙" },
+  { id: "immune", label: "Immune", icon: "🛡" },
+  { id: "database", label: "Database", icon: "🗄" },
+  { id: "self_repair", label: "Self-Repair", icon: "🔧" },
+  { id: "thermal", label: "Thermal", icon: "🌡️" },
+  { id: "self_improvement", label: "Self-Improvement", icon: "🧠" },
+  { id: "planner", label: "Planner", icon: "📋" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -413,6 +425,12 @@ export default function App() {
       logs: () => <DynamicLogsPanel />,
       scheduling: () => <DynamicSchedulingPanel />,
       settings: () => <DynamicSettingsPanel />,
+      immune: () => <DynamicImmuneSystemPanel />,
+      database: () => <DynamicDatabasePanel />,
+      self_repair: () => <DynamicSelfRepairPanel />,
+      thermal: () => <DynamicThermalPanel />,
+      self_improvement: () => <DynamicSelfImprovementPanel />,
+      planner: () => <DynamicPlannerPanel />,
     };
     return tabMap[activeTab];
   }, [activeTab]);

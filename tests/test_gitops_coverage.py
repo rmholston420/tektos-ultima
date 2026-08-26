@@ -25,7 +25,7 @@ def git_repo():
         yield repo
 
 
-from src.tektos.gitops import GitOpsEngine, GitDiff, GitStatus, execute_git_tool
+from tektos.gitops import GitOpsEngine, GitDiff, GitStatus, execute_git_tool
 
 
 class TestGitDiffToDict:
@@ -149,7 +149,7 @@ class TestRollbackCommitHash:
         commit_hash = hash_result.stdout.strip()
         # Rollback to current commit (len >= 7 triggers the commit hash path)
         result = engine.rollback(target=commit_hash, hard=False)
-        assert result is True
+        assert result.success is True
 
 
 class TestDeleteBranchCurrent:

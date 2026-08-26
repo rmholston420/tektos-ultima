@@ -5,7 +5,7 @@ import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.tektos.telegram_gateway import (
+from tektos.telegram_gateway import (
     TelegramGateway,
     TektosStates,
     create_telegram_gateway,

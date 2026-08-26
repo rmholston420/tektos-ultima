@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.tektos.plugin import Plugin, PluginConfig, PluginRegistry
-from src.tektos.plugin_loader import PluginLoader, PLUGIN_DIRS
+from tektos.plugin import Plugin, PluginConfig, PluginRegistry
+from tektos.plugin_loader import PluginLoader, PLUGIN_DIRS
 
 
 class MockPluginA(Plugin):

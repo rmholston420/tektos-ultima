@@ -3,21 +3,21 @@
 import pytest
 from unittest.mock import patch
 
-from src.tektos.agents.manager.models import (
+from tektos.agents.manager.models import (
     FeedbackSeverity,
     FeedbackType,
     ManagerFeedback,
     ManagerState,
     SpiralDirection,
 )
-from src.tektos.agents.manager.guardrails import Guardrail, GuardrailLevel, GUARDRAIL_RULES
-from src.tektos.agents.manager.metrics import (
+from tektos.agents.manager.guardrails import Guardrail, GuardrailLevel, GUARDRAIL_RULES
+from tektos.agents.manager.metrics import (
     MetricSample,
     MetricThreshold,
     PrimeMoverMetrics,
 )
-from src.tektos.agents.manager.archetype_tracker import Archetype, ArchetypeEvent, ArchetypeTracker
-from src.tektos.agents.manager.orchestrator import Manager
+from tektos.agents.manager.archetype_tracker import Archetype, ArchetypeEvent, ArchetypeTracker
+from tektos.agents.manager.orchestrator import Manager
 
 
 class TestGuardrail:

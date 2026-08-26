@@ -35,7 +35,7 @@ log = logging.getLogger("tektos.voice")
 # Whisper model — CPU mode (GPU is full with llama-server)
 _WHISPER_MODEL_NAME = os.getenv("TEKTOS_WHISPER_MODEL", "large-v3-turbo")
 _WHISPER_DEVICE = os.getenv("TEKTOS_WHISPER_DEVICE", "cpu")
-_WHISPER_COMPUTE_TYPE = os.getenv("TEKTOS_WHISPER_COMPUTE_TYPE", "float16")
+_WHISPER_COMPUTE_TYPE = os.getenv("TEKTOS_WHISPER_COMPUTE_TYPE", "int8")
 
 # TTS voice — Microsoft Edge neural voice
 # en-IN-PrabhatNeural: male Indian English — closest to a wise elder from NW India/Kashmir

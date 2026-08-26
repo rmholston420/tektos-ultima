@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from src.tektos.migrations.engine import SchemaMigrationEngine
+from tektos.migrations.engine import SchemaMigrationEngine
 
 
 class TestMigrationEngineRegistration:

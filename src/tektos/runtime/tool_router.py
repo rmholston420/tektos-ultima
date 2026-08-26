@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from src.tektos.runtime.embedder import EmbedderClient
+from tektos.runtime.embedder import EmbedderClient
 
 logger = logging.getLogger(__name__)
 
@@ -481,7 +481,7 @@ class ToolRouter:
             return self.route_tool(task_description)
 
         # Compute similarities
-        from src.tektos.runtime.embedder import cosine_similarity
+        from tektos.runtime.embedder import cosine_similarity
         scored: list[tuple[float, str]] = []
         for t_name, t_vec in tool_vecs:
             sim = cosine_similarity(task_vec.embeddings[0], t_vec)

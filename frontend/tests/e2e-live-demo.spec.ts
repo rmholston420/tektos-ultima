@@ -9,7 +9,7 @@
 
 import { test, expect } from '@playwright/test';
 
-const FRONTEND = 'http://localhost:3003';
+const FRONTEND = 'http://localhost:3002';
 const BACKEND = 'http://localhost:8020';
 
 test.describe('Tektos Live Demo', () => {

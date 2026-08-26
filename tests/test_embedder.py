@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from src.tektos.runtime.embedder import (
+from tektos.runtime.embedder import (
     EmbedderClient,
     EmbeddingResult,
     SimilarityMatch,

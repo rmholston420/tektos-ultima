@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.tektos.agents.coding_agent.models import (
+from tektos.agents.coding_agent.models import (
     ArtifactType,
     CodingAgentFeedback,
     ExecutionArtifact,
@@ -31,7 +31,7 @@ from src.tektos.agents.coding_agent.models import (
     ExecutionStep,
     ExecutionTestReport,
 )
-from src.tektos.agents.planner.models import BuildSpec, SpecPhase
+from tektos.agents.planner.models import BuildSpec, SpecPhase
 
 
 class Executor:

@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.tektos.agents.planner.translator import (
+from tektos.agents.planner.translator import (
     translate_to_technical_english,
     add_spec_context,
 )

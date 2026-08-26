@@ -53,7 +53,7 @@ class TestLanguageGameTieBreak:
 
     def test_tie_prefers_software_engineering(self):
         """When SE and SYSTEMS tie, SE wins."""
-        from src.tektos.agents.planner.language_game import (
+        from tektos.agents.planner.language_game import (
             LanguageGame,
             classify_language_game,
         )
@@ -66,7 +66,7 @@ class TestLanguageGameTieBreak:
 
     def test_tie_prefers_systems_when_no_se(self):
         """When SYSTEMS and BUDDHIST tie, SYSTEMS wins."""
-        from src.tektos.agents.planner.language_game import (
+        from tektos.agents.planner.language_game import (
             LanguageGame,
             classify_language_game,
         )
@@ -81,23 +81,23 @@ class TestSanitizeLike:
     """Cover db_utils.py lines 94-97 (sanitize_like_pattern)."""
 
     def test_escape_percent(self):
-        from src.tektos.utils.db_utils import sanitize_like_pattern
+        from tektos.utils.db_utils import sanitize_like_pattern
         result = sanitize_like_pattern("100%")
         # % should be escaped to \%
         assert "\\%" in result
 
     def test_escape_underscore(self):
-        from src.tektos.utils.db_utils import sanitize_like_pattern
+        from tektos.utils.db_utils import sanitize_like_pattern
         result = sanitize_like_pattern("a_b")
         assert "\\_" in result
 
     def test_escape_backslash(self):
-        from src.tektos.utils.db_utils import sanitize_like_pattern
+        from tektos.utils.db_utils import sanitize_like_pattern
         result = sanitize_like_pattern("a\\b")
         assert "\\\\" in result or "\\\\" in repr(result)
 
     def test_empty_pattern(self):
-        from src.tektos.utils.db_utils import sanitize_like_pattern
+        from tektos.utils.db_utils import sanitize_like_pattern
         result = sanitize_like_pattern("")
         assert result == ""
 

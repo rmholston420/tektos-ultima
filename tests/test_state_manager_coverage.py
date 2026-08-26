@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.tektos.runtime.state_manager import LastKnownState, StateManager
+from tektos.runtime.state_manager import LastKnownState, StateManager
 
 
 class TestLastKnownStateMarkdownFields:

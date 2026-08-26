@@ -25,10 +25,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from src.tektos.agents.planner.models import BuildSpec, W5H1M
-from src.tektos.agents.planner.template_selector import select_best_templates
-from src.tektos.memory.memory_system import MemorySystem
-from src.tektos.memory.reflection_engine import (
+from tektos.agents.planner.models import BuildSpec, W5H1M
+from tektos.agents.planner.template_selector import select_best_templates
+from tektos.memory.memory_system import MemorySystem
+from tektos.memory.reflection_engine import (
     ReflectionInsight,
     ReflectionState,
     ReflectionEngine,

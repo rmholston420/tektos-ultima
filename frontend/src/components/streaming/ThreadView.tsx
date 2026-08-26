@@ -15,7 +15,6 @@
 import {
   ThreadPrimitive,
   MessagePrimitive,
-  useMessagePartText,
   useAuiState,
   useMessageRuntime,
 } from "@assistant-ui/react";
@@ -85,7 +84,8 @@ const DirectiveChip = memo(function DirectiveChip({
 const DIRECTIVE_RE = /@([a-z][\w-]*):(`[^`]+`|"[^"]+"|'[^']+'|\S+)/g;
 
 function parseDirectives(text: string) {
-  const segments: { kind: "text"; text: string } | { kind: "ref"; type: string; id: string }[] = [];
+  type Segment = { kind: "text"; text: string } | { kind: "ref"; type: string; id: string };
+  const segments: Segment[] = [];
   let cursor = 0;
   for (const match of text.matchAll(DIRECTIVE_RE)) {
     if (match.index !== undefined && match.index > cursor) {
@@ -266,73 +266,59 @@ const HEADING_SIZES: Record<"h1" | "h2" | "h3" | "h4", string> = {
   h4: "text-[0.8125rem] my-1 font-semibold",
 };
 
-const StreamdownMarkdown = memo(function StreamdownMarkdown({ text }: { text: string }) {
-  const components = useMemo<StreamdownTextComponents>(
-    () => ({
-      h1: ({ className, ...props }) => <h1 className={`${HEADING_SIZES.h1} ${className ?? ""}`} {...props} />,
-      h2: ({ className, ...props }) => <h2 className={`${HEADING_SIZES.h2} ${className ?? ""}`} {...props} />,
-      h3: ({ className, ...props }) => <h3 className={`${HEADING_SIZES.h3} ${className ?? ""}`} {...props} />,
-      h4: ({ className, ...props }) => <h4 className={`${HEADING_SIZES.h4} ${className ?? ""}`} {...props} />,
-      p: ({ className, ...props }) => <p className={`leading-relaxed ${className ?? ""}`} {...props} />,
-      code: ({ className, ...props }) => (
-        <code className="rounded bg-muted/80 px-1 py-0.5 font-mono text-[0.9em] text-muted-foreground" {...props} />
-      ),
-      pre: ({ children, className, ...props }) => (
-        <ExpandableBlock className="rounded-md border border-[var(--ui-stroke-tertiary)] bg-muted/35 p-2">
-          <pre className={`overflow-x-auto font-mono text-[0.75rem] leading-relaxed ${className ?? ""}`} {...props}>
-            {children}
-          </pre>
-        </ExpandableBlock>
-      ),
-      blockquote: ({ className, ...props }) => (
-        <blockquote className={`mt-2 mb-2 border-l-2 border-[var(--ui-stroke-tertiary)] pl-2.5 italic text-muted-foreground/85 ${className ?? ""}`} {...props} />
-      ),
-      hr: () => <hr className="my-2 border-[var(--ui-stroke-tertiary)]" />,
-      ul: ({ className, ...props }) => <ul className={`mb-2 list-disc pl-5 last:mb-0 ${className ?? ""}`} {...props} />,
-      ol: ({ className, ...props }) => <ol className={`mb-2 list-decimal pl-5 last:mb-0 ${className ?? ""}`} {...props} />,
-      li: ({ className, ...props }) => <li className={`marker:text-muted-foreground/60 ${className ?? ""}`} {...props} />,
-      table: ({ children, className, ...props }) => (
-        <div className="mb-2 max-w-full overflow-x-auto rounded-md border border-[var(--ui-stroke-tertiary)] last:mb-0">
-          <table className={`w-full border-collapse text-xs [&_tr]:border-b [&_tr]:border-[var(--ui-stroke-tertiary)] last:[&_tr]:border-0 ${className ?? ""}`} {...props}>
-            {children}
-          </table>
-        </div>
-      ),
-      th: ({ className, ...props }) => <th className={`px-2 py-1 text-left text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80 ${className ?? ""}`} {...props} />,
-      td: ({ className, ...props }) => <td className={`px-2 py-1 align-top leading-snug ${className ?? ""}`} {...props} />,
-      a: ({ href, children, className, ...props }) => {
-        const isLocal = href?.startsWith("/") || href?.startsWith("http://localhost");
-        return (
-          <a
-            className={`text-accent hover:underline ${className ?? ""}`}
-            href={href}
-            target={isLocal ? "_self" : "_blank"}
-            rel={isLocal ? undefined : "noopener noreferrer"}
-            {...props}
-          >
-            {children}
-          </a>
-        );
-      },
-    }),
-    [],
-  );
-
-  return (
-    <StreamdownTextPrimitive defer components={components}>
-      {text}
-    </StreamdownTextPrimitive>
-  );
-});
+// Shared streamdown components config
+const STREAMDOWN_COMPONENTS: StreamdownTextComponents = {
+  h1: ({ className, ...props }) => <h1 className={`${HEADING_SIZES.h1} ${className ?? ""}`} {...props} />,
+  h2: ({ className, ...props }) => <h2 className={`${HEADING_SIZES.h2} ${className ?? ""}`} {...props} />,
+  h3: ({ className, ...props }) => <h3 className={`${HEADING_SIZES.h3} ${className ?? ""}`} {...props} />,
+  h4: ({ className, ...props }) => <h4 className={`${HEADING_SIZES.h4} ${className ?? ""}`} {...props} />,
+  p: ({ className, ...props }) => <p className={`leading-relaxed ${className ?? ""}`} {...props} />,
+  code: ({ className, ...props }) => (
+    <code className="rounded bg-muted/80 px-1 py-0.5 font-mono text-[0.9em] text-muted-foreground" {...props} />
+  ),
+  pre: ({ children, className, ...props }) => (
+    <ExpandableBlock className="rounded-md border border-[var(--ui-stroke-tertiary)] bg-muted/35 p-2">
+      <pre className={`overflow-x-auto font-mono text-[0.75rem] leading-relaxed ${className ?? ""}`} {...props}>
+        {children}
+      </pre>
+    </ExpandableBlock>
+  ),
+  blockquote: ({ className, ...props }) => (
+    <blockquote className={`mt-2 mb-2 border-l-2 border-[var(--ui-stroke-tertiary)] pl-2.5 italic text-muted-foreground/85 ${className ?? ""}`} {...props} />
+  ),
+  hr: () => <hr className="my-2 border-[var(--ui-stroke-tertiary)]" />,
+  ul: ({ className, ...props }) => <ul className={`mb-2 list-disc pl-5 last:mb-0 ${className ?? ""}`} {...props} />,
+  ol: ({ className, ...props }) => <ol className={`mb-2 list-decimal pl-5 last:mb-0 ${className ?? ""}`} {...props} />,
+  li: ({ className, ...props }) => <li className={`marker:text-muted-foreground/60 ${className ?? ""}`} {...props} />,
+  table: ({ children, className, ...props }) => (
+    <div className="mb-2 max-w-full overflow-x-auto rounded-md border border-[var(--ui-stroke-tertiary)] last:mb-0">
+      <table className={`w-full border-collapse text-xs [&_tr]:border-b [&_tr]:border-[var(--ui-stroke-tertiary)] last:[&_tr]:border-0 ${className ?? ""}`} {...props}>
+        {children}
+      </table>
+    </div>
+  ),
+  th: ({ className, ...props }) => <th className={`px-2 py-1 text-left text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80 ${className ?? ""}`} {...props} />,
+  td: ({ className, ...props }) => <td className={`px-2 py-1 align-top leading-snug ${className ?? ""}`} {...props} />,
+  a: ({ href, children, className, ...props }) => {
+    const isLocal = href?.startsWith("/") || href?.startsWith("http://localhost");
+    return (
+      <a
+        className={`text-accent hover:underline ${className ?? ""}`}
+        href={href}
+        target={isLocal ? "_self" : "_blank"}
+        rel={isLocal ? undefined : "noopener noreferrer"}
+        {...props}
+      >
+        {children}
+      </a>
+    );
+  },
+};
 
 const StreamingTextPart = memo(function StreamingTextPart() {
-  const { status, text } = useMessagePartText();
-
-  if (!text) return null;
-
   return (
     <div className={MARKDOWN_CONTAINER_CLASS}>
-      <StreamdownMarkdown text={text} />
+      <StreamdownTextPrimitive defer components={STREAMDOWN_COMPONENTS} />
     </div>
   );
 });

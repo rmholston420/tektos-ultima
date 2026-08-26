@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from src.tektos.providers.vision_client import VisionClient, VisionResult
+from tektos.providers.vision_client import VisionClient, VisionResult
 
 
 # ---------------------------------------------------------------------------

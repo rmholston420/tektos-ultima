@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import pytest
 
-from src.tektos.agents.planner.models import LanguageGame
-from src.tektos.memory.memory_system import MemorySystem
-from src.tektos.memory.reflection_engine import (
+from tektos.agents.planner.models import LanguageGame
+from tektos.memory.memory_system import MemorySystem
+from tektos.memory.reflection_engine import (
     ReflectionEngine,
     ReflectionInsight,
     ReflectionState,
 )
-from src.tektos.memory.synthesis_engine import (
+from tektos.memory.synthesis_engine import (
     SynthesisEngine,
     SynthesisFeedback,
 )

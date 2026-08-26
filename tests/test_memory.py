@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.tektos.memory.memory_system import (
+from tektos.memory.memory_system import (
     Hemisphere,
     MemoryEntry,
     MemorySystem,
@@ -39,8 +39,8 @@ def _isolated_db(monkeypatch):
     td = tempfile.mkdtemp()
     db_path = os.path.join(td, "test.db")
 
-    from src.tektos.memory import memory_system as ms_mod
-    from src.tektos.memory.persistence import MemoryPersistence as RealPersistence
+    from tektos.memory import memory_system as ms_mod
+    from tektos.memory.persistence import MemoryPersistence as RealPersistence
 
     class IsolatedPersistence:
         def __init__(self):

@@ -50,6 +50,29 @@ _tool_registry: Any = None
 _mcp_client: Any = None
 _metabolism: Any = None
 _voice_manager: Any = None
+_self_repair_engine: Any = None
+_immune_system: Any = None
+_loop_safety_monitor: Any = None
+_loop_guard: Any = None
+_hierarchical_agent: Any = None
+_long_running_agent: Any = None
+_coding_agent_executor: Any = None
+_memory_persistence: Any = None
+_hindsight_client: Any = None
+_reflection_engine: Any = None
+_synthesis_engine: Any = None
+_unified_search: Any = None
+_gitops_engine: Any = None
+_auto_recovery: Any = None
+_telemetry_collector: Any = None
+_self_improvement_loop_simple: Any = None
+_self_improvement_loop_orchestrator: Any = None
+_self_modification_engine: Any = None
+_plugin_loader: Any = None
+_axiom_system: Any = None
+_neo4j_backend: Any = None
+_postgres_backend: Any = None
+_redis_backend: Any = None
 
 from tektos.db_manager import DatabaseManager
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
@@ -64,6 +87,7 @@ from tektos.runtime.session import LiveSession, SessionManager
 from tektos.runtime.session_state import SessionState, SessionStateManager
 from tektos.runtime.ws_manager import WebSocketManager
 from tektos.self_improvement.engine import SelfImprovementAdapter
+from tektos.thermal import ThermalMonitor
 from tektos.store.event_store import (
     append_event,
     get_events,
@@ -80,6 +104,7 @@ ws_manager: WebSocketManager
 schema_engine: SchemaEvolutionEngine
 db_manager: DatabaseManager
 self_improvement: SelfImprovementAdapter
+thermal_monitor: ThermalMonitor | None = None
 vision_client: Any = None
 telegram_gateway: Any = None
 state_managers: dict[str, SessionStateManager] = {}
@@ -93,6 +118,19 @@ state_managers: dict[str, SessionStateManager] = {}
 async def lifespan(app: _FastAPI):
     """Initialize and clean up resources."""
     global session_manager, runtime_sdk, ws_manager, schema_engine, self_improvement
+    global _skill_manager, _skill_executor
+    global _tool_registry, _mcp_client
+    global _metabolism, _voice_manager
+    global _self_repair_engine
+    global _immune_system, _loop_safety_monitor, _loop_guard
+    global _hierarchical_agent, _long_running_agent, _coding_agent_executor
+    global _memory_persistence, _hindsight_client, _reflection_engine, _synthesis_engine
+    global _self_improvement_loop_simple, _self_improvement_loop_orchestrator
+    global _self_modification_engine, _plugin_loader, _axiom_system
+    global _neo4j_backend, _postgres_backend, _redis_backend
+    global _unified_search, _gitops_engine, _auto_recovery, _telemetry_collector
+    global thermal_monitor, vision_client, telegram_gateway
+    global memory_system
 
     # 1. Initialize event store FIRST (provides db_path)
     from tektos.store.event_store import init as init_event_store
@@ -171,6 +209,20 @@ async def lifespan(app: _FastAPI):
         ws_event_emitter=lambda **kw: _emit_schema_event(**kw),
         skill_manager=_skill_manager,
     )
+
+    # 7b. Initialize thermal regulation monitor
+    global thermal_monitor
+    try:
+        thermal_monitor = ThermalMonitor(
+            gpu_index=0,
+            interval=10,
+            target_temp=72.0,
+        )
+        await thermal_monitor.start()
+        log.info("Thermal monitor initialized and started")
+    except Exception as exc:
+        log.warning("Failed to initialize thermal monitor: %s", exc)
+        thermal_monitor = None
 
     # 8. Initialize event bus + state machine (nervous system)
     _event_bus = get_event_bus()
@@ -503,12 +555,15 @@ async def lifespan(app: _FastAPI):
     _metabolism = MetabolismEngine(event_bus=_event_bus, max_tokens=262144)
     log.info("Metabolism engine initialized")
 
-    # 11. Initialize voice system (ears and voice)
+    # 11. Initialize voice system (ears and voice) — optional, may fail if model unavailable
     global _voice_manager
     from tektos.voice import get_voice_manager
     _voice_manager = get_voice_manager()
-    await _voice_manager.initialize()
-    log.info("Voice system initialized")
+    try:
+        await _voice_manager.initialize()
+        log.info("Voice system initialized")
+    except Exception as e:
+        log.warning("Voice system initialization failed (non-fatal): %s", e)
     log.info("Metabolism engine initialized (VRAM + context budget + power)")
 
     # 11. Start runtime SDK
@@ -563,6 +618,290 @@ async def lifespan(app: _FastAPI):
     else:
         log.info("Telegram gateway skipped (TEKTOS_TELEGRAM_BOT_TOKEN not set)")
 
+    # 12. Initialize self-repair engine (healing + degradation)
+    from tektos.self_repair import get_self_repair_engine
+    global _self_repair_engine
+    _self_repair_engine = get_self_repair_engine()
+    await _self_repair_engine.start()
+    log.info("Self-repair engine initialized and started")
+
+    # 13. Initialize safety systems — immune system, loop safety, loop guard
+    # These are critical: they protect the system during execution.
+    from tektos.runtime.immune_system import ImmuneSystem
+    from tektos.runtime.loop_safety import LoopSafetyMonitor, LoopSafetyConfig
+    from tektos.runtime.loop_guard import ToolCallLoopGuard
+    global _immune_system, _loop_safety_monitor, _loop_guard
+    try:
+        _immune_system = ImmuneSystem(
+            gpu_temp_warning=70.0,
+            gpu_temp_critical=80.0,
+            gpu_temp_emergency=88.0,
+            gpu_vram_warning=0.85,
+            gpu_vram_critical=0.95,
+            context_max_tokens=262144,
+            loop_threshold=5,
+            repetition_threshold=3,
+            error_threshold=5,
+        )
+        await _immune_system.start()
+        log.info("Immune system initialized and started (9 threat detectors)")
+    except Exception as exc:
+        log.warning("Failed to initialize immune system: %s", exc)
+        _immune_system = None
+
+    try:
+        _loop_safety_monitor = LoopSafetyMonitor(
+            config=LoopSafetyConfig(
+                max_turns=15,
+                max_tokens_per_turn=8192,
+                max_tokens_total=65536,
+                max_wall_time_seconds=300.0,
+                repetition_window=3,
+                repetition_threshold=2,
+            )
+        )
+        log.info("Loop safety monitor initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize loop safety monitor: %s", exc)
+        _loop_safety_monitor = None
+
+    try:
+        _loop_guard = ToolCallLoopGuard(
+            window_size=20,
+            warning_threshold=5,
+            block_threshold=8,
+        )
+        log.info("Tool call loop guard initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize loop guard: %s", exc)
+        _loop_guard = None
+
+    # 14. Initialize core agent systems — hierarchical agent, long-running agent, coding agent executor
+    from tektos.runtime.hierarchical_agent import HierarchicalAgent
+    from tektos.runtime.long_running_agent import LongRunningAgent
+    from tektos.agents.coding_agent.executor import Executor as CodingAgentExecutor
+    global _hierarchical_agent, _long_running_agent, _coding_agent_executor
+    try:
+        _hierarchical_agent = HierarchicalAgent(max_concurrent_agents=3)
+        log.info("Hierarchical agent initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize hierarchical agent: %s", exc)
+        _hierarchical_agent = None
+
+    try:
+        _long_running_agent = LongRunningAgent(
+            session_id="default",
+            checkpoint_dir=str(_Path.home() / ".tektos/checkpoints"),
+        )
+        await _long_running_agent.start()
+        log.info("Long-running agent initialized and started")
+    except Exception as exc:
+        log.warning("Failed to initialize long-running agent: %s", exc)
+        _long_running_agent = None
+
+    try:
+        _coding_agent_executor = CodingAgentExecutor(
+            workspace=str(_Path.home() / ".tektos/sandbox"),
+        )
+        log.info("Coding agent executor initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize coding agent executor: %s", exc)
+        _coding_agent_executor = None
+
+    # 15. Initialize memory tier — persistence, hindsight, reflection, synthesis
+    from tektos.memory.persistence import MemoryPersistence
+    from tektos.memory.hindsight_client import HindsightClient, HindsightConfig
+    from tektos.memory.reflection_engine import ReflectionEngine
+    from tektos.memory.synthesis_engine import SynthesisEngine
+    global _memory_persistence, _hindsight_client, _reflection_engine, _synthesis_engine
+    try:
+        _memory_persistence = MemoryPersistence(
+            db_path=str(_Path(__file__).parent / ".." / ".." / "data" / "memory.db"),
+        )
+        _memory_persistence.start_decay_scheduler(interval=120.0)
+        log.info("Memory persistence initialized (SQLite: working/long-term/procedural)")
+    except Exception as exc:
+        log.warning("Failed to initialize memory persistence: %s", exc)
+        _memory_persistence = None
+
+    # 16. Initialize remaining modules — self-modification, plugins, axioms, memory backends
+    try:
+        from tektos.runtime.self_modification import SelfModificationEngine
+        _self_modification_engine = SelfModificationEngine(
+            project_root=str(_Path(__file__).parent / ".." / ".."),
+            max_risk_level="medium",
+        )
+        log.info("Self-modification engine initialized (max_risk_level=medium)")
+    except Exception as exc:
+        log.warning("Failed to initialize self-modification engine: %s", exc)
+        _self_modification_engine = None
+
+    try:
+        from tektos.plugin_loader import PluginLoader
+        from tektos.plugin_loader import PluginRegistry
+        _plugin_registry = PluginRegistry()
+        _plugin_loader = PluginLoader(registry=_plugin_registry)
+        log.info("Plugin loader initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize plugin loader: %s", exc)
+        _plugin_loader = None
+
+    try:
+        from tektos.axioms import AxiomSystem
+        _axiom_system = AxiomSystem(axioms_dir=str(_Path(__file__).parent / "axioms"))
+        _axiom_system.load()
+        log.info("Axiom system initialized and loaded")
+    except Exception as exc:
+        log.warning("Failed to initialize axiom system: %s", exc)
+        _axiom_system = None
+
+    try:
+        from tektos.memory.neo4j_memory import Neo4jProceduralMemory, Neo4jMemoryConfig
+        _neo4j_uri = _os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
+        _neo4j_parts = _neo4j_uri.replace("bolt://", "").split(":")
+        _neo4j_host = _neo4j_parts[0] if _neo4j_parts else "127.0.0.1"
+        _neo4j_port = int(_neo4j_parts[1]) if len(_neo4j_parts) > 1 else 7687
+        _neo4j_backend = Neo4jProceduralMemory(
+            config=Neo4jMemoryConfig(host=_neo4j_host, port=_neo4j_port),
+        )
+        log.info("Neo4j procedural memory backend initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize Neo4j backend: %s", exc)
+        _neo4j_backend = None
+
+    try:
+        from tektos.memory.postgres_memory import PostgresLongTermMemory, PostgresMemoryConfig
+        _postgres_dsn = _os.getenv("POSTGRES_DSN", "postgresql://localhost/tektos")
+        _postgres_parts = _postgres_dsn.replace("postgresql://", "").split("/")
+        _postgres_db = _postgres_parts[1] if len(_postgres_parts) > 1 else "tektos"
+        _postgres_host = _postgres_parts[0].split(":")[0] if _postgres_parts else "localhost"
+        _postgres_port = int(_postgres_parts[0].split(":")[1]) if ":" in _postgres_parts[0] else 5432
+        _postgres_backend = PostgresLongTermMemory(
+            config=PostgresMemoryConfig(host=_postgres_host, port=_postgres_port, database=_postgres_db),
+        )
+        log.info("Postgres long-term memory backend initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize Postgres backend: %s", exc)
+        _postgres_backend = None
+
+    try:
+        from tektos.memory.redis_memory import RedisWorkingMemory, RedisMemoryConfig
+        _redis_url = _os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+        _redis_parts = _redis_url.replace("redis://", "").split(":")
+        _redis_host = _redis_parts[0] if _redis_parts else "127.0.0.1"
+        _redis_port = int(_redis_parts[1].split("/")[0]) if len(_redis_parts) > 1 else 6379
+        _redis_db = int(_redis_parts[1].split("/")[1]) if len(_redis_parts) > 1 and "/" in _redis_parts[1] else 0
+        _redis_backend = RedisWorkingMemory(
+            config=RedisMemoryConfig(host=_redis_host, port=_redis_port, db=_redis_db),
+        )
+        log.info("Redis working memory backend initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize Redis backend: %s", exc)
+        _redis_backend = None
+
+    try:
+        _hindsight_client = HindsightClient(
+            config=HindsightConfig(
+                base_url=_os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177"),
+                bank_id="tektos",
+                timeout=30.0,
+            )
+        )
+        log.info("Hindsight client initialized (cross-session memory)")
+    except Exception as exc:
+        log.warning("Failed to initialize hindsight client: %s", exc)
+        _hindsight_client = None
+
+    try:
+        _reflection_engine = ReflectionEngine(
+            memory_system=memory_system,
+            dreamtime_engine=memory_system.dreamtime if memory_system else None,
+        )
+        log.info("Reflection engine initialized (active contemplation)")
+    except Exception as exc:
+        log.warning("Failed to initialize reflection engine: %s", exc)
+        _reflection_engine = None
+
+    try:
+        _synthesis_engine = SynthesisEngine(
+            reflection_engine=_reflection_engine,
+            memory_system=memory_system,
+        )
+        log.info("Synthesis engine initialized (Hegelian dialectic)")
+    except Exception as exc:
+        log.warning("Failed to initialize synthesis engine: %s", exc)
+        _synthesis_engine = None
+
+    # 16. Initialize self-improvement loop orchestrator
+    from tektos.self_improvement.loop import SelfImprovementLoop as SelfImprovementLoopSimple
+    from tektos.agents.self_improvement.loop_orchestrator import SelfImprovementLoop as SelfImprovementLoopOrchestrator
+    try:
+        _self_improvement_loop_simple = SelfImprovementLoopSimple(max_iterations=100)
+        log.info("Self-improvement loop (simple) initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize self-improvement loop (simple): %s", exc)
+        _self_improvement_loop_simple = None
+
+    try:
+        _self_improvement_loop_orchestrator = SelfImprovementLoopOrchestrator(
+            max_cycles=10,
+            workspace=str(_Path.home() / ".tektos/loop_workspace"),
+        )
+        log.info("Self-improvement loop orchestrator initialized (Hegelian)")
+    except Exception as exc:
+        log.warning("Failed to initialize self-improvement loop orchestrator: %s", exc)
+        _self_improvement_loop_orchestrator = None
+
+    # 17. Initialize infrastructure — search, gitops, recovery, telemetry
+    try:
+        from tektos.search.unified_search import UnifiedSearch
+        _unified_search = UnifiedSearch(
+            root_dir=str(_Path(__file__).parent / ".." / ".."),
+            max_results=20,
+        )
+        log.info("Unified search initialized (RAG-style file search)")
+    except Exception as exc:
+        log.warning("Failed to initialize unified search: %s", exc)
+        _unified_search = None
+
+    try:
+        from tektos.gitops.engine import GitOpsEngine
+        _gitops_engine = GitOpsEngine(
+            repo_root=str(_Path(__file__).parent / ".." / ".."),
+            author_name="Tektos",
+            author_email="tektos@local",
+        )
+        log.info("GitOps engine initialized (version-controlled operations)")
+    except Exception as exc:
+        log.warning("Failed to initialize GitOps engine: %s", exc)
+        _gitops_engine = None
+
+    try:
+        from tektos.recovery.auto_recovery import AutoRecovery
+        _auto_recovery = AutoRecovery(
+            services=["llm", "event_store", "memory_persistence"],
+            check_interval=30,
+            max_retries=3,
+        )
+        log.info("Auto-recovery engine initialized (service health monitoring)")
+    except Exception as exc:
+        log.warning("Failed to initialize auto-recovery: %s", exc)
+        _auto_recovery = None
+
+    try:
+        from tektos.telemetry.collector import TelemetryCollector
+        _telemetry_collector = TelemetryCollector(
+            output_dir=str(_Path.home() / ".tektos/telemetry"),
+            collection_interval=10.0,
+            max_buffer_size=10000,
+        )
+        log.info("Telemetry collector initialized (system metrics)")
+    except Exception as exc:
+        log.warning("Failed to initialize telemetry collector: %s", exc)
+        _telemetry_collector = None
+
+    log.info("All modules initialized — Tektos-Ultima-v1 ready")
+
     log.info("Tektos-Ultima-v1 backend started (schema v%d)", schema_engine.get_current_version())
     yield
 
@@ -573,6 +912,52 @@ async def lifespan(app: _FastAPI):
             log.info("Telegram gateway stopped")
         except Exception as exc:
             log.warning("Error stopping Telegram gateway: %s", exc)
+    if _self_repair_engine:
+        try:
+            await _self_repair_engine.stop()
+            log.info("Self-repair engine stopped")
+        except Exception as exc:
+            log.warning("Error stopping self-repair engine: %s", exc)
+    if _immune_system:
+        try:
+            await _immune_system.stop()
+            log.info("Immune system stopped")
+        except Exception as exc:
+            log.warning("Error stopping immune system: %s", exc)
+    if _long_running_agent:
+        try:
+            await _long_running_agent.stop(reason="shutdown")
+            log.info("Long-running agent stopped")
+        except Exception as exc:
+            log.warning("Error stopping long-running agent: %s", exc)
+    if _memory_persistence:
+        try:
+            _memory_persistence._stop_event.set()
+            if _memory_persistence.decay_thread and _memory_persistence.decay_thread.is_alive():
+                _memory_persistence.decay_thread.join(timeout=5)
+            log.info("Memory persistence stopped")
+        except Exception as exc:
+            log.warning("Error stopping memory persistence: %s", exc)
+    if _reflection_engine:
+        log.info("Reflection engine stopped (session history preserved)")
+    if _neo4j_backend:
+        try:
+            _neo4j_backend.close()
+            log.info("Neo4j memory backend closed")
+        except Exception as exc:
+            log.warning("Error closing Neo4j backend: %s", exc)
+    if _synthesis_engine:
+        log.info("Synthesis engine stopped (syntheses preserved)")
+    if _self_improvement_loop_simple:
+        log.info("Self-improvement loop (simple) stopped")
+    if _self_improvement_loop_orchestrator:
+        log.info("Self-improvement loop orchestrator stopped")
+    if thermal_monitor:
+        try:
+            await thermal_monitor.stop()
+            log.info("Thermal monitor stopped")
+        except Exception as exc:
+            log.warning("Error stopping thermal monitor: %s", exc)
     await runtime_sdk.stop()
     await store_close()
     log.info("Tektos-Ultima-v1 backend stopped")
@@ -747,6 +1132,107 @@ async def health_check():
         "event_bus": _event_bus.get_stats(),
         "state_machine": _state_machine.get_stats(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Axioms API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/axioms")
+async def list_axioms(category: str | None = None):
+    """List all axioms, optionally filtered by category."""
+    try:
+        from tektos.axioms import load_axioms
+        ax_sys = load_axioms()
+        axioms = ax_sys.list_active()
+        if category:
+            axioms = ax_sys.list_by_category(category)
+        return [
+            {
+                "id": a.id,
+                "category": a.category,
+                "status": a.status,
+                "date": a.date,
+                "content": a.content,
+                "notes": a.notes,
+                "prerequisites": a.prerequisites,
+                "blocking": a.blocking,
+                "tags": a.tags,
+                "metadata": a.metadata,
+            }
+            for a in axioms
+        ]
+    except Exception as exc:
+        log.warning("Axiom listing failed: %s", exc)
+        return []
+
+
+@app.post("/api/axioms/{axiom_id}/verify")
+async def verify_axiom(axiom_id: str):
+    """Mark an axiom as verified."""
+    try:
+        from tektos.axioms import load_axioms
+        result = load_axioms().verify(axiom_id)
+        if result:
+            return {"ok": True, "id": axiom_id, "status": "verified"}
+        raise _HTTPException(status_code=404, detail=f"Axiom '{axiom_id}' not found")
+    except _HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("Axiom verify failed: %s", exc)
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Logs API
+# ---------------------------------------------------------------------------
+
+class _LogBody(_BaseModel):
+    level: str | None = None
+    count: int = 200
+
+
+# Module-level log buffer for the /api/logs endpoint
+_tektos_log_buffer: list = []
+
+
+class _TektosLogHandler(_log.Handler):
+    """Captures log records into an in-memory buffer for the /api/logs endpoint."""
+
+    def emit(self, record):
+        _tektos_log_buffer.append(record)
+
+
+# Install the handler at module load time
+_tektos_log_handler = _TektosLogHandler()
+_log.getLogger().addHandler(_tektos_log_handler)
+
+
+@app.get("/api/logs")
+async def get_logs(level: str | None = None, count: int = 200):
+    """Get recent log entries from the Python logging system."""
+    from datetime import datetime, timezone
+
+    records = list(_tektos_log_buffer)
+
+    # Filter by level
+    if level and level != "all":
+        level_num = getattr(_log, level.upper(), _log.INFO)
+        records = [r for r in records if r.levelno >= level_num]
+
+    # Sort by timestamp, take most recent
+    records.sort(key=lambda r: r.created, reverse=True)
+    records = records[:count]
+
+    return [
+        {
+            "level": _log.getLevelName(r.levelno),
+            "logger": r.name,
+            "message": r.getMessage(),
+            "timestamp": datetime.fromtimestamp(r.created, tz=timezone.utc).isoformat(),
+        }
+        for r in records
+    ]
 
 
 @app.get("/api/voice/state")
@@ -1446,6 +1932,172 @@ async def get_immune_memory_entries(limit: int = 50):
     if not runtime_sdk._immune_system:
         return {"error": "Immune system not initialized"}
     return runtime_sdk._immune_system.to_memory_entry()
+
+
+# ---------------------------------------------------------------------------
+# REST API — Self-Repair Engine
+# ---------------------------------------------------------------------------
+
+@app.get("/api/self_repair/status")
+async def get_self_repair_status():
+    """Get self-repair engine status: running state, uptime, repair counts, strategies, effectiveness."""
+    if _self_repair_engine is None:
+        return {"error": "Self-repair engine not initialized"}
+    return _self_repair_engine.get_status()
+
+
+@app.get("/api/self_repair/history")
+async def get_self_repair_history(limit: int = 100):
+    """Get recent repair history with status, strategies used, and outcomes."""
+    if _self_repair_engine is None:
+        return {"error": "Self-repair engine not initialized"}
+    return {"history": _self_repair_engine.get_repair_history(limit=limit)}
+
+
+@app.post("/api/self_repair/repair")
+async def trigger_self_repair(body: dict[str, Any]):
+    """Manually trigger a repair for a given threat category and severity."""
+    if _self_repair_engine is None:
+        return {"error": "Self-repair engine not initialized"}
+    threat_category = body.get("threat_category", "unknown")
+    threat_severity = body.get("threat_severity", 1)
+    ctx = body.get("ctx", {})
+    try:
+        result = await _self_repair_engine.repair_threat(threat_category, threat_severity, ctx)
+        return {"record": result.to_dict()}
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/self_repair/health")
+async def trigger_self_repair_health(body: dict[str, Any]):
+    """Trigger a manual health check with provided scores."""
+    if _self_repair_engine is None:
+        return {"error": "Self-repair engine not initialized"}
+    try:
+        result = await _self_repair_engine.manual_health_check(
+            gpu_score=body.get("gpu_score", 1.0),
+            context_score=body.get("context_score", 1.0),
+            loop_safety_score=body.get("loop_safety_score", 1.0),
+            inference_score=body.get("inference_score", 1.0),
+            threat_level_score=body.get("threat_level_score", 1.0),
+            active_threats=body.get("active_threats", 0),
+            resolved_threats=body.get("resolved_threats", 0),
+            pending_repairs=body.get("pending_repairs", 0),
+            successful_repairs_24h=body.get("successful_repairs_24h", 0),
+            failed_repairs_24h=body.get("failed_repairs_24h", 0),
+        )
+        return result.to_dict()
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# REST API — Thermal Regulation
+# ---------------------------------------------------------------------------
+
+@app.get("/api/thermal/status")
+async def get_thermal_status():
+    """Get current thermal regulation status: GPU/CPU temps, power, clock, actions."""
+    if thermal_monitor is None:
+        return {"error": "Thermal monitor not initialized"}
+    return thermal_monitor.get_snapshot()
+
+
+@app.get("/api/thermal/health")
+async def get_thermal_health():
+    """Get thermal health score (0.0–1.0) for integration with health dashboard."""
+    if thermal_monitor is None:
+        return {"error": "Thermal monitor not initialized"}
+    return {"health_score": thermal_monitor.get_health_score()}
+
+
+@app.post("/api/thermal/reset")
+async def reset_thermal():
+    """Reset thermal regulator to optimal settings."""
+    if thermal_monitor is None:
+        return {"error": "Thermal monitor not initialized"}
+    thermal_monitor.reset()
+    return {"status": "reset", "snapshot": thermal_monitor.get_snapshot()}
+
+
+# ---------------------------------------------------------------------------
+# REST API — Self-Improvement
+# ---------------------------------------------------------------------------
+
+@app.get("/api/self_improvement/metrics")
+async def get_self_improvement_metrics():
+    """Get self-improvement learning metrics: tasks, improvements, model rankings."""
+    if self_improvement is None:
+        return {"error": "Self-improvement adapter not initialized"}
+    return self_improvement.get_learning_metrics()
+
+
+@app.get("/api/self_improvement/experiences")
+async def get_self_improvement_experiences(top_k: int = 20):
+    """Get recent experience records from the self-improvement loop."""
+    if self_improvement is None:
+        return {"error": "Self-improvement adapter not initialized"}
+    records = self_improvement.get_experience(top_k=top_k)
+    return {"experiences": [r.to_dict() for r in records]}
+
+
+@app.get("/api/self_improvement/report")
+async def get_self_improvement_report():
+    """Get a human-readable self-improvement report."""
+    if self_improvement is None:
+        return {"error": "Self-improvement adapter not initialized"}
+    return {"report": self_improvement.get_report()}
+
+
+# ---------------------------------------------------------------------------
+# REST API — Planner (S4)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/planner/templates")
+async def get_planner_templates():
+    """List available architecture templates the planner can select."""
+    from tektos.agents.planner.template_selector import TEMPLATES
+    return {"templates": [t.model_dump() for t in TEMPLATES]}
+
+
+@app.get("/api/planner/language-games")
+async def get_planner_language_games():
+    """List available language games (domain classifiers)."""
+    from tektos.agents.planner.language_game import LanguageGame
+    return {
+        "language_games": [
+            {"name": g.value, "description": g.value.replace("_", " ").title()}
+            for g in LanguageGame
+        ]
+    }
+
+
+@app.post("/api/planner/plan")
+async def run_planner(body: dict[str, Any]):
+    """Run the full planning pipeline on a natural language prompt.
+
+    Returns a structured BuildSpec with phases, requirements, and metadata.
+    """
+    from tektos.agents.planner.orchestrator import Planner
+
+    prompt = body.get("prompt", "")
+    if not prompt:
+        raise _HTTPException(status_code=400, detail="prompt is required")
+
+    planner = Planner(
+        context_budget=body.get("context_budget", 128000),
+        max_clarifying_questions=body.get("max_clarifying_questions", 3),
+    )
+
+    output = planner.plan(
+        prompt=prompt,
+        context=body.get("context"),
+        user_preference=body.get("user_preference"),
+        synthesis_guidance=body.get("synthesis_guidance", ""),
+    )
+
+    return output.model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -2831,6 +3483,39 @@ async def get_config():
     }
 
 
+class _UpdateConfigBody(_BaseModel):
+    key: str
+    value: Any
+
+
+@app.patch("/api/config")
+async def update_config(body: _UpdateConfigBody):
+    """Update a runtime configuration value."""
+    import os
+    key = body.key
+    value = body.value
+
+    # Map config keys to their env var / runtime targets
+    config_map = {
+        "llm_base_url": ("TEKTOS_LLM_BASE_URL", "env"),
+        "llm_model": ("TEKTOS_LLM_MODEL", "env"),
+        "gpu_power_limit": ("GPU_POWER_LIMIT", "env"),
+        "log_level": ("TEKTOS_LOG_LEVEL", "env"),
+        "vision_url": ("TEKTOS_VISION_LLM_URL", "env"),
+    }
+
+    if key in config_map:
+        env_var, method = config_map[key]
+        if method == "env":
+            os.environ[env_var] = str(value)
+            log.info("Config updated: %s = %s (via %s)", key, value, env_var)
+        return {"ok": True, "key": key, "value": str(value)}
+
+    # Unknown key — just echo back
+    log.warning("Unknown config key: %s", key)
+    return {"ok": True, "key": key, "value": str(value), "note": "key not mapped to runtime"}
+
+
 # ---------------------------------------------------------------------------
 # Schedule/Scheduler API
 # ---------------------------------------------------------------------------
@@ -2916,171 +3601,6 @@ async def list_api_keys():
             "configured": bool(value),
         })
     return {"keys": keys}
-
-
-# ---------------------------------------------------------------------------
-# Telemetry API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/telemetry")
-async def get_telemetry():
-    """Real GPU/CPU/memory telemetry."""
-    import psutil
-    import os
-    try:
-        import pynvml
-        pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        gpu = {
-            "temperature": pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU),
-            "utilization": pynvml.nvmlDeviceGetUtilizationRates(handle).gpu,
-            "memory_used": pynvml.nvmlDeviceGetMemoryInfo(handle).used,
-            "memory_total": pynvml.nvmlDeviceGetMemoryInfo(handle).total,
-            "power_draw": pynvml.nvmlDeviceGetPowerUsage(handle),
-            "power_limit": pynvml.nvmlDeviceGetPowerManagementLimit(handle) // 1000,
-        }
-        pynvml.nvmlShutdown()
-    except Exception as e:
-        log.warning("Failed to read GPU status: %s", e)
-        gpu = {"temperature": 0, "utilization": 0, "memory_used": 0, "memory_total": 0, "power_draw": 0, "power_limit": 400}
-    
-    return {
-        "gpu": gpu,
-        "cpu": {
-            "utilization": psutil.cpu_percent(interval=0.1),
-            "cores": psutil.cpu_count(logical=True),
-            "load_avg": list(psutil.getloadavg()),
-        },
-        "memory": {
-            "used": psutil.virtual_memory().used,
-            "total": psutil.virtual_memory().total,
-            "percent": psutil.virtual_memory().percent,
-        },
-        "timestamp": _time.time(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Hooks API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/hooks")
-async def list_hooks():
-    """List all registered hooks."""
-    from tektos.runtime.hooks import BuiltinHooks, HookRegistry
-    hooks = []
-    for name, hook_fn in BuiltinHooks._hooks.items():
-        hooks.append({
-            "name": name,
-            "handler": hook_fn.__name__ if hasattr(hook_fn, "__name__") else str(hook_fn),
-            "category": "builtin",
-        })
-    return hooks
-
-
-# ---------------------------------------------------------------------------
-# Config API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/config")
-async def get_config():
-    """Return runtime configuration."""
-    import os
-    config = [
-        {"key": "llm_base_url", "value": runtime_sdk._llm_base_url, "type": "string", "description": "LLM server base URL", "sensitive": False},
-        {"key": "llm_model", "value": runtime_sdk._llm_model, "type": "string", "description": "Active LLM model", "sensitive": False},
-        {"key": "protocol_version", "value": PROTOCOL_VERSION, "type": "string", "description": "Protocol version", "sensitive": False},
-        {"key": "gpu_power_limit", "value": os.getenv("GPU_POWER_LIMIT", "400"), "type": "string", "description": "GPU power limit (watts)", "sensitive": False},
-        {"key": "log_level", "value": os.getenv("TEKTOS_LOG_LEVEL", "INFO"), "type": "string", "description": "Logging level", "sensitive": False},
-        {"key": "vision_llm_url", "value": os.getenv("TEKTOS_VISION_LLM_URL", ""), "type": "string", "description": "Vision LLM URL", "sensitive": False},
-        {"key": "vision_model", "value": os.getenv("TEKTOS_VISION_MODEL", ""), "type": "string", "description": "Vision model", "sensitive": False},
-        {"key": "telegram_bot_token", "value": "••••••••" if os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN") else "(not set)", "type": "string", "description": "Telegram bot token", "sensitive": True},
-    ]
-    return {"config": config}
-
-
-# ---------------------------------------------------------------------------
-# Schedule API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/schedule")
-async def list_schedule():
-    """List scheduled tasks from backup scheduler."""
-    from tektos.memory.backup_scheduler import BackupScheduler
-    scheduler = BackupScheduler()
-    backups = scheduler.list_backups()
-    tasks = []
-    for i, b in enumerate(backups):
-        tasks.append({
-            "id": str(i),
-            "name": b.get("name", "backup"),
-            "type": b.get("type", "unknown"),
-            "status": "completed",
-            "last_run": b.get("timestamp", ""),
-            "next_run": "",
-            "interval": "daily",
-            "enabled": True,
-        })
-    return tasks
-
-
-# ---------------------------------------------------------------------------
-# Skills/Plugins API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/skills")
-async def list_skills():
-    """List all registered plugins as skills."""
-    from tektos.plugin import PluginRegistry
-    registry = PluginRegistry()
-    plugins = registry.list_plugins()
-    skills = []
-    for p in plugins:
-        skills.append({
-            "name": p.name,
-            "version": p.version,
-            "category": p.config.get("category", "general"),
-            "description": p.config.get("description", ""),
-            "enabled": True,
-        })
-    return skills
-
-
-# ---------------------------------------------------------------------------
-# Keys API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/keys")
-async def list_keys():
-    """List configured API keys (masked values)."""
-    import os
-    keys = []
-    for var in ["TEKTOS_LLM_API_KEY", "TEKTOS_VISION_LLM_API_KEY", "TEKTOS_TELEGRAM_BOT_TOKEN", "TEKTOS_HUGGINGFACE_TOKEN"]:
-        value = os.getenv(var)
-        keys.append({
-            "name": var.replace("TEKTOS_", "").replace("_", " "),
-            "key": var,
-            "value": "••••••••" if value else "(not set)",
-            "configured": bool(value),
-        })
-    return {"keys": keys}
-
-
-# ---------------------------------------------------------------------------
-# Routing API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/routing/decide")
-async def route_decision(task: str = "", category: str = "general"):
-    """Make a model routing decision."""
-    from tektos.routing import ModelRouter
-    router = ModelRouter()
-    decision = router.route(task=task, category=category)
-    return {
-        "recommended_model": decision.get("model", runtime_sdk._llm_model),
-        "category": category,
-        "confidence": decision.get("confidence", 0.8),
-    }
 
 
 # ---------------------------------------------------------------------------

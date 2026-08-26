@@ -18,12 +18,12 @@ import tempfile
 
 import pytest
 
-from src.tektos.memory.memory_system import (
+from tektos.memory.memory_system import (
     Hemisphere,
     MemorySystem,
     MemoryTier,
 )
-from src.tektos.memory.reflection_engine import ReflectionEngine
+from tektos.memory.reflection_engine import ReflectionEngine
 
 
 @pytest.fixture(autouse=True)
@@ -32,8 +32,8 @@ def _isolated_db(monkeypatch):
     td = tempfile.mkdtemp()
     db_path = os.path.join(td, "test.db")
 
-    from src.tektos.memory import persistence as _persistence_mod
-    from src.tektos.memory.persistence import MemoryPersistence as RealPersistence
+    from tektos.memory import persistence as _persistence_mod
+    from tektos.memory.persistence import MemoryPersistence as RealPersistence
 
     class IsolatedPersistence:
         def __init__(self):
@@ -48,7 +48,7 @@ def _isolated_db(monkeypatch):
 
     # Patch in both persistence and memory_system modules
     monkeypatch.setattr(_persistence_mod, "MemoryPersistence", IsolatedPersistence)
-    from src.tektos.memory import memory_system as ms_mod
+    from tektos.memory import memory_system as ms_mod
     monkeypatch.setattr(ms_mod, "_MemoryPersistence", IsolatedPersistence)
     yield
     try:

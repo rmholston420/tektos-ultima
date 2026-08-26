@@ -2,12 +2,12 @@
 
 import pytest
 
-from src.tektos.agents.planner.template_selector import (
+from tektos.agents.planner.template_selector import (
     TEMPLATES,
     select_best_templates,
     choose_best_template,
 )
-from src.tektos.agents.planner.models import ArchitectureTemplate, ArchitectureChoice
+from tektos.agents.planner.models import ArchitectureTemplate, ArchitectureChoice
 
 
 class TestTemplates:

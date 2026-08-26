@@ -449,7 +449,6 @@ function draw3D(
   const animationId = requestAnimationFrame(function animate() {
     angle += 0.002;
     projection.rotate([90 + Math.sin(angle) * 15, 0, 0]);
-    simulation.force("projection", projection);
     simulation.alpha(0.05).restart();
     requestAnimationFrame(animate);
   });

@@ -28,8 +28,8 @@ log = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
-from src.tektos.agents.planner.models import LanguageGame
-from src.tektos.memory.synthesis_engine import SynthesisFeedback
+from tektos.agents.planner.models import LanguageGame
+from tektos.memory.synthesis_engine import SynthesisFeedback
 
 
 class ExperienceRecord(BaseModel):

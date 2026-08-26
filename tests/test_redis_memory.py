@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.tektos.memory.redis_memory import (
+from tektos.memory.redis_memory import (
     RedisMemoryConfig,
     RedisSensoryMemory,
     RedisWorkingMemory,
@@ -35,7 +35,7 @@ class TestRedisSensoryMemory:
         assert config.db == 1
     
     @pytest.mark.skip(reason="Conftest mock infrastructure makes 'not available' simulation impossible — always returns fake redis")
-    @patch("src.tektos.memory.redis_memory._redis", None)
+    @patch("tektos.memory.redis_memory._redis", None)
     def test_redis_not_available(self):
         """Test graceful degradation when redis-py is not installed."""
         import sys
@@ -46,7 +46,7 @@ class TestRedisSensoryMemory:
         
         # Reimport to get REDIS_AVAILABLE=False
         import importlib
-        import src.tektos.memory.redis_memory as redis_mod
+        import tektos.memory.redis_memory as redis_mod
         importlib.reload(redis_mod)
         
         sensory = redis_mod.RedisSensoryMemory()
@@ -66,7 +66,7 @@ class TestRedisSensoryMemory:
         assert sensory._stream_key == "custom:sensory:stream"
     
     @pytest.mark.skip(reason="Conftest mock infrastructure makes 'not available' simulation impossible — always returns fake redis")
-    @patch("src.tektos.memory.redis_memory._redis", None)
+    @patch("tektos.memory.redis_memory._redis", None)
     def test_add_without_connection(self):
         """Test add() raises RuntimeError without connection."""
         import sys
@@ -75,7 +75,7 @@ class TestRedisSensoryMemory:
             del sys.modules[k]
         
         import importlib
-        import src.tektos.memory.redis_memory as redis_mod
+        import tektos.memory.redis_memory as redis_mod
         importlib.reload(redis_mod)
         
         sensory = redis_mod.RedisSensoryMemory()
@@ -107,7 +107,7 @@ class TestRedisSensoryMemory:
         result = sensory.get_all()
         assert result == []
     
-    @patch("src.tektos.memory.redis_memory._redis", None)
+    @patch("tektos.memory.redis_memory._redis", None)
     def test_sensory_memory_methods_with_mock(self):
         """Test sensory memory methods with mocked Redis client."""
         import sys
@@ -116,7 +116,7 @@ class TestRedisSensoryMemory:
             del sys.modules[k]
         
         import importlib
-        import src.tektos.memory.redis_memory as redis_mod
+        import tektos.memory.redis_memory as redis_mod
         importlib.reload(redis_mod)
         
         sensory = redis_mod.RedisSensoryMemory()
@@ -192,7 +192,7 @@ class TestRedisWorkingMemory:
         assert working.config.working_ttl_seconds == 600.0
     
     @pytest.mark.skip(reason="Conftest mock infrastructure makes 'not available' simulation impossible — always returns fake redis")
-    @patch("src.tektos.memory.redis_memory._redis", None)
+    @patch("tektos.memory.redis_memory._redis", None)
     def test_working_not_available(self):
         """Test graceful degradation when redis-py is not installed."""
         import sys
@@ -201,7 +201,7 @@ class TestRedisWorkingMemory:
             del sys.modules[k]
         
         import importlib
-        import src.tektos.memory.redis_memory as redis_mod
+        import tektos.memory.redis_memory as redis_mod
         importlib.reload(redis_mod)
         
         working = redis_mod.RedisWorkingMemory()

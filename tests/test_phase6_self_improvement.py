@@ -18,20 +18,20 @@ from pathlib import Path
 
 import pytest
 
-from src.tektos.agents.coding_agent.executor import Executor
-from src.tektos.agents.manager.orchestrator import Manager
-from src.tektos.agents.planner.models import (
+from tektos.agents.coding_agent.executor import Executor
+from tektos.agents.manager.orchestrator import Manager
+from tektos.agents.planner.models import (
     ArchitectureChoice,
     BuildSpec,
     LanguageGame,
     SpecPhase,
 )
-from src.tektos.agents.planner.orchestrator import Planner
-from src.tektos.agents.self_improvement import SelfImprovementLoop, LoopCycle
-from src.tektos.memory.experience_replay import ExperienceReplay
-from src.tektos.memory.memory_system import MemorySystem
-from src.tektos.memory.reflection_engine import ReflectionEngine, ReflectionState
-from src.tektos.memory.synthesis_engine import SynthesisEngine, SynthesisFeedback
+from tektos.agents.planner.orchestrator import Planner
+from tektos.agents.self_improvement import SelfImprovementLoop, LoopCycle
+from tektos.memory.experience_replay import ExperienceReplay
+from tektos.memory.memory_system import MemorySystem
+from tektos.memory.reflection_engine import ReflectionEngine, ReflectionState
+from tektos.memory.synthesis_engine import SynthesisEngine, SynthesisFeedback
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.tektos.self_improvement.engine import ExperienceRecord, SelfImprovementAdapter
+from tektos.self_improvement.engine import ExperienceRecord, SelfImprovementAdapter
 
 
 class TestExperienceRecord:

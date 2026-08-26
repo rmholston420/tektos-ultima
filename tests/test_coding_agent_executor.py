@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from src.tektos.agents.coding_agent.models import (
+from tektos.agents.coding_agent.models import (
     ArtifactType,
     CodingAgentFeedback,
     ExecutionRecord,
@@ -13,8 +13,8 @@ from src.tektos.agents.coding_agent.models import (
     ExecutionStep,
     ExecutionTestReport,
 )
-from src.tektos.agents.coding_agent.executor import Executor
-from src.tektos.agents.planner.models import (
+from tektos.agents.coding_agent.executor import Executor
+from tektos.agents.planner.models import (
     ArchitectureChoice,
     BuildSpec,
     SpecPhase,

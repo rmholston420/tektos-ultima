@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from src.tektos.providers.sandbox_provider import SandboxProvider
+from tektos.providers.sandbox_provider import SandboxProvider
 
 
 @pytest.fixture
