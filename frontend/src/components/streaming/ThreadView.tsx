@@ -92,7 +92,7 @@ function parseDirectives(text: string) {
       segments.push({ kind: "text", text: text.slice(cursor, match.index) });
     }
     const type = match[1];
-    const raw = match[2].replace(/^["`]|["`]$/g, "");
+    const raw = match[2].replace(/^[`"']|[`"']$/g, "");
     segments.push({ kind: "ref", type, id: raw });
     cursor = (match.index ?? 0) + match[0].length;
   }

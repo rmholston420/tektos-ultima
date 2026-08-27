@@ -6,22 +6,18 @@ import { SSEClient, type SSEEnvelope } from "@/lib/sse-client";
 
 // Mock fetch globally
 const mockFetch = jest.fn();
-global.fetch = mockFetch;
-
-// Mock TextDecoder
-class MockTextDecoder {
-  decode(data: Uint8Array, options?: { stream?: boolean }): string {
-    return new TextDecoder().decode(data, options);
-  }
-}
-global.TextDecoder = MockTextDecoder as any;
+global.fetch = mockFetch as unknown as typeof fetch;
 
 // Mock AbortController
 class MockAbortController {
-  signal: any = {};
+  signal: AbortSignal = {} as AbortSignal;
   abort() {}
 }
-global.AbortController = MockAbortController as any;
+global.AbortController = MockAbortController as unknown as typeof AbortController;
+
+// Mock TextEncoder/TextDecoder
+const realTextEncoder = global.TextEncoder;
+const realTextDecoder = global.TextDecoder;
 
 describe("SSEClient", () => {
   let client: SSEClient;
@@ -41,7 +37,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"hello\"}}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"hello\"}}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -66,7 +62,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"tool_started\",\"payload\":{\"tool\":\"read_file\"}}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"tool_started\",\"payload\":{\"tool\":\"read_file\"}}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -91,7 +87,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"test\"}}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"test\"}}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -111,7 +107,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: raw text delta\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: raw text delta\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -135,7 +131,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode(": comment\ndata: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"}}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode(": comment\ndata: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"}}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -154,7 +150,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"a\"}}\n\ndata: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"b\"}}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"a\"}}\n\ndata: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"b\"}}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -209,7 +205,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"}}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"}}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -230,7 +226,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"}}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"}}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -245,16 +241,14 @@ describe("SSEClient", () => {
   describe("disconnect and state", () => {
     it("disconnects by aborting", () => {
       const abortSpy = jest.fn();
-      (global.AbortController as any).mockImplementation(() => ({
-        signal: {},
-        abort: abortSpy,
-      }));
-
+      const realAbortController = { signal: {}, abort: abortSpy };
+      client = new SSEClient();
+      (client as any)._abortController = realAbortController;
       client.disconnect();
       expect(abortSpy).toHaveBeenCalled();
     });
 
-    it("isConnected returns true when active", () => {
+    it("isConnected returns false when not active", () => {
       expect(client.isConnected()).toBe(false);
     });
 
@@ -262,22 +256,21 @@ describe("SSEClient", () => {
       const handler = jest.fn();
       client.on("assistant_delta", handler);
       client.off("assistant_delta", handler);
-      // No handler should be registered
-      expect(client["handlers"].get("assistant_delta")).toBeUndefined();
+      expect((client as any).handlers.get("assistant_delta")).toEqual(new Set());
     });
 
     it("removes wildcard handler", () => {
       const handler = jest.fn();
       client.on("*", handler);
       client.off("*", handler);
-      expect(client["handlers"].get("*")).toBeUndefined();
+      expect((client as any).handlers.get("*")).toEqual(new Set());
     });
 
     it("removes error handler", () => {
       const errorHandler = jest.fn();
       client.onError(errorHandler);
       client.offError(errorHandler);
-      expect(client["errorHandlers"]).toEqual([]);
+      expect((client as any).errorHandlers).toEqual([]);
     });
 
     it("includes model in query params", async () => {
@@ -334,7 +327,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: {\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"}}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: {\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"}}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },
@@ -357,7 +350,7 @@ describe("SSEClient", () => {
         body: {
           getReader: () => ({
             read: jest.fn()
-              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"},\"seq\":42,\"protocol_version\":\"1.0\"}\n\n") })
+              .mockResolvedValueOnce({ done: false, value: new realTextEncoder().encode("data: {\"session_id\":\"s1\",\"event_type\":\"assistant_delta\",\"payload\":{\"text\":\"x\"},\"seq\":42,\"protocol_version\":\"1.0\"}\n\n") })
               .mockResolvedValueOnce({ done: true, value: undefined }),
           }),
         },

@@ -38,3 +38,34 @@ global.ResizeObserver = jest.fn().mockImplementation(() => ({
 
 // Mock scrollIntoView
 Element.prototype.scrollIntoView = jest.fn();
+
+// Mock HTMLCanvasElement.prototype.getContext
+HTMLCanvasElement.prototype.getContext = jest.fn(() => ({
+  beginPath: jest.fn(),
+  arc: jest.fn(),
+  fillStyle: '',
+  fill: jest.fn(),
+  clearRect: jest.fn(),
+  save: jest.fn(),
+  restore: jest.fn(),
+  translate: jest.fn(),
+  rotate: jest.fn(),
+  scale: jest.fn(),
+  stroke: jest.fn(),
+  rect: jest.fn(),
+  fillText: jest.fn(),
+  measureText: jest.fn(() => ({ width: 0 })),
+  createLinearGradient: jest.fn(),
+  createRadialGradient: jest.fn(),
+  getImageData: jest.fn(),
+  putImageData: jest.fn(),
+  drawImage: jest.fn(),
+  setTransform: jest.fn(),
+  createPattern: jest.fn(),
+  createImageData: jest.fn(),
+  lineTo: jest.fn(),
+  moveTo: jest.fn(),
+  closePath: jest.fn(),
+  addEventListener: jest.fn(),
+  removeEventListener: jest.fn(),
+})) as any;

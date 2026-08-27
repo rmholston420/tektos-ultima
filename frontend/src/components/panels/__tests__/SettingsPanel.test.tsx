@@ -26,16 +26,17 @@ describe("SettingsPanel", () => {
 
   it("renders all section headers", () => {
     render(<SettingsPanel />);
-    expect(screen.getByText("models")).toBeInTheDocument();
-    expect(screen.getByText("appearance")).toBeInTheDocument();
-    expect(screen.getByText("system")).toBeInTheDocument();
-    expect(screen.getByText("plugins")).toBeInTheDocument();
-    expect(screen.getByText("keys")).toBeInTheDocument();
+    // Section headers use capitalize class: "Models", "Appearance", etc.
+    expect(screen.getByText("Models")).toBeInTheDocument();
+    expect(screen.getByText("Appearance")).toBeInTheDocument();
+    expect(screen.getByText("System")).toBeInTheDocument();
+    expect(screen.getByText("Plugins")).toBeInTheDocument();
+    expect(screen.getByText("Keys")).toBeInTheDocument();
   });
 
   it("expands and collapses sections", () => {
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     expect(screen.getByText("Default Model")).toBeInTheDocument();
     fireEvent.click(modelSection);
@@ -44,7 +45,7 @@ describe("SettingsPanel", () => {
 
   it("renders model settings when expanded", () => {
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     expect(screen.getByText("Default Model")).toBeInTheDocument();
     expect(screen.getByText("Context Window")).toBeInTheDocument();
@@ -53,7 +54,7 @@ describe("SettingsPanel", () => {
 
   it("renders appearance settings when expanded", () => {
     render(<SettingsPanel />);
-    const appearanceSection = screen.getByText("appearance");
+    const appearanceSection = screen.getByText("Appearance");
     fireEvent.click(appearanceSection);
     expect(screen.getByText("Font Size")).toBeInTheDocument();
     expect(screen.getByText("UI Density")).toBeInTheDocument();
@@ -61,7 +62,7 @@ describe("SettingsPanel", () => {
 
   it("renders system settings when expanded", () => {
     render(<SettingsPanel />);
-    const systemSection = screen.getByText("system");
+    const systemSection = screen.getByText("System");
     fireEvent.click(systemSection);
     expect(screen.getByText("Auto-Save Interval (minutes)")).toBeInTheDocument();
     expect(screen.getByText("Enable automatic backups")).toBeInTheDocument();
@@ -69,7 +70,7 @@ describe("SettingsPanel", () => {
 
   it("renders keys settings when expanded", () => {
     render(<SettingsPanel />);
-    const keysSection = screen.getByText("keys");
+    const keysSection = screen.getByText("Keys");
     fireEvent.click(keysSection);
     expect(screen.getByText("API keys are stored securely and encrypted at rest.")).toBeInTheDocument();
   });
@@ -81,7 +82,7 @@ describe("SettingsPanel", () => {
       system: { auto_save_interval: 5, enable_backups: true },
     };
     render(<SettingsPanel initialConfig={initialConfig} />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     const selects = screen.getAllByRole("combobox");
     expect(selects[0]).toHaveValue("qwen3-coder-30b");
@@ -89,7 +90,7 @@ describe("SettingsPanel", () => {
 
   it("saves config on model select change", async () => {
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     const selects = screen.getAllByRole("combobox");
     fireEvent.change(selects[0], { target: { value: "qwen3-coder-30b" } });
@@ -100,7 +101,7 @@ describe("SettingsPanel", () => {
 
   it("saves config on context window change", async () => {
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     const inputs = screen.getAllByRole("spinbutton");
     fireEvent.change(inputs[0], { target: { value: "8192" } });
@@ -111,7 +112,7 @@ describe("SettingsPanel", () => {
 
   it("saves config on max tokens change", async () => {
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     const range = screen.getByRole("slider");
     fireEvent.change(range, { target: { value: "16000" } });
@@ -122,7 +123,7 @@ describe("SettingsPanel", () => {
 
   it("saves config on font size change", async () => {
     render(<SettingsPanel />);
-    const appearanceSection = screen.getByText("appearance");
+    const appearanceSection = screen.getByText("Appearance");
     fireEvent.click(appearanceSection);
     const selects = screen.getAllByRole("combobox");
     fireEvent.change(selects[0], { target: { value: "large" } });
@@ -133,7 +134,7 @@ describe("SettingsPanel", () => {
 
   it("saves config on UI density change", async () => {
     render(<SettingsPanel />);
-    const appearanceSection = screen.getByText("appearance");
+    const appearanceSection = screen.getByText("Appearance");
     fireEvent.click(appearanceSection);
     const selects = screen.getAllByRole("combobox");
     fireEvent.change(selects[1], { target: { value: "compact" } });
@@ -144,7 +145,7 @@ describe("SettingsPanel", () => {
 
   it("saves config on auto-save interval change", async () => {
     render(<SettingsPanel />);
-    const systemSection = screen.getByText("system");
+    const systemSection = screen.getByText("System");
     fireEvent.click(systemSection);
     const inputs = screen.getAllByRole("spinbutton");
     fireEvent.change(inputs[0], { target: { value: "10" } });
@@ -155,7 +156,7 @@ describe("SettingsPanel", () => {
 
   it("saves config on backup toggle change", async () => {
     render(<SettingsPanel />);
-    const systemSection = screen.getByText("system");
+    const systemSection = screen.getByText("System");
     fireEvent.click(systemSection);
     const checkbox = screen.getByRole("checkbox");
     fireEvent.click(checkbox);
@@ -168,7 +169,7 @@ describe("SettingsPanel", () => {
     (api.api.updateConfig as jest.Mock).mockRejectedValueOnce(new Error("Network error"));
     const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     const selects = screen.getAllByRole("combobox");
     fireEvent.change(selects[0], { target: { value: "qwen3-coder-30b" } });
@@ -180,24 +181,24 @@ describe("SettingsPanel", () => {
 
   it("renders plugin section with loading state", () => {
     render(<SettingsPanel />);
-    const pluginsSection = screen.getByText("plugins");
+    const pluginsSection = screen.getByText("Plugins");
     fireEvent.click(pluginsSection);
     expect(screen.getByText("Loading plugins...")).toBeInTheDocument();
   });
 
   it("renders keys section with API key entries", () => {
     render(<SettingsPanel />);
-    const keysSection = screen.getByText("keys");
+    const keysSection = screen.getByText("Keys");
     fireEvent.click(keysSection);
-    expect(screen.getByText("searxng API Key")).toBeInTheDocument();
-    expect(screen.getByText("tavily API Key")).toBeInTheDocument();
-    expect(screen.getByText("farfalle API Key")).toBeInTheDocument();
-    expect(screen.getByText("gmail API Key")).toBeInTheDocument();
+    expect(screen.getByText("Searxng API Key")).toBeInTheDocument();
+    expect(screen.getByText("Tavily API Key")).toBeInTheDocument();
+    expect(screen.getByText("Farfalle API Key")).toBeInTheDocument();
+    expect(screen.getByText("Gmail API Key")).toBeInTheDocument();
   });
 
   it("renders Change buttons for each API key", () => {
     render(<SettingsPanel />);
-    const keysSection = screen.getByText("keys");
+    const keysSection = screen.getByText("Keys");
     fireEvent.click(keysSection);
     const changeButtons = screen.getAllByText("Change");
     expect(changeButtons).toHaveLength(4);
@@ -214,21 +215,21 @@ describe("SettingsPanel", () => {
 
   it("renders max tokens display with default value", () => {
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     expect(screen.getByText("8000")).toBeInTheDocument();
   });
 
   it("renders max tokens display with custom value", () => {
     render(<SettingsPanel initialConfig={{ models: { max_tokens: 16000 } }} />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     expect(screen.getByText("16000")).toBeInTheDocument();
   });
 
   it("renders 1K and 32K labels for max tokens range", () => {
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     expect(screen.getByText("1K")).toBeInTheDocument();
     expect(screen.getByText("32K")).toBeInTheDocument();
@@ -236,7 +237,7 @@ describe("SettingsPanel", () => {
 
   it("renders font size options", () => {
     render(<SettingsPanel />);
-    const appearanceSection = screen.getByText("appearance");
+    const appearanceSection = screen.getByText("Appearance");
     fireEvent.click(appearanceSection);
     expect(screen.getByText("Small (12px)")).toBeInTheDocument();
     expect(screen.getByText("Medium (14px)")).toBeInTheDocument();
@@ -245,7 +246,7 @@ describe("SettingsPanel", () => {
 
   it("renders UI density options", () => {
     render(<SettingsPanel />);
-    const appearanceSection = screen.getByText("appearance");
+    const appearanceSection = screen.getByText("Appearance");
     fireEvent.click(appearanceSection);
     expect(screen.getByText("Comfortable")).toBeInTheDocument();
     expect(screen.getByText("Compact")).toBeInTheDocument();
@@ -254,7 +255,7 @@ describe("SettingsPanel", () => {
 
   it("renders model options", () => {
     render(<SettingsPanel />);
-    const modelSection = screen.getByText("models");
+    const modelSection = screen.getByText("Models");
     fireEvent.click(modelSection);
     const selects = screen.getAllByRole("combobox");
     expect(selects[0]).toHaveTextContent("Qwen3.6-35B-A3B");
