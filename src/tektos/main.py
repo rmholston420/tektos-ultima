@@ -3499,6 +3499,158 @@ async def vision_status():
 
 
 # ---------------------------------------------------------------------------
+# Missing API endpoints — added to support frontend panels
+# ---------------------------------------------------------------------------
+
+@app.get("/api/plugins")
+async def plugins_list():
+    """List loaded plugins."""
+    if _plugin_loader:
+        try:
+            plugins = _plugin_loader.get_plugins()
+            return {"plugins": plugins, "count": len(plugins)}
+        except Exception as exc:
+            return {"plugins": [], "count": 0, "error": str(exc)}
+    return {"plugins": [], "count": 0, "note": "plugin_loader not initialized"}
+
+
+@app.get("/api/context/status")
+async def context_status():
+    """Context management status."""
+    if _metabolism:
+        try:
+            ctx = _metabolism.get_context()
+            return {
+                "status": "active",
+                "context_size": len(ctx) if isinstance(ctx, (list, dict)) else 0,
+                "max_context": _os.getenv("TEKTOS_MAX_CONTEXT_TOKENS", "unlimited"),
+            }
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+    return {"status": "not_initialized"}
+
+
+@app.get("/api/embedder/status")
+async def embedder_status():
+    """Embedder status."""
+    try:
+        from tektos.runtime.embedder import EmbedderClient
+        if hasattr(EmbedderClient, '_instance') and EmbedderClient._instance:
+            client = EmbedderClient._instance
+            return {
+                "status": "initialized",
+                "model": getattr(client, '_model', 'unknown'),
+                "vector_store": getattr(client, '_vector_store', 'unknown'),
+            }
+        return {"status": "not_initialized"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@app.get("/api/evaluation/status")
+async def evaluation_status():
+    """Evaluation harness status."""
+    try:
+        from tektos.evaluation.harness import EvaluationHarness
+        if hasattr(EvaluationHarness, '_instance') and EvaluationHarness._instance:
+            harness = EvaluationHarness._instance
+            return {
+                "status": "initialized",
+                "total_evaluations": getattr(harness, '_total_evaluations', 0),
+                "avg_score": getattr(harness, '_avg_score', 0),
+            }
+        return {"status": "not_initialized"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@app.get("/api/inference/status")
+async def inference_status():
+    """Inference engine status."""
+    return {
+        "status": "active",
+        "model": runtime_sdk._llm_model,
+        "base_url": runtime_sdk._llm_base_url,
+        "health": "ok",
+    }
+
+
+@app.get("/api/rag/status")
+async def rag_status():
+    """RAG (Retrieval-Augmented Generation) status."""
+    try:
+        from tektos.rag import RAGEngine
+        if hasattr(RAGEngine, '_instance') and RAGEngine._instance:
+            engine = RAGEngine._instance
+            return {
+                "status": "initialized",
+                "documents_indexed": getattr(engine, '_doc_count', 0),
+            }
+        return {"status": "not_initialized"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@app.get("/api/repoMap/status")
+async def repo_map_status():
+    """Repository map status."""
+    try:
+        from tektos.repo_map import RepoMapGenerator
+        if hasattr(RepoMapGenerator, '_instance') and RepoMapGenerator._instance:
+            generator = RepoMapGenerator._instance
+            return {
+                "status": "initialized",
+                "files_indexed": getattr(generator, '_file_count', 0),
+            }
+        return {"status": "not_initialized"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@app.get("/api/toolRouter/status")
+async def tool_router_status():
+    """Tool router status."""
+    if app.state.model_router:
+        return {
+            "status": "initialized",
+            "models": len(app.state.model_router.models) if hasattr(app.state.model_router, 'models') else 0,
+        }
+    return {"status": "not_initialized"}
+
+
+@app.get("/api/observability/status")
+async def observability_status():
+    """Observability system status."""
+    return {
+        "status": "active",
+        "telemetry": _telemetry_collector is not None,
+        "auto_recovery": _auto_recovery is not None,
+    }
+
+
+@app.get("/api/multi-agent-orchestrator/status")
+async def orchestrator_status():
+    """Multi-agent orchestrator status."""
+    return {
+        "status": "initialized",
+        "hierarchical_agent": _hierarchical_agent is not None,
+        "long_running_agent": _long_running_agent is not None,
+        "coding_executor": _coding_agent_executor is not None,
+    }
+
+
+@app.get("/api/nervous-system/status")
+async def nervous_system_status():
+    """Nervous system (event bus + state machine) status."""
+    return {
+        "status": "active",
+        "event_bus": _event_bus is not None,
+        "state_machine": _state_machine is not None,
+        "state": _state_machine.current_state.value if _state_machine else "unknown",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Schema introspection endpoint
 # ---------------------------------------------------------------------------
 
