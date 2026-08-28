@@ -54,6 +54,7 @@ const DynamicSelfRepairPanel = dynamic(() => import("@/components/panels/SelfRep
 const DynamicThermalPanel = dynamic(() => import("@/components/panels/ThermalPanel").then((m) => m.ThermalPanel), { ssr: false });
 const DynamicSelfImprovementPanel = dynamic(() => import("@/components/panels/SelfImprovementPanel").then((m) => m.SelfImprovementPanel), { ssr: false });
 const DynamicPlannerPanel = dynamic(() => import("@/components/panels/PlannerPanel").then((m) => m.PlannerPanel), { ssr: false });
+const DynamicChatPanel = dynamic(() => import("@/components/panels/ChatPanel").then((m) => m.TektosChatPanel), { ssr: false });
 
 // Chat components (Hermes GUI parity) — dynamic import to avoid SSR issues with @assistant-ui/react
 const DynamicChatPage = dynamic(() => import("@/components/chat/ChatPage").then((m) => m.default), { ssr: false });
@@ -67,7 +68,7 @@ import { SidebarFooter } from "@/components/chat/SidebarFooter";
 // ---------------------------------------------------------------------------
 
 type PageType = "chat" | "dashboard";
-type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "schema" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings" | "immune" | "database" | "self_repair" | "thermal" | "self_improvement" | "planner";
+type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "schema" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings" | "immune" | "database" | "self_repair" | "thermal" | "self_improvement" | "planner" | "chat";
 
 const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "overview", label: "Overview", icon: "◈" },
@@ -94,6 +95,7 @@ const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "thermal", label: "Thermal", icon: "🌡️" },
   { id: "self_improvement", label: "Self-Improvement", icon: "🧠" },
   { id: "planner", label: "Planner", icon: "📋" },
+  { id: "chat", label: "Chat", icon: "💬" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -319,6 +321,7 @@ export default function App() {
       thermal: () => <DynamicThermalPanel />,
       self_improvement: () => <DynamicSelfImprovementPanel />,
       planner: () => <DynamicPlannerPanel />,
+      chat: () => <DynamicChatPanel />,
     };
     return tabMap[activeTab];
   }, [activeTab]);
