@@ -305,6 +305,9 @@ class TaskDecomposer:
             "You MUST complete each step before moving to the next. After completing each step,",
             "verify the expected output exists before proceeding.",
             "",
+            "⚠️  CRITICAL: You may call web_search AT MOST ONCE across ALL steps.",
+            "After that single search, you MUST write code. No more searching.",
+            "",
         ]
 
         for i, sub_task in enumerate(plan.sub_tasks, 1):
@@ -313,6 +316,10 @@ class TaskDecomposer:
             lines.append(f"- Expected output: {sub_task.expected_output}")
             lines.append(f"- Recommended tools: {tools}")
             lines.append(f"- DO NOT skip this step. DO NOT proceed to the next step until this one is complete.")
+            # Add explicit stop-researching directive for research steps
+            if i == 1 and any(t in tools for t in ["web_search", "web_extract"]):
+                lines.append("- ⚠️  THIS IS YOUR ONLY RESEARCH STEP. Search ONCE, then move to Step 2 immediately.")
+                lines.append("- ⚠️  DO NOT call web_search again after this step. DO NOT go back to research.")
             lines.append("")
 
         lines.append("## IMPORTANT RULES")
@@ -321,5 +328,7 @@ class TaskDecomposer:
         lines.append("- If a step fails, fix the issue and retry — don't skip it.")
         lines.append("- The FINAL deliverable is the output file specified in the task.")
         lines.append("- Make sure the output file exists at the EXACT path specified.")
+        lines.append("- RESEARCH LIMIT: Max 1 web_search call total. After that, WRITE CODE.")
+        lines.append("- It is better to write imperfect code than to research forever.")
 
         return "\n".join(lines)

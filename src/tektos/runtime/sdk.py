@@ -614,29 +614,34 @@ class RuntimeSDK:
                 "- directory_list: List directory contents\n"
                 "- directory_create: Create directories\n"
                 "- search: Search file contents (grep-like)\n"
-                "- web_search: Search the web for information (use this FIRST for unfamiliar tasks)\n"
+                "- web_search: Search the web for information (MAX 1 call)\n"
                 "- web_extract: Extract content from web page URLs\n"
                 "- web_fetch: Fetch/download URLs using curl\n"
                 "- rag_query: Query the knowledge base for past work and documentation\n"
                 "- delegate_task: Spawn a subagent for parallel workstreams\n"
                 "\n"
                 "CRITICAL WORKFLOW — FOLLOW THIS EXACTLY:\n"
-                "STEP 1: RESEARCH — Use web_search to find relevant information. "
-                "Use web_extract to read the pages. Use web_fetch to download files.\n"
-                "STEP 2: WRITE — IMMEDIATELY write your implementation to a file using file_write. "
-                "DO NOT skip this step. DO NOT keep researching. Once you have enough info, WRITE THE CODE.\n"
+                "STEP 1: QUICK RESEARCH (MAX 1 web_search call) — Search once for the key information you need.\n"
+                "  → AFTER 1 SEARCH, YOU MUST STOP AND WRITE CODE. No more searching.\n"
+                "STEP 2: WRITE — IMMEDIATELY write your implementation to a file using file_write.\n"
+                "  → This is MANDATORY. Do NOT skip. Do NOT keep researching.\n"
                 "STEP 3: EXECUTE — Run your code using bash.\n"
                 "STEP 4: VERIFY — Check the output and verify correctness.\n"
                 "\n"
+                "HARDEST RULE — RESEARCH LIMIT:\n"
+                "- You may call web_search AT MOST ONCE per task.\n"
+                "- After that single search, you MUST transition to file_write.\n"
+                "- If you don't know something, use your best knowledge and write the code.\n"
+                "- It is better to write imperfect code than to research forever.\n"
+                "- Research loops are the #1 cause of task failure. BREAK THE LOOP.\n"
+                "\n"
                 "RULES:\n"
                 "- ALWAYS write code to a file using file_write before running it.\n"
-                "- After researching, IMMEDIATELY write your implementation to a file.\n"
+                "- After researching (max 1 search), IMMEDIATELY write your implementation.\n"
                 "- Do NOT keep researching — once you have enough information, WRITE THE CODE.\n"
-                "- If you don't know how to do something, SEARCH THE WEB first.\n"
-                "- Don't guess — look up documentation.\n"
+                "- If you don't know how to do something, use your best knowledge and write code.\n"
                 "- If a command takes >30s, it's normal (downloads, builds).\n"
                 "- You can write to /tmp/, /app/, /usr/local/bin/.\n"
-                "- If you get stuck, try a different search query or approach.\n"
                 "- Always verify your output before finishing.\n"
                 "- When downloading files, use web_fetch with output_path parameter.\n"
                 "- For builds, check what tools are available first (gcc, make, cmake, etc.).\n"
@@ -993,13 +998,10 @@ class RuntimeSDK:
 
                 # Build the complete assistant message with ALL accumulated tool calls
                 tool_calls_this_turn = list(tool_calls_acc.values())
-                log.info(f"[SDK] DEBUG tool_calls_acc keys={list(tool_calls_acc.keys())}")
                 for _k, _v in tool_calls_acc.items():
                     _id = _v.get("id", "")[:20]
                     _name = _v.get("function", {}).get("name", "")
                     _args = len(_v.get("function", {}).get("arguments", ""))
-                    log.info(f"[SDK] DEBUG slot {_k}: id={_id} name={_name} args_len={_args}")
-
                 if finish_reason in ("stop", "tool_calls", "length") or stop_reason == "end_turn":
                     if tool_calls_this_turn:
                         # Execute all tools after the stream ends
