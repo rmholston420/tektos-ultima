@@ -398,11 +398,47 @@ class RuntimeSDK:
                 session.status = "failed"
                 return
 
-        # Build conversation history
+        # Build conversation history — load previous turns from event store
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+
+        # Load prior conversation history from event store
+        try:
+            from tektos.store.event_store import get_events as _get_events
+            prior_events = await _get_events(session.id, since_seq=0, limit=500)
+            # Reconstruct user/assistant message pairs from events
+            assistant_text = ""
+            for ev in prior_events:
+                et = ev.get("type", "")
+                payload = ev.get("payload", {})
+                if et == "assistant.delta":
+                    text = payload.get("text", "") or payload.get("delta", "")
+                    if text:
+                        assistant_text += text
+                elif et == "assistant.completed":
+                    if assistant_text.strip():
+                        messages.append({"role": "assistant", "content": assistant_text.strip()})
+                        assistant_text = ""
+            # If there's leftover assistant text (no completed event yet), include it
+            if assistant_text.strip():
+                messages.append({"role": "assistant", "content": assistant_text.strip()})
+            log.info(f"[SDK] Loaded {len(prior_events)} prior events, {len(messages)} messages in history")
+        except Exception as exc:
+            log.warning(f"[SDK] Failed to load conversation history: {exc}")
+
+        # Add current prompt
         messages.append({"role": "user", "content": prompt})
+
+        # Truncate conversation history to prevent context overflow (500 error from llama.cpp)
+        # Keep system prompt + last 50 messages
+        MAX_MESSAGES = 50
+        if len(messages) > MAX_MESSAGES:
+            system_msgs = [m for m in messages if m.get("role") == "system"]
+            user_assistant_msgs = [m for m in messages if m.get("role") != "system"]
+            messages = system_msgs + user_assistant_msgs[-(MAX_MESSAGES - len(system_msgs)):]
+            log.info(f"[SDK] Truncated messages from {len(messages) + (MAX_MESSAGES - len(system_msgs))} to {len(messages)}")
+
         log.info(f"[SDK] Messages: {len(messages)}, model: {self._llm_model}")
 
         turn = 0  # 1-indexed, checked by loop_safety_monitor
@@ -525,6 +561,11 @@ class RuntimeSDK:
                         saw_any_text = True
                         current_text += content
                         await on_event(assistant_delta(session.id, content))
+                        # Persist assistant delta to event store for conversation history
+                        try:
+                            await append_event(session.id, "assistant.delta", {"text": content})
+                        except Exception:
+                            pass  # Non-fatal — don't break streaming on store failure
 
                     # Handle reasoning/thinking content (Qwen3.6, deep thinking models)
                     # Stream reasoning_content as the actual response — this IS the model's output
@@ -533,6 +574,11 @@ class RuntimeSDK:
                     if reasoning:
                         current_text += reasoning
                         await on_event(assistant_delta(session.id, reasoning))
+                        # Persist assistant delta to event store for conversation history
+                        try:
+                            await append_event(session.id, "assistant.delta", {"text": reasoning})
+                        except Exception:
+                            pass  # Non-fatal — don't break streaming on store failure
 
                     # Handle tool calls
                     for tc in tool_calls:
@@ -607,6 +653,11 @@ class RuntimeSDK:
                             # may have finish_reason but empty content — the text was
                             # already emitted in previous chunks.
                             await on_event(assistant_completed(session.id, stop_reason or "end_turn"))
+                            # Persist assistant.completed to event store
+                            try:
+                                await append_event(session.id, "assistant.completed", {"stop_reason": stop_reason or "end_turn"})
+                            except Exception:
+                                pass  # Non-fatal
                             # Add assistant text to conversation
                             messages.append({"role": "assistant", "content": current_text})
                             # No more tool calls — agent loop complete, return from function

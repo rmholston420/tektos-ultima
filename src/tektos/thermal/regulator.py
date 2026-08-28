@@ -13,8 +13,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import pynvml
-
 from .config import (
     PID_DERIVATIVE_LIMIT,
     PID_INTEGRAL_LIMIT,
@@ -27,6 +25,20 @@ from .metrics import GPUTelemetry, ThermalSnapshot
 from .power_optimizer import PowerOptimizer
 
 logger = logging.getLogger(__name__)
+
+# Lazy import — pynvml may not be available on CPU-only machines
+_pynvml = None
+
+
+def _get_pynvml():
+    global _pynvml
+    if _pynvml is None:
+        try:
+            import pynvml as _mod
+            _pynvml = _mod
+        except ImportError:
+            _pynvml = None
+    return _pynvml
 
 
 @dataclass
@@ -175,13 +187,17 @@ class ThermalRegulator:
     def apply(self, decision: RegulationDecision) -> bool:
         """Apply the regulation decision to the GPU."""
         try:
+            nvml = _get_pynvml()
+            if nvml is None:
+                logger.error("pynvml not available — cannot apply regulation")
+                return False
             self.gpu_optimizer._current_power = decision.gpu_power_limit
             self.gpu_optimizer._current_clock = decision.gpu_clock_mhz
 
             # Apply via NVML
             self.gpu_optimizer._ensure_nvml()
-            handle = pynvml.nvmlDeviceGetHandleByIndex(self.gpu_optimizer.gpu_index)
-            pynvml.nvmlDeviceSetPowerLimit(handle, decision.gpu_power_limit * 1000)
+            handle = nvml.nvmlDeviceGetHandleByIndex(self.gpu_optimizer.gpu_index)
+            nvml.nvmlDeviceSetPowerLimit(handle, decision.gpu_power_limit * 1000)
 
             logger.info(
                 "ThermalRegulator: %s — power=%dW, clock=%dMHz (%s) | CPU: %s (%s)",

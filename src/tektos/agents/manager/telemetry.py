@@ -25,9 +25,21 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable
 
-import pynvml
-
 logger = logging.getLogger(__name__)
+
+# Lazy import — pynvml may not be available on CPU-only machines
+_pynvml = None
+
+
+def _get_pynvml():
+    global _pynvml
+    if _pynvml is None:
+        try:
+            import pynvml as _mod
+            _pynvml = _mod
+        except ImportError:
+            _pynvml = None
+    return _pynvml
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
@@ -109,11 +121,14 @@ class NVMLDriver:
     def init(cls) -> None:
         """Initialize NVML library."""
         if not cls._initialized:
+            nvml = _get_pynvml()
+            if nvml is None:
+                raise RuntimeError("pynvml not installed or NVIDIA driver unavailable")
             try:
-                pynvml.nvmlInit()
+                nvml.nvmlInit()
                 cls._initialized = True
                 logger.info("NVML initialized successfully")
-            except pynvml.NVMLError as e:
+            except nvml.NVMLError as e:
                 logger.error(f"NVML init failed: {e}")
                 raise
 
@@ -121,51 +136,58 @@ class NVMLDriver:
     def get_handle(cls) -> Any:
         """Get NVML device handle for GPU_INDEX."""
         cls.init()
-        return pynvml.nvmlDeviceGetHandleByIndex(GPU_INDEX)
+        nvml = _get_pynvml()
+        return nvml.nvmlDeviceGetHandleByIndex(GPU_INDEX)
 
     @classmethod
     def get_temperature(cls) -> float:
         """Get GPU core temperature."""
         handle = cls.get_handle()
-        return float(pynvml.nvmlDeviceGetTemperature(
-            handle, pynvml.NVML_TEMPERATURE_GPU
+        nvml = _get_pynvml()
+        return float(nvml.nvmlDeviceGetTemperature(
+            handle, nvml.NVML_TEMPERATURE_GPU
         ))
 
     @classmethod
     def get_power_draw(cls) -> float:
         """Get current power draw in watts."""
         handle = cls.get_handle()
-        return float(pynvml.nvmlDeviceGetPowerUsage(handle)) / 1000.0
+        nvml = _get_pynvml()
+        return float(nvml.nvmlDeviceGetPowerUsage(handle)) / 1000.0
 
     @classmethod
     def get_power_limit(cls) -> float:
         """Get current power limit in watts."""
         handle = cls.get_handle()
-        info = pynvml.nvmlDeviceGetPowerManagementLimit(handle)
+        nvml = _get_pynvml()
+        info = nvml.nvmlDeviceGetPowerManagementLimit(handle)
         return float(info) / 1000.0
 
     @classmethod
     def get_utilization(cls) -> float:
         """Get GPU utilization percent."""
         handle = cls.get_handle()
-        return float(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu)
+        nvml = _get_pynvml()
+        return float(nvml.nvmlDeviceGetUtilizationRates(handle).gpu)
 
     @classmethod
     def get_memory(cls) -> tuple[int, int]:
         """Get (used_mb, total_mb) VRAM."""
         handle = cls.get_handle()
-        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        nvml = _get_pynvml()
+        info = nvml.nvmlDeviceGetMemoryInfo(handle)
         return (info.used // (1024 ** 2), info.total // (1024 ** 2))
 
     @classmethod
     def get_clocks(cls) -> tuple[int, int]:
         """Get (graphics_mhz, memory_mhz) clocks."""
         handle = cls.get_handle()
-        graphics = pynvml.nvmlDeviceGetClockInfo(
-            handle, pynvml.NVML_CLOCK_GRAPHICS
+        nvml = _get_pynvml()
+        graphics = nvml.nvmlDeviceGetClockInfo(
+            handle, nvml.NVML_CLOCK_GRAPHICS
         )
-        memory = pynvml.nvmlDeviceGetClockInfo(
-            handle, pynvml.NVML_CLOCK_MEM
+        memory = nvml.nvmlDeviceGetClockInfo(
+            handle, nvml.NVML_CLOCK_MEM
         )
         return (graphics, memory)
 
@@ -173,32 +195,35 @@ class NVMLDriver:
     def get_fan_speed(cls) -> int:
         """Get fan speed percent (may be stale if BIOS controls fans)."""
         handle = cls.get_handle()
-        return int(pynvml.nvmlDeviceGetFanSpeed(handle))
+        nvml = _get_pynvml()
+        return int(nvml.nvmlDeviceGetFanSpeed(handle))
 
     @classmethod
     def get_power_state(cls) -> str:
         """Get current performance state (P0, P1, P8, etc.)."""
         handle = cls.get_handle()
+        nvml = _get_pynvml()
         try:
-            state = pynvml.nvmlDeviceGetPerformanceState(handle)
+            state = nvml.nvmlDeviceGetPerformanceState(handle)
             return f"P{state}"
-        except pynvml.NVMLError:
+        except nvml.NVMLError:
             return "unknown"
 
     @classmethod
     def get_clocks_events(cls) -> dict[str, bool]:
         """Get current clocks event reasons."""
         handle = cls.get_handle()
+        nvml = _get_pynvml()
         reasons = {}
         try:
-            events = pynvml.nvmlDeviceGetClockInfo(
-                handle, pynvml.NVML_CLOCK_INFO_THROUGHPUT
+            events = nvml.nvmlDeviceGetClockInfo(
+                handle, nvml.NVML_CLOCK_INFO_THROUGHPUT
             )
             reasons = {
                 "sw_power_cap": False,
                 "hw_thermal_slowdown": False,
             }
-        except pynvml.NVMLError:
+        except nvml.NVMLError:
             logger.warning("NVML query failed")
         return reasons
 
@@ -206,20 +231,22 @@ class NVMLDriver:
     def set_power_limit(cls, watts: int) -> bool:
         """Set GPU power limit in watts."""
         cls.init()
+        nvml = _get_pynvml()
         try:
             handle = cls.get_handle()
-            pynvml.nvmlDeviceSetPowerLimit(handle, int(watts * 1000))
+            nvml.nvmlDeviceSetPowerLimit(handle, int(watts * 1000))
             logger.info(f"Power limit set to {watts}W")
             return True
-        except pynvml.NVMLError as e:
+        except nvml.NVMLError as e:
             logger.error(f"Failed to set power limit: {e}")
             return False
 
     @classmethod
     def shutdown(cls) -> None:
         """Shutdown NVML library."""
-        if cls._initialized:
-            pynvml.nvmlShutdown()
+        nvml = _get_pynvml()
+        if cls._initialized and nvml is not None:
+            nvml.nvmlShutdown()
             cls._initialized = False
 
 
@@ -393,7 +420,7 @@ class TelemetryCollector:
                 clocks_event_reasons=NVMLDriver.get_clocks_events(),
             )
             return telemetry
-        except pynvml.NVMLError as e:
+        except Exception as e:
             logger.error(f"NVML telemetry collection failed: {e}")
             return GPUTelemetry()
 

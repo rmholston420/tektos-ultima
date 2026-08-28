@@ -12,8 +12,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-import pynvml
-
 from .config import (
     MAX_CLOCK_OFFSET,
     MAX_POWER_LIMIT,
@@ -27,6 +25,20 @@ from .metrics import GPUTelemetry
 from .config import CLOCK_STEP
 
 logger = logging.getLogger(__name__)
+
+# Lazy import — pynvml may not be available on CPU-only machines
+_pynvml = None
+
+
+def _get_pynvml():
+    global _pynvml
+    if _pynvml is None:
+        try:
+            import pynvml as _mod
+            _pynvml = _mod
+        except ImportError:
+            _pynvml = None
+    return _pynvml
 
 
 @dataclass
@@ -56,7 +68,10 @@ class PowerOptimizer:
 
     def _ensure_nvml(self) -> None:
         if not self._nvml_initialized:
-            pynvml.nvmlInit()
+            nvml = _get_pynvml()
+            if nvml is None:
+                raise RuntimeError("pynvml not installed or NVIDIA driver unavailable")
+            nvml.nvmlInit()
             self._nvml_initialized = True
 
     def optimize(self, telemetry: GPUTelemetry) -> OptimizationResult:
@@ -130,19 +145,23 @@ class PowerOptimizer:
     def apply(self, result: OptimizationResult) -> bool:
         """Apply the optimization result to the GPU."""
         try:
+            nvml = _get_pynvml()
+            if nvml is None:
+                logger.error("pynvml not available — cannot apply power optimization")
+                return False
             self._ensure_nvml()
-            handle = pynvml.nvmlDeviceGetHandleByIndex(self.gpu_index)
+            handle = nvml.nvmlDeviceGetHandleByIndex(self.gpu_index)
 
             # Set power limit
-            pynvml.nvmlDeviceSetPowerLimit(handle, result.power_limit_watts * 1000)
+            nvml.nvmlDeviceSetPowerLimit(handle, result.power_limit_watts * 1000)
 
             # Set clock — use NVML to set a specific graphics clock
             # We set the target clock directly if available
             try:
-                pynvml.nvmlDeviceSetGpuLockedClocks(
+                nvml.nvmlDeviceSetGpuLockedClocks(
                     handle, result.clock_mhz, result.clock_mhz
                 )
-            except pynvml.NVMLError:
+            except nvml.NVMLError:
                 # nvmlDeviceSetGpuLockedClocks may not be available on all GPUs
                 # Fall back to setting a clock offset via nvidia-settings
                 logger.debug(
@@ -156,7 +175,7 @@ class PowerOptimizer:
                 result.clock_mhz, result.reason,
             )
             return True
-        except pynvml.NVMLError as e:
+        except nvml.NVMLError as e:
             logger.error(f"PowerOptimizer apply failed: {e}")
             return False
 
@@ -170,6 +189,7 @@ class PowerOptimizer:
         )
 
     def shutdown(self) -> None:
-        if self._nvml_initialized:
-            pynvml.nvmlShutdown()
+        nvml = _get_pynvml()
+        if self._nvml_initialized and nvml is not None:
+            nvml.nvmlShutdown()
             self._nvml_initialized = False

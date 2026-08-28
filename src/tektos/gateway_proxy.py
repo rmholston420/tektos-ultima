@@ -182,7 +182,7 @@ async def handle_session_close(params, rid):
 
     # Close WS if active
     ws = _tektos_ws.get(target)
-    if ws and not ws.closed:
+    if ws and ws.close_code is None:
         try:
             await ws.close()
         except Exception:
@@ -215,7 +215,7 @@ async def handle_session_interrupt(params, rid):
         return _err(rid, 4006, "session_id required")
 
     ws = _tektos_ws.get(target)
-    if ws and not ws.closed:
+    if ws and ws.close_code is None:
         await ws.send(json.dumps({"type": "interrupt", "session_id": target}))
 
     return _ok(rid, {"ok": True})
@@ -258,7 +258,7 @@ async def handle_session_most_recent(params, rid):
 # ── Prompt / submission ──────────────────────────────────────────────────
 
 async def handle_prompt_submit(params, rid):
-    """prompt.submit → send prompt via Tektos WS"""
+    """prompt.submit → send prompt via Tektos WS (sequentially per session)."""
     sid = params.get("session_id", "")
     text = params.get("text", "")
 
@@ -267,9 +267,9 @@ async def handle_prompt_submit(params, rid):
     if not text:
         return _err(rid, 4004, "text required")
 
-    # Connect WS if not already
+    # Connect WS if not already (or if previous connection closed)
     ws = _tektos_ws.get(sid)
-    if not ws or ws.closed:
+    if not ws or ws.close_code is not None:
         ws_url = f"{TEKTOS_WS_URL}/ws/{sid}"
         try:
             ws = await websockets.connect(ws_url)
@@ -278,18 +278,19 @@ async def handle_prompt_submit(params, rid):
             log.error(f"WS connect failed for {sid}: {e}")
             return _err(rid, 5000, f"WebSocket failed: {e}")
 
-    # Send prompt
+    # Start reader if not running (must start before sending, so it can
+    # receive session.ready and forward events)
+    if sid not in _tektos_readers:
+        task = asyncio.create_task(_ws_reader_loop(sid, ws))
+        _tektos_readers[sid] = task
+
+    # Send prompt — Tektos backend processes prompts sequentially per session
     await ws.send(json.dumps({
         "type": "prompt",
         "session_id": sid,
         "prompt": text,
     }))
     log.info(f"Prompt sent to {sid[:8]}: {text[:100]}")
-
-    # Start reader if not running
-    if sid not in _tektos_readers:
-        task = asyncio.create_task(_ws_reader_loop(sid, ws))
-        _tektos_readers[sid] = task
 
     return _ok(rid, {"ok": True})
 
@@ -335,114 +336,126 @@ async def handle_config_set(params, rid):
 # ── WebSocket reader loop ────────────────────────────────────────────────
 
 async def _ws_reader_loop(sid, ws):
-    """Read Tektos WS events and forward as JSON-RPC notifications to all connected clients."""
-    try:
-        async for raw in ws:
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
+    """Read Tektos WS events and forward as JSON-RPC notifications to all connected clients.
+    
+    Reconnects automatically when the Tektos WS closes (e.g., after assistant.completed),
+    so subsequent prompts in the same session continue to work.
+    """
+    while True:
+        try:
+            async for raw in ws:
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
 
-            event_type = data.get("event_type") or data.get("type", "")
-            payload = data.get("payload", {})
+                event_type = data.get("event_type") or data.get("type", "")
+                payload = data.get("payload", {})
 
-            # Map Tektos events to gateway events
-            if event_type == "session.ready":
-                event = _notification("event", {
-                    "type": "gateway.ready",
-                    "payload": {"skin": {}, "change_events": True, "replay_epoch": int(time.time())},
-                })
-                await _broadcast_to_clients(event)
-
-            elif event_type == "assistant.delta":
-                text = payload.get("text", "") or payload.get("delta", "")
-                if text:
+                # Map Tektos events to gateway events
+                if event_type == "session.ready":
                     event = _notification("event", {
-                        "type": "assistant.delta",
-                        "payload": {"session_id": sid, "text": text},
+                        "type": "gateway.ready",
+                        "payload": {"skin": {}, "change_events": True, "replay_epoch": int(time.time())},
                     })
                     await _broadcast_to_clients(event)
 
-            elif event_type == "assistant.completed":
-                event = _notification("event", {
-                    "type": "assistant.completed",
-                    "payload": {"session_id": sid, "stop_reason": payload.get("stop_reason", "end_turn")},
-                })
-                await _broadcast_to_clients(event)
-                break  # Turn complete
+                elif event_type == "assistant.delta":
+                    text = payload.get("text", "") or payload.get("delta", "")
+                    if text:
+                        event = _notification("event", {
+                            "type": "assistant.delta",
+                            "payload": {"session_id": sid, "text": text},
+                        })
+                        await _broadcast_to_clients(event)
 
-            elif event_type == "tool.started":
-                event = _notification("event", {
-                    "type": "tool.started",
-                    "payload": {
-                        "session_id": sid,
-                        "tool_name": payload.get("tool_name", ""),
-                        "tool_input": payload.get("tool_input", {}),
-                    },
-                })
-                await _broadcast_to_clients(event)
+                elif event_type == "assistant.completed":
+                    event = _notification("event", {
+                        "type": "assistant.completed",
+                        "payload": {"session_id": sid, "stop_reason": payload.get("stop_reason", "end_turn")},
+                    })
+                    await _broadcast_to_clients(event)
 
-            elif event_type == "tool.completed":
-                event = _notification("event", {
-                    "type": "tool.completed",
-                    "payload": {
-                        "session_id": sid,
-                        "tool_name": payload.get("tool_name", ""),
-                        "result": payload.get("output", ""),
-                    },
-                })
-                await _broadcast_to_clients(event)
+                elif event_type == "tool.started":
+                    event = _notification("event", {
+                        "type": "tool.started",
+                        "payload": {
+                            "session_id": sid,
+                            "tool_name": payload.get("tool_name", ""),
+                            "tool_input": payload.get("tool_input", {}),
+                        },
+                    })
+                    await _broadcast_to_clients(event)
 
-            elif event_type == "system.message":
-                event = _notification("event", {
-                    "type": "system.message",
-                    "payload": {
-                        "session_id": sid,
-                        "text": payload.get("message", ""),
-                        "level": payload.get("level", "info"),
-                    },
-                })
-                await _broadcast_to_clients(event)
+                elif event_type == "tool.completed":
+                    event = _notification("event", {
+                        "type": "tool.completed",
+                        "payload": {
+                            "session_id": sid,
+                            "tool_name": payload.get("tool_name", ""),
+                            "result": payload.get("output", ""),
+                        },
+                    })
+                    await _broadcast_to_clients(event)
 
-            elif event_type == "session.interrupted":
-                event = _notification("event", {
-                    "type": "session.interrupted",
-                    "payload": {"session_id": sid},
-                })
-                await _broadcast_to_clients(event)
+                elif event_type == "system.message":
+                    event = _notification("event", {
+                        "type": "system.message",
+                        "payload": {
+                            "session_id": sid,
+                            "text": payload.get("message", ""),
+                            "level": payload.get("level", "info"),
+                        },
+                    })
+                    await _broadcast_to_clients(event)
 
-            elif event_type == "session.failed":
-                event = _notification("event", {
-                    "type": "session.failed",
-                    "payload": {"session_id": sid, "error": payload.get("error", "Unknown")},
-                })
-                await _broadcast_to_clients(event)
+                elif event_type == "session.interrupted":
+                    event = _notification("event", {
+                        "type": "session.interrupted",
+                        "payload": {"session_id": sid},
+                    })
+                    await _broadcast_to_clients(event)
 
-            elif event_type == "tool.permission_required":
-                event = _notification("event", {
-                    "type": "tool.permission.required",
-                    "payload": {
-                        "session_id": sid,
-                        "tool_name": payload.get("tool_name", ""),
-                        "tool_input": payload.get("tool_input", {}),
-                    },
-                })
-                await _broadcast_to_clients(event)
+                elif event_type == "session.failed":
+                    event = _notification("event", {
+                        "type": "session.failed",
+                        "payload": {"session_id": sid, "error": payload.get("error", "Unknown")},
+                    })
+                    await _broadcast_to_clients(event)
 
-            else:
-                event = _notification("event", {
-                    "type": event_type,
-                    "payload": data,
-                })
-                await _broadcast_to_clients(event)
+                elif event_type == "tool.permission_required":
+                    event = _notification("event", {
+                        "type": "tool.permission.required",
+                        "payload": {
+                            "session_id": sid,
+                            "tool_name": payload.get("tool_name", ""),
+                            "tool_input": payload.get("tool_input", {}),
+                        },
+                    })
+                    await _broadcast_to_clients(event)
 
-    except websockets.ConnectionClosed:
-        log.info(f"WS closed for session {sid[:8]}")
-    except Exception as e:
-        log.error(f"WS reader error for {sid[:8]}: {e}", exc_info=True)
-    finally:
-        if sid in _tektos_readers:
-            del _tektos_readers[sid]
+                else:
+                    event = _notification("event", {
+                        "type": event_type,
+                        "payload": data,
+                    })
+                    await _broadcast_to_clients(event)
+
+        except websockets.ConnectionClosed:
+            log.info(f"WS closed for session {sid[:8]}, reconnecting...")
+            # Try to reconnect
+            try:
+                ws_url = f"{TEKTOS_WS_URL}/ws/{sid}"
+                ws = await websockets.connect(ws_url)
+                _tektos_ws[sid] = ws
+                log.info(f"Reconnected WS for session {sid[:8]}")
+                continue  # Restart the reader loop with the new connection
+            except Exception as e:
+                log.error(f"Reconnect failed for {sid[:8]}: {e}")
+                break
+        except Exception as e:
+            log.error(f"WS reader error for {sid[:8]}: {e}", exc_info=True)
+            break
 
 
 async def _broadcast_to_clients(event):

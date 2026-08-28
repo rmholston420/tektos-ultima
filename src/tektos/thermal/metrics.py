@@ -11,9 +11,21 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import pynvml
-
 logger = logging.getLogger(__name__)
+
+# Lazy import — pynvml may not be available on CPU-only machines
+_pynvml = None
+
+
+def _get_pynvml():
+    global _pynvml
+    if _pynvml is None:
+        try:
+            import pynvml as _mod
+            _pynvml = _mod
+        except ImportError:
+            _pynvml = None
+    return _pynvml
 
 # ── Data Models ──────────────────────────────────────────────────────────────
 
@@ -66,49 +78,58 @@ class NVMLCollector:
     @classmethod
     def _ensure_init(cls) -> None:
         if not cls._initialized:
+            nvml = _get_pynvml()
+            if nvml is None:
+                logger.error("pynvml not available — GPU metrics disabled")
+                raise RuntimeError("pynvml not installed or NVIDIA driver unavailable")
             try:
-                pynvml.nvmlInit()
+                nvml.nvmlInit()
                 cls._initialized = True
-            except pynvml.NVMLError as e:
+            except nvml.NVMLError as e:
                 logger.error(f"NVML init failed: {e}")
                 raise
 
     @classmethod
     def collect_gpu(cls) -> GPUTelemetry:
         """Gather all available GPU metrics."""
+        nvml = _get_pynvml()
+        if nvml is None:
+            logger.warning("pynvml not available — returning empty GPU telemetry")
+            return GPUTelemetry()
         cls._ensure_init()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(cls.GPU_INDEX)
+        handle = nvml.nvmlDeviceGetHandleByIndex(cls.GPU_INDEX)
 
         try:
             return GPUTelemetry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
-                temperature_gpu=float(pynvml.nvmlDeviceGetTemperature(
-                    handle, pynvml.NVML_TEMPERATURE_GPU)),
-                power_draw=float(pynvml.nvmlDeviceGetPowerUsage(handle)) / 1000.0,
-                power_limit=float(pynvml.nvmlDeviceGetPowerManagementLimit(handle)) / 1000.0,
-                utilization=float(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu),
-                fan_speed=int(pynvml.nvmlDeviceGetFanSpeed(handle)),
-                clocks_graphics=pynvml.nvmlDeviceGetClockInfo(
-                    handle, pynvml.NVML_CLOCK_GRAPHICS),
-                clocks_memory=pynvml.nvmlDeviceGetClockInfo(
-                    handle, pynvml.NVML_CLOCK_MEM),
-                memory_used=int(pynvml.nvmlDeviceGetMemoryInfo(handle).used) // (1024 ** 2),
-                memory_total=int(pynvml.nvmlDeviceGetMemoryInfo(handle).total) // (1024 ** 2),
+                temperature_gpu=float(nvml.nvmlDeviceGetTemperature(
+                    handle, nvml.NVML_TEMPERATURE_GPU)),
+                power_draw=float(nvml.nvmlDeviceGetPowerUsage(handle)) / 1000.0,
+                power_limit=float(nvml.nvmlDeviceGetPowerManagementLimit(handle)) / 1000.0,
+                utilization=float(nvml.nvmlDeviceGetUtilizationRates(handle).gpu),
+                fan_speed=int(nvml.nvmlDeviceGetFanSpeed(handle)),
+                clocks_graphics=nvml.nvmlDeviceGetClockInfo(
+                    handle, nvml.NVML_CLOCK_GRAPHICS),
+                clocks_memory=nvml.nvmlDeviceGetClockInfo(
+                    handle, nvml.NVML_CLOCK_MEM),
+                memory_used=int(nvml.nvmlDeviceGetMemoryInfo(handle).used) // (1024 ** 2),
+                memory_total=int(nvml.nvmlDeviceGetMemoryInfo(handle).total) // (1024 ** 2),
                 memory_temperature=0.0,  # NVML_TEMPERATURE_MEMORY not available on all GPUs
-                power_state=f"P{pynvml.nvmlDeviceGetPerformanceState(handle)}",
+                power_state=f"P{nvml.nvmlDeviceGetPerformanceState(handle)}",
                 clocks_event_reasons={
                     "sw_power_cap": False,
                     "hw_thermal_slowdown": False,
                 },
             )
-        except pynvml.NVMLError as e:
+        except nvml.NVMLError as e:
             logger.error(f"NVML GPU collection failed: {e}")
             return GPUTelemetry()
 
     @classmethod
     def shutdown(cls) -> None:
-        if cls._initialized:
-            pynvml.nvmlShutdown()
+        nvml = _get_pynvml()
+        if cls._initialized and nvml is not None:
+            nvml.nvmlShutdown()
             cls._initialized = False
 
 
