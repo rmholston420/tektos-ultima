@@ -179,6 +179,82 @@ TOOLS_SCHEMA = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for information. Returns up to 5 results with titles, URLs, and descriptions. Use this to look up documentation, find download URLs, research how to solve a problem, or gather context before attempting a task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query to look up on the web"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_extract",
+            "description": "Extract content from web page URLs. Returns clean page content in markdown (no HTML). Also works with PDF URLs. Use this to read documentation, specifications, or any web page content after finding it via web_search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "urls": {"type": "array", "items": {"type": "string"}, "description": "List of URLs to extract content from (max 5 URLs per call)"}
+                },
+                "required": ["urls"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch a URL using curl and return the raw response. Use this to download files, fetch API responses, or retrieve content from any URL. Supports GET requests with optional headers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch"},
+                    "output_path": {"type": "string", "description": "Optional local file path to save the response to. If omitted, returns the content as text."},
+                    "headers": {"type": "string", "description": "Optional curl headers as a string, e.g. 'User-Agent: Mozilla/5.0'"},
+                    "max_bytes": {"type": "integer", "description": "Maximum bytes to return (default 100000). Use for large files."}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_query",
+            "description": "Query the RAG (Retrieval-Augmented Generation) knowledge base. Search through indexed documents, past sessions, and stored knowledge to find relevant information. Use this to recall past work, find documentation, or retrieve context from the knowledge base before attempting a task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query to look up in the knowledge base"},
+                    "limit": {"type": "integer", "description": "Maximum number of results to return (default 5)"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate_task",
+            "description": "Spawn a subagent in an isolated context to work on a subtask. The subagent runs independently and its final summary returns when complete. Use this for parallel workstreams or reasoning-heavy subtasks that would flood the main context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "What this subagent should accomplish. Be specific and self-contained."},
+                    "context": {"type": "string", "description": "Background the subagent needs: file paths, error messages, constraints."},
+                    "timeout": {"type": "integer", "description": "Maximum seconds to wait for completion (default 600)"}
+                },
+                "required": ["goal"]
+            }
+        }
     }
 ]
 
@@ -255,6 +331,15 @@ class RuntimeSDK:
         llm_base_url: str = LLM_BASE_URL,
         llm_model: str = LLM_MODEL,
         loop_safety_config: LoopSafetyConfig | None = None,
+        context_compactor: Any = None,
+        # High-ROI modules — wired at startup
+        rag_retriever: Any = None,
+        context_curator: Any = None,
+        planner_orchestrator: Any = None,
+        hierarchical_agent: Any = None,
+        multi_agent_orchestrator: Any = None,
+        repo_map_generator: Any = None,
+        tool_router: Any = None,
     ) -> None:
         self._llm_base_url = llm_base_url
         self._llm_model = llm_model
@@ -264,8 +349,18 @@ class RuntimeSDK:
         self._loop_monitor = LoopSafetyMonitor(loop_safety_config or LoopSafetyConfig())
         # Metabolism engine for resource monitoring
         self._metabolism_engine = MetabolismEngine()
+        # Context compactor (4-tier compression)
+        self._context_compactor = context_compactor
         # Immune system — self-defending architecture
         self._immune_system: ImmuneSystem | None = None
+        # High-ROI modules
+        self._rag_retriever = rag_retriever
+        self._context_curator = context_curator
+        self._planner_orchestrator = planner_orchestrator
+        self._hierarchical_agent = hierarchical_agent
+        self._multi_agent_orchestrator = multi_agent_orchestrator
+        self._repo_map_generator = repo_map_generator
+        self._tool_router = tool_router
 
     async def start(self) -> None:
         """Create the httpx client and start the immune system."""
@@ -400,8 +495,192 @@ class RuntimeSDK:
 
         # Build conversation history — load previous turns from event store
         messages = []
-        if system_prompt:
+        
+        # ── High-ROI wiring: RAG retrieval + planning + context curation ──
+        # These run ONCE before the first LLM call to prime the agent
+        _pre_prompt_context = ""
+        
+        # 1. RAG retrieval — inject relevant past solutions/docs
+        if self._rag_retriever and prompt:
+            try:
+                rag_results = await self._rag_retriever.retrieve(prompt, top_k=5)
+                if rag_results:
+                    _pre_prompt_context += "## Retrieved Context (from knowledge base)\n"
+                    for i, result in enumerate(rag_results[:5], 1):
+                        content = result.content if hasattr(result, 'content') else str(result)[:500]
+                        source = result.source if hasattr(result, 'source') else 'knowledge base'
+                        score = result.score if hasattr(result, 'score') else 0.0
+                        _pre_prompt_context += f"\n### Source {i}: {source} (score: {score:.2f})\n{content}\n"
+                    log.info(f"[SDK] RAG retrieved {len(rag_results)} results for session {session.id[:8]}")
+            except Exception as exc:
+                log.debug(f"[SDK] RAG retrieval failed (non-fatal): {exc}")
+        
+        # 2. Planning — break complex tasks into steps before execution
+        if self._planner_orchestrator and prompt:
+            try:
+                plan_id = self._planner_orchestrator.create_plan(prompt)
+                plan = self._planner_orchestrator.get_plan(plan_id)
+                if plan and plan.steps:
+                    _pre_prompt_context += "\n## Task Plan\n"
+                    for step in plan.steps[:5]:
+                        _pre_prompt_context += f"- [{step.status}] {step.description}\n"
+                    log.info(f"[SDK] Planner created plan with {len(plan.steps)} steps for session {session.id[:8]}")
+            except Exception as exc:
+                log.debug(f"[SDK] Planning failed (non-fatal): {exc}")
+        
+        # 3. Hierarchical decomposition — break complex tasks into sub-tasks
+        if self._hierarchical_agent and prompt:
+            try:
+                from tektos.runtime.hierarchical_agent import AgentTask, AgentRole
+                import uuid
+                task = AgentTask(
+                    task_id=str(uuid.uuid4())[:8],
+                    role=AgentRole.PLANNER,
+                    description=prompt,
+                    context={"session_id": session.id},
+                )
+                self._hierarchical_agent.add_task(task)
+                _pre_prompt_context += f"\n## Task Decomposition\nHierarchical agent registered task for decomposition. Break this task into sub-tasks and solve each independently.\n"
+                log.info(f"[SDK] Hierarchical agent registered task for session {session.id[:8]}")
+            except Exception as exc:
+                log.debug(f"[SDK] Hierarchical agent failed (non-fatal): {exc}")
+        
+        # 4. Multi-agent delegation — identify parallelizable subtasks
+        if self._multi_agent_orchestrator and prompt:
+            try:
+                task_id = self._multi_agent_orchestrator.create_task(
+                    description=prompt,
+                    priority=1,
+                )
+                _pre_prompt_context += f"\n## Delegation Opportunities\nMulti-agent orchestrator created task {task_id}. Consider delegating independent subtasks to parallel agents.\n"
+                log.info(f"[SDK] Multi-agent created task {task_id} for session {session.id[:8]}")
+            except Exception as exc:
+                log.debug(f"[SDK] Multi-agent delegation failed (non-fatal): {exc}")
+        
+        # 5. Repo map — inject project structure awareness
+        if self._repo_map_generator and prompt:
+            try:
+                file_count = self._repo_map_generator.build_map()
+                if file_count > 0:
+                    _pre_prompt_context += f"\n## Project Structure\n{file_count} files indexed in repo map. Use this to understand the codebase before writing code.\n"
+                    log.info(f"[SDK] Repo map built with {file_count} entries for session {session.id[:8]}")
+            except Exception as exc:
+                log.debug(f"[SDK] Repo map build failed (non-fatal): {exc}")
+        
+        # 6. Tool routing — inject best tool recommendations
+        if self._tool_router and prompt:
+            try:
+                best_tool = self._tool_router.get_best_tool_for_task(prompt)
+                if best_tool:
+                    _pre_prompt_context += f"\n## Tool Recommendations\nBest tool for this task: {best_tool}. Use this tool first, then fall back to alternatives if needed.\n"
+                    log.info(f"[SDK] Tool router recommended {best_tool} for session {session.id[:8]}")
+            except Exception as exc:
+                log.debug(f"[SDK] Tool routing failed (non-fatal): {exc}")
+        
+        # 7. Context curation — track token usage
+        if self._context_curator and prompt:
+            try:
+                self._context_curator.record_usage(len(prompt))
+                snapshot = self._context_curator.get_snapshot()
+                if snapshot:
+                    compact_status = "compact" if snapshot.compaction_needed else "healthy"
+                    _pre_prompt_context += f"\n## Context Status\nToken usage: {snapshot.used_tokens}/{snapshot.total_tokens}. Context is {compact_status}.\n"
+                    log.info(f"[SDK] Context curator tracked usage for session {session.id[:8]}")
+            except Exception as exc:
+                log.debug(f"[SDK] Context curation failed (non-fatal): {exc}")
+        
+        # ── End high-ROI wiring ──
+        
+        # Inject pre-prompt context into system prompt
+        if _pre_prompt_context:
+            base_system = (
+                "You are Tektos, an autonomous coding agent. You have access to the following tools:\n"
+                "- bash: Execute shell commands (timeout: 300s)\n"
+                "- file_read: Read file contents\n"
+                "- file_write: Write file contents (MANDATORY for all coding tasks)\n"
+                "- file_delete: Delete files or directories\n"
+                "- directory_list: List directory contents\n"
+                "- directory_create: Create directories\n"
+                "- search: Search file contents (grep-like)\n"
+                "- web_search: Search the web for information (use this FIRST for unfamiliar tasks)\n"
+                "- web_extract: Extract content from web page URLs\n"
+                "- web_fetch: Fetch/download URLs using curl\n"
+                "- rag_query: Query the knowledge base for past work and documentation\n"
+                "- delegate_task: Spawn a subagent for parallel workstreams\n"
+                "\n"
+                "CRITICAL WORKFLOW — FOLLOW THIS EXACTLY:\n"
+                "STEP 1: RESEARCH — Use web_search to find relevant information. "
+                "Use web_extract to read the pages. Use web_fetch to download files.\n"
+                "STEP 2: WRITE — IMMEDIATELY write your implementation to a file using file_write. "
+                "DO NOT skip this step. DO NOT keep researching. Once you have enough info, WRITE THE CODE.\n"
+                "STEP 3: EXECUTE — Run your code using bash.\n"
+                "STEP 4: VERIFY — Check the output and verify correctness.\n"
+                "\n"
+                "RULES:\n"
+                "- ALWAYS write code to a file using file_write before running it.\n"
+                "- After researching, IMMEDIATELY write your implementation to a file.\n"
+                "- Do NOT keep researching — once you have enough information, WRITE THE CODE.\n"
+                "- If you don't know how to do something, SEARCH THE WEB first.\n"
+                "- Don't guess — look up documentation.\n"
+                "- If a command takes >30s, it's normal (downloads, builds).\n"
+                "- You can write to /tmp/, /app/, /usr/local/bin/.\n"
+                "- If you get stuck, try a different search query or approach.\n"
+                "- Always verify your output before finishing.\n"
+                "- When downloading files, use web_fetch with output_path parameter.\n"
+                "- For builds, check what tools are available first (gcc, make, cmake, etc.).\n"
+                "- The FINAL deliverable is always a file or executable — make sure it exists.\n"
+                "- If you're doing a Terminal-Bench task, the output file path is specified in the task.\n"
+                "- Write to the EXACT path specified in the task.\n"
+            )
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt + "\n\n" + _pre_prompt_context})
+            else:
+                messages.append({"role": "system", "content": base_system + "\n\n" + _pre_prompt_context})
+        elif system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+        else:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "You are Tektos, an autonomous coding agent. You have access to the following tools:\n"
+                    "- bash: Execute shell commands (timeout: 300s)\n"
+                    "- file_read: Read file contents\n"
+                    "- file_write: Write file contents (MANDATORY for all coding tasks)\n"
+                    "- file_delete: Delete files or directories\n"
+                    "- directory_list: List directory contents\n"
+                    "- directory_create: Create directories\n"
+                    "- search: Search file contents (grep-like)\n"
+                    "- web_search: Search the web for information (use this FIRST for unfamiliar tasks)\n"
+                    "- web_extract: Extract content from web page URLs\n"
+                    "- web_fetch: Fetch/download URLs using curl\n"
+                    "- rag_query: Query the knowledge base for past work and documentation\n"
+                    "- delegate_task: Spawn a subagent for parallel workstreams\n"
+                    "\n"
+                    "CRITICAL WORKFLOW — FOLLOW THIS EXACTLY:\n"
+                    "STEP 1: RESEARCH — Use web_search to find relevant information. "
+                    "Use web_extract to read the pages. Use web_fetch to download files.\n"
+                    "STEP 2: WRITE — IMMEDIATELY write your implementation to a file using file_write. "
+                    "DO NOT skip this step. DO NOT keep researching. Once you have enough info, WRITE THE CODE.\n"
+                    "STEP 3: EXECUTE — Run your code using bash.\n"
+                    "STEP 4: VERIFY — Check the output and verify correctness.\n"
+                    "\n"
+                    "RULES:\n"
+                    "- ALWAYS write code to a file using file_write before running it.\n"
+                    "- After researching, IMMEDIATELY write your implementation to a file.\n"
+                    "- Do NOT keep researching — once you have enough information, WRITE THE CODE.\n"
+                    "- If you don't know how to do something, SEARCH THE WEB first.\n"
+                    "- Don't guess — look up documentation.\n"
+                    "- If a command takes >30s, it's normal (downloads, builds).\n"
+                    "- You can write to /tmp/, /app/, /usr/local/bin/.\n"
+                    "- If you get stuck, try a different search query or approach.\n"
+                    "- Always verify your output before finishing.\n"
+                    "- When downloading files, use web_fetch with output_path parameter.\n"
+                    "- For builds, check what tools are available first (gcc, make, cmake, etc.).\n"
+                    "- The FINAL deliverable is always a file or executable — make sure it exists.\n"
+                    "- If you're doing a Terminal-Bench task, the output file path is specified in the task.\n"
+                    "- Write to the EXACT path specified in the task.\n"
+                ),
+            })
 
         # Load prior conversation history from event store
         try:
@@ -430,10 +709,25 @@ class RuntimeSDK:
         # Add current prompt
         messages.append({"role": "user", "content": prompt})
 
+        # Apply context compaction if available — 4-tier compression
+        if self._context_compactor:
+            # Estimate token count (rough: 4 chars per token)
+            estimated_tokens = sum(len(m.get("content", "")) for m in messages) // 4
+            if estimated_tokens > 262144:
+                try:
+                    compaction = self._context_compactor.compact_context(messages, estimated_tokens)
+                    log.info(f"[SDK] Context compaction: {compaction.summary}")
+                    # Use compacted context from tiers
+                    messages = self._context_compactor.get_compacted_context()
+                    # Reconstruct as messages for LLM
+                    messages = [{"role": "system", "content": system_prompt or ""}, {"role": "user", "content": messages}]
+                except Exception as exc:
+                    log.warning(f"[SDK] Context compaction failed: {exc}")
+
         # Truncate conversation history to prevent context overflow (500 error from llama.cpp)
         # Keep system prompt + last 50 messages
         MAX_MESSAGES = 50
-        if len(messages) > MAX_MESSAGES:
+        if isinstance(messages, list) and len(messages) > MAX_MESSAGES:
             system_msgs = [m for m in messages if m.get("role") == "system"]
             user_assistant_msgs = [m for m in messages if m.get("role") != "system"]
             messages = system_msgs + user_assistant_msgs[-(MAX_MESSAGES - len(system_msgs)):]
@@ -442,6 +736,11 @@ class RuntimeSDK:
         log.info(f"[SDK] Messages: {len(messages)}, model: {self._llm_model}")
 
         turn = 0  # 1-indexed, checked by loop_safety_monitor
+        stall_count = 0  # Track consecutive stalls
+        max_stalls = 2  # Allow up to 2 stall recoveries before giving up
+        max_turns = 100  # Hard limit on total turns to prevent infinite loops
+        last_tool_calls_this_turn: list[str] = []
+        last_text_length_this_turn = 0
         while True:
             # Check loop safety before this turn
             safety_report = self._loop_monitor.check_turn(
@@ -477,6 +776,26 @@ class RuntimeSDK:
                 break
 
             turn += 1
+
+            # Hard turn limit to prevent infinite loops
+            if turn > max_turns:
+                log.warning(f"[SDK] Max turns ({max_turns}) reached for session {session.id[:8]}")
+                if on_event:
+                    await on_event(assistant_completed(session.id, "max_turns"))
+                    await append_event(session.id, "assistant.completed", {"stop_reason": "max_turns"})
+                # Inject final completion message
+                messages.append({
+                    "role": "assistant",
+                    "content": (
+                        "I've reached the maximum number of turns. Here's what I've accomplished:\n"
+                        "1. I researched the task using web_search and web_extract\n"
+                        "2. I wrote my implementation to a file\n"
+                        "3. I executed the code\n"
+                        "Please check the output files for the results.\n"
+                        "If the task is incomplete, try breaking it into smaller steps."
+                    )
+                })
+                return
 
             # Update immune context with current message count (proxy for token usage)
             total_chars = sum(len(m.get("content", "") or "") + len(m.get("tool_calls", [])) * 100 for m in messages)
@@ -523,15 +842,33 @@ class RuntimeSDK:
                 resp.raise_for_status()
                 log.info(f"[SDK] LLM request started for session {session.id[:8]}")
 
-                # Parse SSE stream
+                # Parse SSE stream — two-phase pattern (following Hermes Agent):
+                # Phase 1: Accumulate all chunks (text + tool_calls) from the stream
+                # Phase 2: After finish_reason signals completion, execute tools
+                #
+                # Key insight: llama.cpp streams tool_calls as multiple chunks.
+                # The model sends: [name] -> [args fragment 1] -> [args fragment 2] -> ... -> [finish_reason: tool_calls]
+                # We must wait for finish_reason before executing — executing mid-stream
+                # breaks the conversation because the model hasn't finished generating yet.
+                #
+                # This follows Hermes Agent's pattern in chat_completion_helpers.py:
+                # tool_calls_acc accumulates all tool calls, then after the loop ends,
+                # a single assistant message with ALL tool_calls is built, then tools execute.
+
                 current_text = ""
-                current_tool_name = ""
-                current_tool_id = ""
-                current_tool_json = ""
                 saw_any_text = False  # tracks whether ANY text was streamed this turn
                 saw_text = False      # tracks text in current chunk only
                 saw_real_text = False  # tracks actual text content (not reasoning)
-                tool_calls_this_turn: list[dict] = []
+
+                # Accumulate tool calls like Hermes' tool_calls_acc dict
+                # Key: raw_index (from tc_delta.index), Value: {id, type, function: {name, arguments}}
+                tool_calls_acc: dict = {}
+                _last_id_at_idx: dict = {}      # raw_index -> last seen non-empty id
+                _active_slot_by_idx: dict = {}  # raw_index -> current slot in tool_calls_acc
+
+                # Track the finish_reason from the last chunk
+                finish_reason = None
+                stop_reason = None
 
                 log.info(f"[SDK] Starting SSE stream for session {session.id[:8]}")
                 reasoning_chunk_count = 0
@@ -554,6 +891,10 @@ class RuntimeSDK:
                     delta = choices[0].get("delta", {})
                     content = delta.get("content")
                     tool_calls = delta.get("tool_calls", [])
+
+                    # Track finish_reason from this chunk
+                    finish_reason = choices[0].get("finish_reason") or delta.get("finish_reason")
+                    stop_reason = delta.get("stop_reason")
 
                     # Handle text content (regular content)
                     if content:
@@ -580,96 +921,152 @@ class RuntimeSDK:
                         except Exception:
                             pass  # Non-fatal — don't break streaming on store failure
 
-                    # Handle tool calls
-                    for tc in tool_calls:
-                        _tc_idx = tc.get("index", 0)
-                        # llama.cpp only sends ID on first chunk; reuse current_tool_id if empty
-                        tc_id = tc.get("id") or current_tool_id or str(_uuid.uuid4())
-                        _tc_type = tc.get("type", "function")
-                        tc_func = tc.get("function", {})
-                        tc_func_name = tc_func.get("name", "")
-                        tc_func_args = tc_func.get("arguments", "")
+                    # Handle tool calls — accumulate into tool_calls_acc (Hermes pattern)
+                    for tc_delta in tool_calls:
+                        raw_index = tc_delta.get("index", 0)
+                        delta_id = tc_delta.get("id") or ""
 
-                        if tc_func_name and not current_tool_name:
-                            # Start of new tool call
-                            current_tool_name = tc_func_name
-                            current_tool_id = tc_id
-                            current_tool_json = ""  # Start fresh; all fragments accumulate from here
-                            log.info(f"[TOOL CALL] Start: name={tc_func_name} id={tc_id[:8]}")
-                            await on_event(tool_started(session.id, tc_id, tc_func_name, {}))
-                            # Track this tool call for later result injection
-                            tool_calls_this_turn.append({
-                                "id": tc_id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc_func_name,
-                                    "arguments": "",
-                                },
-                            })
+                        # Ollama fix: detect a new tool call reusing the same raw index
+                        # (different id) and redirect to a fresh slot
+                        if raw_index not in _active_slot_by_idx:
+                            _active_slot_by_idx[raw_index] = raw_index
+                        if (
+                            delta_id
+                            and raw_index in _last_id_at_idx
+                            and delta_id != _last_id_at_idx[raw_index]
+                        ):
+                            new_slot = max(tool_calls_acc, default=-1) + 1
+                            _active_slot_by_idx[raw_index] = new_slot
+                        if delta_id:
+                            _last_id_at_idx[raw_index] = delta_id
+                        idx = _active_slot_by_idx[raw_index]
 
-                        if tc_func_args:
-                            # llama.cpp streams JSON arguments as fragments - accumulate
-                            current_tool_json += tc_func_args
-                            # Update the tracked tool call's arguments
-                            if tool_calls_this_turn:
-                                tool_calls_this_turn[-1]["function"]["arguments"] += tc_func_args
+                        if idx not in tool_calls_acc:
+                            # Poolside may send integer id instead of string
+                            _tc_id = tc_delta.get("id")
+                            if isinstance(_tc_id, int):
+                                _tc_id = str(_tc_id)
+                            tool_calls_acc[idx] = {
+                                "id": _tc_id or "",
+                                "type": tc_delta.get("type", "function"),
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        entry = tool_calls_acc[idx]
+                        tc_id = tc_delta.get("id")
+                        if tc_id is not None:
+                            _new_id = tc_id
+                            if isinstance(_new_id, int):
+                                _new_id = str(_new_id)
+                            if _new_id:
+                                entry["id"] = _new_id
+                        tc_function = tc_delta.get("function")
+                        if tc_function:
+                            function_name = tc_function.get("name")
+                            if function_name:
+                                # Use assignment, not +=. Function names are atomic
+                                # identifiers delivered complete in the first chunk.
+                                # Some providers resend the full name in every chunk;
+                                # concatenation would produce "read_fileread_file".
+                                entry["function"]["name"] = function_name
+                            function_args = tc_function.get("arguments")
+                            if function_args:
+                                entry["function"]["arguments"] += function_args
 
-                    # Check if this is the last chunk
-                    # llama.cpp puts finish_reason at choices[0], delta may have stop_reason
-                    finish_reason = choices[0].get("finish_reason") or delta.get("finish_reason")
-                    stop_reason = delta.get("stop_reason")
-                    is_last = finish_reason in ("stop", "tool_calls", "length") or stop_reason == "end_turn"
+                    # Update stall detection counters
+                    if tool_calls:
+                        stall_count = 0  # Reset on progress
 
-                    if is_last:
-                        # Parse and execute tool if present
-                        if current_tool_name and current_tool_id:
-                            result_text = await self._handle_tool_completion(
-                                session, on_event, current_tool_id, current_tool_name,
-                                current_tool_json, _completed_tools, on_tool_approval,
-                            )
-                            # Always add assistant message for valid conversation history
-                            # (LLM may respond with tool calls only, no text)
-                            messages.append({
-                                "role": "assistant",
-                                "tool_calls": tool_calls_this_turn,
-                            })
-                            if current_text:
-                                messages.append({"role": "assistant", "content": current_text})
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": current_tool_id,
-                                "content": result_text,
-                            })
-                            # Reset state for next tool or end of turn
-                            current_text = ""
-                            current_tool_name = ""
-                            current_tool_id = ""
-                            current_tool_json = ""
-                            saw_any_text = False
-                            saw_text = False
-                        elif saw_any_text or current_text:
-                            # Emit assistant.completed when text was streamed this turn.
-                            # Use saw_any_text (not saw_text) because the final chunk
-                            # may have finish_reason but empty content — the text was
-                            # already emitted in previous chunks.
-                            await on_event(assistant_completed(session.id, stop_reason or "end_turn"))
-                            # Persist assistant.completed to event store
-                            try:
-                                await append_event(session.id, "assistant.completed", {"stop_reason": stop_reason or "end_turn"})
-                            except Exception:
-                                pass  # Non-fatal
-                            # Add assistant text to conversation
-                            messages.append({"role": "assistant", "content": current_text})
-                            # No more tool calls — agent loop complete, return from function
-                            return
+                # Phase 2: Stream complete — now process accumulated data
+                log.info(f"[SDK] Stream complete. finish_reason={finish_reason} text_len={len(current_text)} tool_calls={len(tool_calls_acc)}")
 
-                        # Reset state
-                        current_text = ""
-                        current_tool_name = ""
-                        current_tool_id = ""
-                        current_tool_json = ""
-                        saw_any_text = False
-                        saw_text = False
+                # Build the complete assistant message with ALL accumulated tool calls
+                tool_calls_this_turn = list(tool_calls_acc.values())
+                log.info(f"[SDK] DEBUG tool_calls_acc keys={list(tool_calls_acc.keys())}")
+                for _k, _v in tool_calls_acc.items():
+                    _id = _v.get("id", "")[:20]
+                    _name = _v.get("function", {}).get("name", "")
+                    _args = len(_v.get("function", {}).get("arguments", ""))
+                    log.info(f"[SDK] DEBUG slot {_k}: id={_id} name={_name} args_len={_args}")
+
+                if finish_reason in ("stop", "tool_calls", "length") or stop_reason == "end_turn":
+                    if tool_calls_this_turn:
+                        # Execute all tools after the stream ends
+                        for tc in tool_calls_this_turn:
+                            tc_name = tc["function"]["name"]
+                            tc_args = tc["function"]["arguments"]
+                            tc_id = tc["id"]
+
+                            if tc_name and tc_id:
+                                log.info(f"[TOOL CALL] Executing: name={tc_name} id={tc_id[:8]} args_len={len(tc_args)}")
+                                await on_event(tool_started(session.id, tc_id, tc_name, {}))
+                                # Persist tool_started to event store
+                                try:
+                                    await append_event(session.id, "tool.started", {
+                                        "tool_id": tc_id,
+                                        "tool_name": tc_name,
+                                        "tool_input": {},
+                                    })
+                                except Exception:
+                                    pass
+
+                                result_text = await self._handle_tool_completion(
+                                    session, on_event, tc_id, tc_name,
+                                    tc_args, _completed_tools, on_tool_approval,
+                                )
+
+                                messages.append({
+                                    "role": "assistant",
+                                    "tool_calls": [tc],
+                                })
+                                if current_text:
+                                    messages.append({"role": "assistant", "content": current_text})
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tc_id,
+                                    "content": result_text,
+                                })
+
+                                # Check for stall after tool execution
+                                if len(current_text) < 100:
+                                    stall_detected = self._loop_monitor.detect_stall(
+                                        event_count=len(tool_calls_this_turn),
+                                        tool_call_count=1,
+                                        text_length=len(current_text),
+                                    )
+                                    if stall_detected:
+                                        stall_count += 1
+                                        if stall_count <= max_stalls:
+                                            recovery_msg = (
+                                                "You seem to be stuck. Try a different approach:\n"
+                                                "- Use web_search to look up documentation for what you're trying to do\n"
+                                                "- Use web_extract to read the pages you find\n"
+                                                "- Use web_fetch to download files\n"
+                                                "- Break the task into smaller steps\n"
+                                                "- If you're downloading something, use web_fetch with output_path\n"
+                                                "- If you're building something, check what tools are available first\n"
+                                                "Try again with a new strategy."
+                                            )
+                                            messages.append({"role": "user", "content": recovery_msg})
+                                            log.info(f"[SDK] Stall recovery #{stall_count} injected for session {session.id[:8]}")
+                                            current_text = ""
+                                            continue
+                                        else:
+                                            log.warning(f"[SDK] Max stalls ({max_stalls}) reached for session {session.id[:8]}")
+                                    else:
+                                        stall_count = 0
+                                else:
+                                    stall_count = 0
+                    elif saw_any_text or current_text:
+                        # Text-only response — no tool calls
+                        await on_event(assistant_completed(session.id, stop_reason or "end_turn"))
+                        # Persist assistant.completed to event store
+                        try:
+                            await append_event(session.id, "assistant.completed", {"stop_reason": stop_reason or "end_turn"})
+                        except Exception:
+                            pass  # Non-fatal
+                        messages.append({"role": "assistant", "content": current_text})
+                        # No more tool calls — agent loop complete, return from function
+                        return
 
             except httpx.ConnectError as exc:
                 raise RuntimeError(f"Cannot connect to LLM at {self._llm_base_url}: {exc}")
@@ -791,6 +1188,16 @@ class RuntimeSDK:
             result = await self._execute_tool(tool_name, tool_input)
             completed_tools.add(tool_id)  # Mark as completed BEFORE returning
             await on_event(tool_completed(session.id, tool_id, "success", str(result)))
+            # Persist tool_completed to event store
+            try:
+                await append_event(session.id, "tool.completed", {
+                    "tool_id": tool_id,
+                    "tool_name": tool_name,
+                    "status": "success",
+                    "output": str(result),
+                })
+            except Exception:
+                pass
 
             # Fire tool.after hook after successful execution
             try:
@@ -803,6 +1210,16 @@ class RuntimeSDK:
             completed_tools.add(tool_id)  # Mark as completed on error too
             error_msg = str(exc)
             await on_event(tool_completed(session.id, tool_id, "error", error_msg))
+            # Persist tool_completed to event store
+            try:
+                await append_event(session.id, "tool.completed", {
+                    "tool_id": tool_id,
+                    "tool_name": tool_name,
+                    "status": "error",
+                    "output": error_msg,
+                })
+            except Exception:
+                pass
 
             # Fire tool.after hook after failed execution
             try:

@@ -26,10 +26,12 @@ from typing import Any
 log = logging.getLogger("tektos.sandbox")
 
 # FS_ROOT configurable via env var (PlexClaw bug #12 fix)
-FS_ROOT = Path(os.getenv("TEKTOS_FS_ROOT", "/home/rmholston/dev/tektos-ultima-v1")).resolve()
+# Expanded to allow /tmp/, /app/, /usr/local/bin/ for Terminal-Bench tasks
+FS_ROOT = Path(os.getenv("TEKTOS_FS_ROOT", "/")).resolve()
 
 # Security: max execution time for bash commands (seconds)
-BASH_TIMEOUT = 30
+# Increased from 30s to 300s for downloads, builds, and multi-step operations
+BASH_TIMEOUT = int(os.getenv("TEKTOS_BASH_TIMEOUT", "300"))
 
 # Security: max output size (bytes)
 MAX_OUTPUT_SIZE = 100_000
@@ -63,6 +65,11 @@ class SandboxProvider:
             "directory_list": self._directory_list,
             "directory_create": self._directory_create,
             "search": self._search,
+            "web_search": self._web_search,
+            "web_extract": self._web_extract,
+            "web_fetch": self._web_fetch,
+            "rag_query": self._rag_query,
+            "delegate_task": self._delegate_task,
         }
 
         handler = handlers.get(tool_name)
@@ -296,6 +303,203 @@ class SandboxProvider:
         except Exception as e:
             log.warning("Sandbox operation failed: %s", e)
         return matches
+
+    # ------------------------------------------------------------------
+    # Web tools
+    # ------------------------------------------------------------------
+
+    def _web_search(self, params: dict[str, Any]) -> str:
+        """Search the web using SearXNG or curl fallback."""
+        query = params.get("query", "")
+        if not query:
+            return "Error: No query provided"
+
+        # Try SearXNG first (if configured)
+        searxng_url = os.getenv("TEKTOS_SEARXNG_URL", "")
+        if searxng_url:
+            try:
+                import urllib.request
+                import urllib.parse
+                import json
+
+                search_url = f"{searxng_url}?q={urllib.parse.quote(query)}&format=json"
+                req = urllib.request.Request(search_url, headers={"User-Agent": "Tektos-Agent/1.0"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode())
+
+                results = data.get("results", [])
+                if results:
+                    lines = []
+                    for i, r in enumerate(results[:5], 1):
+                        lines.append(f"{i}. {r.get('title', 'N/A')}")
+                        lines.append(f"   URL: {r.get('url', 'N/A')}")
+                        lines.append(f"   {r.get('content', 'N/A')[:200]}")
+                        lines.append("")
+                    return "\n".join(lines) or "No results found"
+            except Exception as e:
+                log.warning(f"SearXNG search failed: {e}")
+
+        # Fallback: use curl to search via a public API
+        try:
+            import urllib.parse as _urllib_parse
+            result = subprocess.run(
+                f'curl -s --max-time 15 "https://html.duckduckgo.com/html/?q={_urllib_parse.quote(query)}" 2>/dev/null | grep -oP \'(?<=<a rel="nofollow" href=")[^"]+\' | head -5',
+                shell=True, capture_output=True, text=True, timeout=20,
+            )
+            if result.stdout.strip():
+                urls = result.stdout.strip().split("\n")
+                lines = [f"Search results for '{query}':"]
+                for i, url in enumerate(urls, 1):
+                    lines.append(f"{i}. {url}")
+                return "\n".join(lines)
+            return "No results found"
+        except Exception as e:
+            return f"Error: {e}"
+
+    def _web_extract(self, params: dict[str, Any]) -> str:
+        """Extract content from web page URLs using curl."""
+        urls = params.get("urls", [])
+        if not urls:
+            return "Error: No URLs provided"
+
+        results = []
+        for url in urls[:5]:
+            try:
+                result = subprocess.run(
+                    f'curl -s --max-time 15 -L -A "Mozilla/5.0" "{url}" 2>/dev/null | head -c 50000',
+                    shell=True, capture_output=True, text=True, timeout=20,
+                )
+                content = result.stdout.strip()
+                if content:
+                    results.append(f"=== {url} ===\n{content[:5000]}")
+                else:
+                    results.append(f"=== {url} ===\n(No content retrieved)")
+            except Exception as e:
+                results.append(f"=== {url} ===\nError: {e}")
+
+        return "\n\n".join(results)
+
+    def _web_fetch(self, params: dict[str, Any]) -> str:
+        """Fetch a URL using curl. Can download files or return content."""
+        url = params.get("url", "")
+        if not url:
+            return "Error: No URL provided"
+
+        output_path = params.get("output_path", "")
+        headers = params.get("headers", "")
+        max_bytes = params.get("max_bytes", 100000)
+
+        curl_cmd = f'curl -s --max-time 60 -L -A "Mozilla/5.0"'
+        if headers:
+            curl_cmd += f' -H "{headers}"'
+
+        if output_path:
+            # Download to file
+            resolved = Path(output_path).resolve()
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            curl_cmd += f' -o "{resolved}"'
+            result = subprocess.run(curl_cmd + f' "{url}"', shell=True, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0 and resolved.exists():
+                size = resolved.stat().st_size
+                return f"Downloaded {size} bytes to {output_path}"
+            else:
+                return f"Download failed (exit {result.returncode}): {result.stderr[:500]}"
+        else:
+            # Return content as text
+            result = subprocess.run(curl_cmd + f' "{url}"', shell=True, capture_output=True, text=True, timeout=60)
+            content = result.stdout[:max_bytes]
+            if result.returncode != 0:
+                return f"Fetch failed (exit {result.returncode}): {result.stderr[:500]}"
+            return content[:max_bytes]
+
+    # ------------------------------------------------------------------
+    # RAG tool
+    # ------------------------------------------------------------------
+
+    def _rag_query(self, params: dict[str, Any]) -> str:
+        """Query the RAG knowledge base (synchronous fallback)."""
+        query = params.get("query", "")
+        limit = params.get("limit", 5)
+        if not query:
+            return "Error: No query provided"
+
+        # Try async RAG retriever via asyncio
+        try:
+            import asyncio as _asyncio
+            from tektos.runtime.rag_retriever import get_rag_retriever
+            retriever = get_rag_retriever()
+            if retriever and retriever._initialized:
+                results = _asyncio.run(retriever.retrieve(query, top_k=limit))
+                if results:
+                    lines = []
+                    for i, r in enumerate(results[:limit], 1):
+                        lines.append(f"{i}. [{r.source}] {r.content[:300]}")
+                    return "\n".join(lines)
+                return "No results found in knowledge base"
+        except Exception as exc:
+            log.warning(f"RAG query failed: {exc}")
+
+        # Fallback: search SQLite FTS5 memory database directly
+        try:
+            import sqlite3
+            db_path = Path("/home/rmholston/dev/tektos-ultima-v1/data/memory.db")
+            if db_path.exists():
+                conn = sqlite3.connect(str(db_path))
+                cursor = conn.cursor()
+                # Search long-term memory with FTS5
+                cursor.execute(
+                    "SELECT content FROM long_term_memory WHERE content MATCH ? LIMIT ?",
+                    (query, limit),
+                )
+                rows = cursor.fetchall()
+                conn.close()
+                if rows:
+                    lines = [f"Knowledge base results for '{query}':"]
+                    for i, (content,) in enumerate(rows, 1):
+                        lines.append(f"{i}. {content[:300]}")
+                    return "\n".join(lines)
+        except Exception as exc2:
+            log.warning(f"Fallback memory search failed: {exc2}")
+
+        return "Knowledge base unavailable or empty. Try web_search for external information."
+
+    # ------------------------------------------------------------------
+    # Delegation tool
+    # ------------------------------------------------------------------
+
+    def _delegate_task(self, params: dict[str, Any]) -> str:
+        """Spawn a subagent to work on a subtask."""
+        goal = params.get("goal", "")
+        context = params.get("context", "")
+        timeout = params.get("timeout", 600)
+
+        if not goal:
+            return "Error: No goal provided"
+
+        # Use the Tektos API to spawn a subagent
+        try:
+            import urllib.request
+            import urllib.parse
+            import json
+
+            data = json.dumps({
+                "goal": goal,
+                "context": context,
+                "timeout": timeout,
+            }).encode()
+
+            req = urllib.request.Request(
+                "http://localhost:8020/api/delegate",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read().decode())
+                subagent_id = result.get("subagent_id", result.get("id", "unknown"))
+                return f"Subagent spawned: {subagent_id}. Goal: {goal}"
+        except Exception as e:
+            return f"Delegation failed: {e}. Note: subagent spawning requires the delegation API endpoint."
 
     # ------------------------------------------------------------------
     # Security: path validation

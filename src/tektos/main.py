@@ -73,6 +73,16 @@ _axiom_system: Any = None
 _neo4j_backend: Any = None
 _postgres_backend: Any = None
 _redis_backend: Any = None
+_embedder_client: Any = None
+_inference_monitor: Any = None
+_observability_manager: Any = None
+_rag_engine: Any = None
+_repo_map_generator: Any = None
+_multi_agent_orchestrator: Any = None
+_planner_orchestrator: Any = None
+_tool_router: Any = None
+_rag_retriever: Any = None
+_context_curator: Any = None
 
 from tektos.db_manager import DatabaseManager
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
@@ -130,6 +140,10 @@ async def lifespan(app: _FastAPI):
     global _self_modification_engine, _plugin_loader, _axiom_system
     global _neo4j_backend, _postgres_backend, _redis_backend
     global _unified_search, _gitops_engine, _auto_recovery, _telemetry_collector
+    global _context_compactor
+    global _embedder_client, _inference_monitor, _observability_manager
+    global _rag_engine, _repo_map_generator, _multi_agent_orchestrator
+    global _planner_orchestrator, _tool_router, _rag_retriever, _context_curator
     global thermal_monitor, vision_client, telegram_gateway
     global memory_system
 
@@ -157,22 +171,29 @@ async def lifespan(app: _FastAPI):
     except Exception as exc:
         log.warning("Schema migration failed (continuing): %s", exc)
 
-    # 5. Initialize runtime SDK
-    runtime_sdk = RuntimeSDK(
-        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1"),
-        llm_model=_os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M"),
-    )
+    # 4.5. Initialize context compactor (4-tier compression)
+    from tektos.runtime.context_compactor import ContextCompactor
+    global _context_compactor
+    _context_compactor = ContextCompactor(max_tokens=262144)
+    log.info("Context compactor initialized (4-tier: raw → summarized → abstracted → persistent)")
+
+    # 5. Initialize runtime SDK (placeholder — actual creation after all modules init)
+    # runtime_sdk will be created after _tool_router is initialized (line ~1115)
+    global runtime_sdk
+    runtime_sdk = None  # type: ignore[assignment]
 
     # 5b. Initialize model router with running LLM as default
-    if runtime_sdk._llm_base_url and runtime_sdk._llm_model:
+    llm_base_url = _os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1")
+    llm_model = _os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M")
+    if llm_base_url and llm_model:
         try:
             from tektos.routing import ModelRouter, ModelProfile, ModelTier
             _model_router = ModelRouter()
             _model_router.register_model(
                 ModelProfile(
-                    name=runtime_sdk._llm_model,
-                    api_base=runtime_sdk._llm_base_url,
-                    model_name=runtime_sdk._llm_model,
+                    name=llm_model,
+                    api_base=llm_base_url,
+                    model_name=llm_model,
                     tier=ModelTier.BALANCED,
                     category="general",
                     is_default=True,
@@ -181,7 +202,7 @@ async def lifespan(app: _FastAPI):
                 )
             )
             app.state.model_router = _model_router
-            log.info("Model router initialized — default: %s → %s", runtime_sdk._llm_model, runtime_sdk._llm_base_url)
+            log.info("Model router initialized — default: %s → %s", llm_model, llm_base_url)
         except Exception as exc:
             log.warning("Failed to initialize model router: %s", exc)
 
@@ -580,8 +601,8 @@ async def lifespan(app: _FastAPI):
         _voice_manager = None
     log.info("Metabolism engine initialized (VRAM + context budget + power)")
 
-    # 11. Start runtime SDK
-    await runtime_sdk.start()
+    # 11. Start runtime SDK — moved to after RuntimeSDK creation (~line 1120)
+    # await runtime_sdk.start()  # Called after RuntimeSDK is instantiated
 
     # 9. Initialize vision client (optional — only if VISION_LLM_URL is set)
     vision_url = _os.getenv("TEKTOS_VISION_LLM_URL")
@@ -694,7 +715,6 @@ async def lifespan(app: _FastAPI):
     from tektos.runtime.hierarchical_agent import HierarchicalAgent
     from tektos.runtime.long_running_agent import LongRunningAgent
     from tektos.agents.coding_agent.executor import Executor as CodingAgentExecutor
-    global _hierarchical_agent, _long_running_agent, _coding_agent_executor
     try:
         _hierarchical_agent = HierarchicalAgent(max_concurrent_agents=3)
         log.info("Hierarchical agent initialized")
@@ -832,7 +852,7 @@ async def lifespan(app: _FastAPI):
     try:
         _hindsight_client = HindsightClient(
             config=HindsightConfig(
-                base_url=_os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177"),
+                base_url=_os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"),
                 bank_id="tektos",
                 timeout=30.0,
             )
@@ -973,7 +993,136 @@ async def lifespan(app: _FastAPI):
         log.warning("Failed to initialize telemetry collector: %s", exc)
         _telemetry_collector = None
 
+    # 18. Initialize embedding system (vector search)
+    try:
+        from tektos.runtime.embedder import EmbedderClient
+        _embedder_client = EmbedderClient(
+            llm_base_url=_os.getenv("TEKTOS_EMBEDDER_URL", "http://127.0.0.1:8091/v1"),
+            model=_os.getenv("TEKTOS_EMBEDDER_MODEL", "Qwen3-Embedding-0.6B-Q8_0"),
+        )
+        await _embedder_client.start()
+        log.info("Embedder client initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize embedder client: %s", exc)
+        _embedder_client = None
+
+    # 19. Initialize inference engine monitor
+    try:
+        from tektos.runtime.inference_engine import InferenceEngineMonitor
+        _inference_monitor = InferenceEngineMonitor()
+        await _inference_monitor.start()
+        log.info("Inference engine monitor initialized and started")
+    except Exception as exc:
+        log.warning("Failed to initialize inference engine monitor: %s", exc)
+        _inference_monitor = None
+
+    # 20. Initialize observability manager
+    try:
+        from tektos.runtime.observability import ObservabilityManager
+        _observability_manager = ObservabilityManager()
+        await _observability_manager.start()
+        log.info("Observability manager initialized and started")
+    except Exception as exc:
+        log.warning("Failed to initialize observability manager: %s", exc)
+        _observability_manager = None
+
+    # 21. Initialize context curator
+    try:
+        from tektos.runtime.context_curator import ContextCurator
+        _context_curator = ContextCurator(max_tokens=262144, compaction_threshold=0.75)
+        await _context_curator.start()
+        log.info("Context curator initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize context curator: %s", exc)
+        _context_curator = None
+
+    # 22. Initialize multi-agent orchestrator
+    try:
+        from tektos.runtime.multi_agent_orchestrator import MultiAgentOrchestrator
+        _multi_agent_orchestrator = MultiAgentOrchestrator(max_concurrent_agents=5)
+        log.info("Multi-agent orchestrator initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize multi-agent orchestrator: %s", exc)
+        _multi_agent_orchestrator = None
+
+    # 23. Initialize planner orchestrator
+    try:
+        from tektos.runtime.planner_orchestrator import PlannerOrchestrator
+        _planner_orchestrator = PlannerOrchestrator()
+        await _planner_orchestrator.start()
+        log.info("Planner orchestrator initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize planner orchestrator: %s", exc)
+        _planner_orchestrator = None
+
+    # 24. Initialize RAG engine
+    try:
+        from tektos.runtime.rag_engine import RAGEngine
+        _rag_engine = RAGEngine(
+            embedder_client=_embedder_client,
+            retriever=None,  # RAGRetriever initialized separately
+        )
+        await _rag_engine.start()
+        log.info("RAG engine initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize RAG engine: %s", exc)
+        _rag_engine = None
+
+    # 25. Initialize RAG retriever
+    try:
+        from tektos.runtime.rag_retriever import RAGRetriever
+        _rag_retriever = RAGRetriever(
+            embedder_client=_embedder_client,
+            project_root=str(_Path(__file__).parent / ".." / ".."),
+        )
+        await _rag_retriever.start()
+        log.info("RAG retriever initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize RAG retriever: %s", exc)
+        _rag_retriever = None
+
+    # 26. Initialize repo map generator
+    try:
+        from tektos.runtime.repo_map_generator import RepoMapGenerator
+        _repo_map_generator = RepoMapGenerator(
+            project_root=str(_Path(__file__).parent / ".." / ".."),
+        )
+        await _repo_map_generator.start()
+        log.info("Repo map generator initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize repo map generator: %s", exc)
+        _repo_map_generator = None
+
+    # 27. Initialize tool router
+    try:
+        from tektos.runtime.tool_router import ToolRouter
+        _tool_router = ToolRouter(embedder_client=_embedder_client)
+        log.info("Tool router initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize tool router: %s", exc)
+        _tool_router = None
+
     log.info("All modules initialized — Tektos-Ultima-v1 ready")
+
+    # 5. Initialize runtime SDK (after all modules are available)
+    runtime_sdk = RuntimeSDK(
+        llm_base_url=llm_base_url,
+        llm_model=llm_model,
+        context_compactor=_context_compactor,
+        # High-ROI modules — wired for maximum agent capability
+        rag_retriever=_rag_retriever,
+        context_curator=_context_curator,
+        planner_orchestrator=_planner_orchestrator,
+        hierarchical_agent=_hierarchical_agent,
+        multi_agent_orchestrator=_multi_agent_orchestrator,
+        repo_map_generator=_repo_map_generator,
+        tool_router=_tool_router,
+    )
+    log.info("RuntimeSDK initialized with all high-ROI modules")
+
+    # Start the runtime SDK (connect to LLM, start immune system)
+    await runtime_sdk.start()
+    log.info("RuntimeSDK started")
 
     # 12. Initialize hook system — register BuiltinHooks with the HookManager
     from tektos.runtime.hooks import HookManager
@@ -3540,11 +3689,13 @@ async def context_status():
     """Context management status."""
     if _metabolism:
         try:
-            ctx = _metabolism.get_context()
+            state = _metabolism.assess_health()
             return {
                 "status": "active",
-                "context_size": len(ctx) if isinstance(ctx, (list, dict)) else 0,
-                "max_context": _os.getenv("TEKTOS_MAX_CONTEXT_TOKENS", "unlimited"),
+                "context_budget": state.context_budget.to_dict() if state.context_budget else None,
+                "gpu": state.gpu.to_dict() if state.gpu else None,
+                "system": state.system.to_dict() if state.system else None,
+                "overall_health": state.overall_health.value,
             }
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
@@ -3554,33 +3705,28 @@ async def context_status():
 @app.get("/api/embedder/status")
 async def embedder_status():
     """Embedder status."""
-    try:
-        from tektos.runtime.embedder import EmbedderClient
-        if hasattr(EmbedderClient, '_instance') and EmbedderClient._instance:
-            client = EmbedderClient._instance
-            return {
-                "status": "initialized",
-                "model": getattr(client, '_model', 'unknown'),
-                "vector_store": getattr(client, '_vector_store', 'unknown'),
-            }
+    if _embedder_client is None:
         return {"status": "not_initialized"}
-    except Exception as exc:
-        return {"status": "error", "error": str(exc)}
+    return {
+        "status": "initialized",
+        "model": _embedder_client._model,
+        "base_url": _embedder_client._base_url,
+    }
 
 
 @app.get("/api/evaluation/status")
 async def evaluation_status():
     """Evaluation harness status."""
     try:
-        from tektos.evaluation.harness import EvaluationHarness
-        if hasattr(EvaluationHarness, '_instance') and EvaluationHarness._instance:
-            harness = EvaluationHarness._instance
-            return {
-                "status": "initialized",
-                "total_evaluations": getattr(harness, '_total_evaluations', 0),
-                "avg_score": getattr(harness, '_avg_score', 0),
-            }
-        return {"status": "not_initialized"}
+        from tektos.runtime.evaluation_framework import get_evaluation_harness
+        harness = get_evaluation_harness()
+        status = harness.get_status()
+        return {
+            "status": "initialized",
+            "total_evaluations": status["total_evaluations"],
+            "completed_evaluations": status["completed_evaluations"],
+            "average_score": status["average_score"],
+        }
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 
@@ -3599,44 +3745,68 @@ async def inference_status():
 @app.get("/api/rag/status")
 async def rag_status():
     """RAG (Retrieval-Augmented Generation) status."""
-    try:
-        from tektos.rag import RAGEngine
-        if hasattr(RAGEngine, '_instance') and RAGEngine._instance:
-            engine = RAGEngine._instance
-            return {
-                "status": "initialized",
-                "documents_indexed": getattr(engine, '_doc_count', 0),
-            }
+    if _rag_engine is None:
         return {"status": "not_initialized"}
-    except Exception as exc:
-        return {"status": "error", "error": str(exc)}
+    return {
+        "status": "initialized",
+        "stats": _rag_engine.get_stats(),
+    }
 
 
 @app.get("/api/repoMap/status")
 async def repo_map_status():
     """Repository map status."""
-    try:
-        from tektos.repo_map import RepoMapGenerator
-        if hasattr(RepoMapGenerator, '_instance') and RepoMapGenerator._instance:
-            generator = RepoMapGenerator._instance
-            return {
-                "status": "initialized",
-                "files_indexed": getattr(generator, '_file_count', 0),
-            }
+    if _repo_map_generator is None:
         return {"status": "not_initialized"}
-    except Exception as exc:
-        return {"status": "error", "error": str(exc)}
+    return {
+        "status": "initialized",
+        "stats": _repo_map_generator.get_stats(),
+    }
 
 
 @app.get("/api/toolRouter/status")
 async def tool_router_status():
     """Tool router status."""
-    if app.state.model_router:
-        return {
-            "status": "initialized",
-            "models": len(app.state.model_router.models) if hasattr(app.state.model_router, 'models') else 0,
-        }
-    return {"status": "not_initialized"}
+    if _tool_router is None:
+        return {"status": "not_initialized"}
+    return {
+        "status": "initialized",
+        "stats": _tool_router.get_tool_stats(),
+    }
+
+
+@app.get("/api/contextCurator/status")
+async def context_curator_status():
+    """Context curator status."""
+    if _context_curator is None:
+        return {"status": "not_initialized"}
+    return {
+        "status": "initialized",
+        "stats": _context_curator.get_compaction_stats(),
+    }
+
+
+@app.get("/api/planner/status")
+async def planner_status():
+    """Planner orchestrator status."""
+    if _planner_orchestrator is None:
+        return {"status": "not_initialized"}
+    return {
+        "status": "initialized",
+        "stats": _planner_orchestrator.get_plan_stats(),
+    }
+
+
+@app.get("/api/ragRetriever/status")
+async def rag_retriever_status():
+    """RAG retriever status."""
+    if _rag_retriever is None:
+        return {"status": "not_initialized"}
+    return {
+        "status": "initialized",
+        "db_path": _rag_retriever._db_path,
+        "initialized": _rag_retriever._initialized,
+    }
 
 
 @app.get("/api/observability/status")
@@ -4170,6 +4340,179 @@ async def list_api_keys():
             "configured": bool(value),
         })
     return {"keys": keys}
+
+
+# ---------------------------------------------------------------------------
+# External Backend Status Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/neo4j/status")
+async def neo4j_status():
+    """Check Neo4j graph database backend status."""
+    if _neo4j_backend is None:
+        return {"status": "not_initialized", "database": "neo4j"}
+    try:
+        healthy = _neo4j_backend._driver is not None
+        return {
+            "status": "connected" if healthy else "error",
+            "database": "neo4j",
+            "uri": _neo4j_backend._uri if hasattr(_neo4j_backend, "_uri") else None,
+            "healthy": healthy,
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "database": "neo4j",
+            "uri": _neo4j_backend._uri if hasattr(_neo4j_backend, "_uri") else None,
+            "healthy": False,
+            "error": str(e),
+        }
+
+
+@app.get("/api/postgres/status")
+async def postgres_status():
+    """Check PostgreSQL long-term/procedural memory backend status."""
+    if _postgres_backend is None:
+        return {"status": "not_initialized", "database": "postgres"}
+    try:
+        conn_ok = _postgres_backend._conn is not None
+        return {
+            "status": "connected" if conn_ok else "disconnected",
+            "database": "postgres",
+            "host": _postgres_backend.config.host if hasattr(_postgres_backend, "config") else None,
+            "port": _postgres_backend.config.port if hasattr(_postgres_backend, "config") else None,
+            "database": _postgres_backend.config.database if hasattr(_postgres_backend, "config") else None,
+            "connected": conn_ok,
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "database": "postgres",
+            "host": _postgres_backend.config.host if hasattr(_postgres_backend, "config") else None,
+            "port": _postgres_backend.config.port if hasattr(_postgres_backend, "config") else None,
+            "connected": False,
+            "error": str(e),
+        }
+
+
+@app.get("/api/redis/status")
+async def redis_status():
+    """Check Redis working memory backend status."""
+    if _redis_backend is None:
+        return {"status": "not_initialized", "database": "redis"}
+    try:
+        client_ok = _redis_backend._client is not None
+        # Try a PING to verify connectivity
+        ping_ok = False
+        try:
+            if _redis_backend._client:
+                _redis_backend._client.ping()
+                ping_ok = True
+        except Exception:
+            pass
+        return {
+            "status": "connected" if (client_ok and ping_ok) else "disconnected",
+            "database": "redis",
+            "host": _redis_backend.config.host if hasattr(_redis_backend, "config") else None,
+            "port": _redis_backend.config.port if hasattr(_redis_backend, "config") else None,
+            "connected": client_ok,
+            "ping_ok": ping_ok,
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "database": "redis",
+            "host": _redis_backend.config.host if hasattr(_redis_backend, "config") else None,
+            "port": _redis_backend.config.port if hasattr(_redis_backend, "config") else None,
+            "connected": False,
+            "ping_ok": False,
+            "error": str(e),
+        }
+
+
+@app.get("/api/hindsight/status")
+async def hindsight_status():
+    """Check Hindsight cross-session memory daemon status."""
+    if _hindsight_client is None:
+        return {"status": "not_initialized", "service": "hindsight"}
+    try:
+        health = _hindsight_client.health()
+        return {
+            "status": "connected" if health.get("status") == "ok" else "error",
+            "service": "hindsight",
+            "base_url": _hindsight_client.config.base_url,
+            "bank_id": _hindsight_client.config.bank_id,
+            "healthy": health.get("status") == "ok",
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "service": "hindsight",
+            "base_url": _hindsight_client.config.base_url if hasattr(_hindsight_client, "config") else None,
+            "bank_id": _hindsight_client.config.bank_id if hasattr(_hindsight_client, "config") else None,
+            "healthy": False,
+            "error": str(e),
+        }
+
+
+# Hindsight action endpoints
+@app.post("/api/hindsight/retain")
+async def hindsight_retain(payload: dict[str, Any]):
+    """Store a fact to Hindsight."""
+    if _hindsight_client is None:
+        raise _HTTPException(status_code=503, detail="Hindsight not initialized")
+    try:
+        content = payload.get("content", "")
+        context = payload.get("context", "")
+        tags = payload.get("tags", [])
+        result = _hindsight_client.retain(content, context, tags)
+        return result
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hindsight/recall")
+async def hindsight_recall(payload: dict[str, Any]):
+    """Search Hindsight for relevant memories."""
+    if _hindsight_client is None:
+        raise _HTTPException(status_code=503, detail="Hindsight not initialized")
+    try:
+        query = payload.get("query", "")
+        limit = payload.get("limit", 5)
+        result = _hindsight_client.recall(query, limit)
+        return result
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hindsight/reflect")
+async def hindsight_reflect(payload: dict[str, Any]):
+    """Get synthesized reasoning from Hindsight."""
+    if _hindsight_client is None:
+        raise _HTTPException(status_code=503, detail="Hindsight not initialized")
+    try:
+        question = payload.get("question", "")
+        max_tokens = payload.get("max_tokens", 1000)
+        result = _hindsight_client.reflect(question, max_tokens)
+        return result
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/hindsight/experiences")
+async def hindsight_experiences(limit: int = 10):
+    """Get recent experiences from Hindsight."""
+    if _hindsight_client is None:
+        raise _HTTPException(status_code=503, detail="Hindsight not initialized")
+    try:
+        experiences = _hindsight_client.get_experiences(limit=limit)
+        return experiences
+    except Exception as e:
+        raise _HTTPException(status_code=500, detail=str(e))
 
 
 # ---------------------------------------------------------------------------

@@ -340,6 +340,22 @@ class LoopSafetyMonitor:
         self._repetition_count = 0
         self._has_warned_threshold = False
 
+    def detect_stall(self, event_count: int = 0, tool_call_count: int = 0, text_length: int = 0) -> bool:
+        """Detect if the agent is stalled (not making progress).
+
+        A stall is when the agent has made very few events/tool calls
+        and is producing minimal text — indicating it's stuck.
+
+        Returns True if a stall is detected.
+        """
+        # Stall conditions: very few events AND few tool calls AND little text
+        if event_count < 30 and tool_call_count < 3 and text_length < 200:
+            return True
+        # Also detect: many turns but no tool calls (pure text looping)
+        if len(self._snapshots) >= 5 and tool_call_count == 0:
+            return True
+        return False
+
     @property
     def state(self) -> LoopState:
         return self._state
