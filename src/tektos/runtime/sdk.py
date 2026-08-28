@@ -340,6 +340,7 @@ class RuntimeSDK:
         multi_agent_orchestrator: Any = None,
         repo_map_generator: Any = None,
         tool_router: Any = None,
+        task_decomposer: Any = None,
     ) -> None:
         self._llm_base_url = llm_base_url
         self._llm_model = llm_model
@@ -361,6 +362,7 @@ class RuntimeSDK:
         self._multi_agent_orchestrator = multi_agent_orchestrator
         self._repo_map_generator = repo_map_generator
         self._tool_router = tool_router
+        self._task_decomposer = task_decomposer
 
     async def start(self) -> None:
         """Create the httpx client and start the immune system."""
@@ -589,6 +591,16 @@ class RuntimeSDK:
             except Exception as exc:
                 log.debug(f"[SDK] Context curation failed (non-fatal): {exc}")
         
+
+        # 8. Task decomposition — break complex tasks into numbered sub-tasks
+        if self._task_decomposer and prompt:
+            try:
+                plan = self._task_decomposer.decompose(prompt)
+                _pre_prompt_context += "\n" + self._task_decomposer.format_for_prompt(plan) + "\n"
+                log.info(f"[SDK] Task decomposer created {len(plan.sub_tasks)} sub-tasks for session {session.id[:8]}")
+            except Exception as exc:
+                log.debug(f"[SDK] Task decomposition failed (non-fatal): {exc}")
+
         # ── End high-ROI wiring ──
         
         # Inject pre-prompt context into system prompt

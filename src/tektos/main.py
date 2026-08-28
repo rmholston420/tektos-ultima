@@ -1096,8 +1096,10 @@ async def lifespan(app: _FastAPI):
     # 27. Initialize tool router
     try:
         from tektos.runtime.tool_router import ToolRouter
+        from tektos.runtime.task_decomposer import TaskDecomposer
         _tool_router = ToolRouter(embedder_client=_embedder_client)
-        log.info("Tool router initialized")
+        _task_decomposer = TaskDecomposer()
+        log.info("Tool router and task decomposer initialized")
     except Exception as exc:
         log.warning("Failed to initialize tool router: %s", exc)
         _tool_router = None
@@ -1117,6 +1119,7 @@ async def lifespan(app: _FastAPI):
         multi_agent_orchestrator=_multi_agent_orchestrator,
         repo_map_generator=_repo_map_generator,
         tool_router=_tool_router,
+        task_decomposer=_task_decomposer,
     )
     log.info("RuntimeSDK initialized with all high-ROI modules")
 
