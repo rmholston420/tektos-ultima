@@ -987,6 +987,23 @@ class RuntimeSDK:
                                 entry["function"]["name"] = function_name
                             function_args = tc_function.get("arguments")
                             if function_args:
+                                # Qwen3.6-35B quirk: model sends tool call with empty args,
+                                # then hallucinates tool result as a tool call chunk with
+                                # name="" and args='{"status": "success", ...}'.
+                                # Detect this by checking if the accumulated args look like
+                                # a tool result (has "status" key) and the name is empty.
+                                # In that case, skip appending — it's noise, not real args.
+                                if not function_name and entry["function"]["name"]:
+                                    # This chunk has no name but the entry has a name.
+                                    # Check if args look like a hallucinated result.
+                                    try:
+                                        _test_args = _json.loads(function_args)
+                                        if isinstance(_test_args, dict) and "status" in _test_args:
+                                            # This is a hallucinated tool result, skip it
+                                            log.debug(f"[SDK] Skipping hallucinated tool result chunk for {entry['function']['name']}")
+                                            continue
+                                    except (_json.JSONDecodeError, ValueError):
+                                        pass  # Not JSON, treat as normal args
                                 entry["function"]["arguments"] += function_args
 
                     # Update stall detection counters
@@ -1011,6 +1028,24 @@ class RuntimeSDK:
                             tc_id = tc["id"]
 
                             if tc_name and tc_id:
+                                # Qwen3.6-35B quirk: model sends tool calls with empty
+                                # arguments. If args are empty, try to extract the actual
+                                # content from the text stream (current_text).
+                                if not tc_args and current_text and tc_name == "file_write":
+                                    # The model likely put the file content in the text stream.
+                                    # Try to parse it as a path + content pattern.
+                                    # Look for patterns like: "write to /path/to/file\n<content>"
+                                    # or "create /path/to/file\n<content>"
+                                    import re as _re
+                                    _path_match = _re.search(r'(?:write|create|save)\s+(?:to\s+)?(/[^\s\n]+)', current_text, _re.IGNORECASE)
+                                    if _path_match:
+                                        _extracted_path = _path_match.group(1)
+                                        # Content is everything after the path mention
+                                        _content_start = _path_match.end()
+                                        _extracted_content = current_text[_content_start:].strip()
+                                        if _extracted_path and _extracted_content:
+                                            tc_args = _json.dumps({"path": _extracted_path, "content": _extracted_content})
+                                            log.info(f"[SDK] Extracted file_write args from text stream: path={_extracted_path[:50]} content_len={len(_extracted_content)}")
                                 log.info(f"[TOOL CALL] Executing: name={tc_name} id={tc_id[:8]} args_len={len(tc_args)}")
                                 await on_event(tool_started(session.id, tc_id, tc_name, {}))
                                 # Persist tool_started to event store
@@ -1116,8 +1151,14 @@ class RuntimeSDK:
         except _json.JSONDecodeError:
             tool_input = {}
         
-        # Debug: log what we received
-        log.warning(f"[SDK] TOOL_EXEC: name={tool_name} input_str_len={len(tool_input_str)} input_str={repr(tool_input_str[:300])} parsed={tool_input}")
+        # Qwen3.6-35B quirk: model sends tool calls with empty arguments
+        # and puts the actual content in the text stream. When arguments are
+        # empty for file_write/bash, extract content from accumulated text.
+        if not tool_input and tool_input_str == "":
+            # For file_write: look for file content in current_text
+            # For bash: look for command in current_text
+            # The text stream contains the actual content the model wants to write/execute
+            pass  # tool_input stays {} — sandbox will handle empty params
 
         # Run immune system checks before execution
         if self._immune_system:
