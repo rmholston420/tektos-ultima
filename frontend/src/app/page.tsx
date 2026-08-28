@@ -68,7 +68,7 @@ import { SidebarFooter } from "@/components/chat/SidebarFooter";
 // ---------------------------------------------------------------------------
 
 type PageType = "chat" | "dashboard";
-type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "schema" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings" | "immune" | "database" | "self_repair" | "thermal" | "self_improvement" | "planner" | "chat";
+type DashboardTab = "overview" | "nervous" | "tools" | "metabolism" | "schema" | "graph" | "telemetry" | "router" | "axioms" | "memory" | "skills" | "config" | "keys" | "mcp" | "hooks" | "logs" | "scheduling" | "settings" | "immune" | "database" | "self_repair" | "thermal" | "self_improvement" | "planner";
 
 const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "overview", label: "Overview", icon: "◈" },
@@ -95,7 +95,6 @@ const DASHBOARD_TABS: { id: DashboardTab; label: string; icon: string }[] = [
   { id: "thermal", label: "Thermal", icon: "🌡️" },
   { id: "self_improvement", label: "Self-Improvement", icon: "🧠" },
   { id: "planner", label: "Planner", icon: "📋" },
-  { id: "chat", label: "Chat", icon: "💬" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -321,7 +320,6 @@ export default function App() {
       thermal: () => <DynamicThermalPanel />,
       self_improvement: () => <DynamicSelfImprovementPanel />,
       planner: () => <DynamicPlannerPanel />,
-      chat: () => <DynamicChatPanel />,
     };
     return tabMap[activeTab];
   }, [activeTab]);
@@ -398,43 +396,17 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <>
-                {/* Main terminal area */}
-                <div className="flex-1 flex min-h-0">
-                  <DynamicChatPage
-                    activeSessionId={activeSession.id}
-                    onSelectSession={handleSelectSession}
-                    onCreateSession={handleCreateSession}
-                    connectionState={connectionState}
-                    activeModel={activeModel}
-                    onModelChange={handleModelChange}
-                    isActive={activePage === "chat"}
-                    protocolClient={protocolClient}
-                    sessionStore={sessionStore}
-                  />
-                </div>
-
-                {/* Chat sidebar (right side) */}
-                {!chatPanelCollapsed && (
-                  <div className="w-80 border-l border-border/50 flex flex-col min-h-0">
-                    <ChatSidebar
-                      channel={activeSession.id}
-                      profile=""
-                      className="flex-shrink-0"
-                    />
-                    <div className="flex-1 min-h-0 overflow-y-auto">
-                      <ChatSessionList
-                        activeSessionId={activeSession.id}
-                        profile=""
-                        onPicked={handleSelectSession}
-                        onNewChat={handleCreateSession}
-                      />
-                    </div>
-                    <SidebarStatusStrip className="flex-shrink-0" />
-                    <SidebarFooter className="flex-shrink-0" />
-                  </div>
-                )}
-              </>
+              <DynamicChatPanel
+                activeSessionId={activeSession.id}
+                onSelectSession={handleSelectSession}
+                onCreateSession={handleCreateSession}
+                connectionState={connectionState}
+                activeModel={activeModel}
+                onModelChange={handleModelChange}
+                isActive={activePage === "chat"}
+                protocolClient={protocolClient}
+                sessionStore={sessionStore}
+              />
             )}
           </div>
         ) : (

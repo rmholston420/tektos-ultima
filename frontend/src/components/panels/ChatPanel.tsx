@@ -1,16 +1,15 @@
 /**
- * Tektos Chat Panel — ACP-compatible agent chat with virtualized messages.
+ * Tektos Chat Panel — Main chat interface with virtualized messages.
  *
- * A coding-agent chat surface with:
+ * Replaces the old ChatPage + ChatSidebar with a unified split-pane layout:
  * - Left: chat column (virtualized message list + input)
  * - Right: collapsible drawer with tabbed content (Files, Terminal, Preview)
  *
- * Protocol: ACP-compatible JSON-RPC over Streamable HTTP (with WebSocket fallback).
- * Security: All user/agent content rendered as text via React JSX escaping.
+ * Integrates with the existing ProtocolClient (WebSocket) for real-time
+ * message streaming from the Tektos backend.
+ *
  * Performance: @tanstack/react-virtual for message list virtualization.
  * Accessibility: ARIA roles, keyboard navigation, focus management.
- *
- * Spec: docs/tektos-chat-panel-spec-v1.md
  */
 
 "use client";
@@ -24,15 +23,16 @@ import {
   EyeIcon,
   XMarkIcon,
   PaperAirplaneIcon,
-  StopIcon,
   Cog6ToothIcon,
-  SparklesIcon,
   ListBulletIcon,
 } from "@heroicons/react/24/outline";
-import {
-  SparklesIcon as SparklesSolid,
-  ChatBubbleLeftIcon as ChatBubbleSolid,
-} from "@heroicons/react/24/solid";
+import type {
+  WSEnvelopeClient,
+  ConnectionState as WSConnectionState,
+} from "@/lib/protocol";
+import { ProtocolClient, EventType } from "@/lib/protocol";
+import type { SessionSnapshot, SessionEvent } from "@/lib/session-store";
+import type { SessionStore } from "@/lib/session-store";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -74,6 +74,20 @@ interface BackgroundTask {
   startedAt: string;
   completedAt?: string;
   messageCount: number;
+}
+
+// ── Props ───────────────────────────────────────────────────────────────────
+
+interface ChatPanelProps {
+  activeSessionId: string;
+  onSelectSession: (sessionId: string) => void;
+  onCreateSession: () => void;
+  connectionState: WSConnectionState;
+  activeModel: string;
+  onModelChange: (modelId: string) => void;
+  isActive: boolean;
+  protocolClient: ProtocolClient;
+  sessionStore: SessionStore;
 }
 
 // ── Tab definitions ─────────────────────────────────────────────────────────
@@ -328,8 +342,6 @@ function FilesTab() {
   const fetchFiles = useCallback(async () => {
     try {
       setError(null);
-      // Placeholder: backend needs a file-tree endpoint
-      // e.g., GET /api/files?path=/workspace
       setFiles([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load files");
@@ -394,7 +406,6 @@ function TerminalTab() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [lines]);
 
-  // Placeholder: subscribe to terminal stream
   useEffect(() => {
     const timer = setTimeout(() => setLoading(false), 500);
     return () => clearTimeout(timer);
@@ -421,7 +432,6 @@ function TerminalTab() {
               {line.command && (
                 <div className="text-green-400">$ {line.command}</div>
               )}
-              {/* Output rendered as text — safe from XSS */}
               <div className={line.isError ? "text-red-400" : "text-muted-foreground"}>
                 {line.output}
               </div>
@@ -455,7 +465,6 @@ function Drawer({
 }) {
   const [activeTab, setActiveTab] = useState<DrawerTab>("files");
 
-  // Keyboard shortcut: Alt+1/2/3 to switch tabs
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.altKey && e.key === "1") { e.preventDefault(); setActiveTab("files"); }
@@ -574,13 +583,136 @@ function ActiveTasksBar({
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
-export function TektosChatPanel() {
+export function TektosChatPanel({
+  activeSessionId,
+  connectionState: wsState,
+  isActive,
+  protocolClient,
+  sessionStore,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [sending, setSending] = useState(false);
-  const [connectionState, setConnectionState] = useState<ConnectionState>("connected");
   const [activeTasks, setActiveTasks] = useState<BackgroundTask[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+
+  // Map WebSocket connection state to our connection state
+  const connectionState: ConnectionState = useMemo(() => {
+    switch (wsState) {
+      case "connected": return "connected";
+      case "connecting": return "connecting";
+      case "reconnecting": return "connecting";
+      case "disconnected": return "disconnected";
+      default: return "disconnected";
+    }
+  }, [wsState]);
+
+  // Listen to WebSocket events from the shared ProtocolClient
+  useEffect(() => {
+    if (!isActive) return;
+
+    const handleEvent = (envelope: WSEnvelopeClient) => {
+      const { event_type, payload } = envelope;
+
+      // Handle assistant delta (streaming text)
+      if (event_type === "assistant.delta") {
+        const delta = payload.text as string | undefined;
+        if (delta) {
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === "assistant") {
+              const updated = [...prev];
+              updated[updated.length - 1] = {
+                ...last,
+                content: last.content + delta,
+              };
+              return updated;
+            }
+            return [
+              ...prev,
+              {
+                id: `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                role: "assistant",
+                content: delta,
+                timestamp: new Date().toISOString(),
+              },
+            ];
+          });
+        }
+      }
+
+      // Handle assistant completed
+      if (event_type === "assistant.completed") {
+        setMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === "assistant") {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              ...last,
+              content: last.content,
+            };
+            return updated;
+          }
+          return prev;
+        });
+      }
+
+      // Handle user message sent
+      if (event_type === "user.message") {
+        const text = payload.text as string | undefined;
+        if (text) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: `user-${Date.now()}`,
+              role: "user",
+              content: text,
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
+      }
+
+      // Handle tool call
+      if (event_type === "tool_call") {
+        const toolName = payload.tool_name as string | undefined;
+        const result = payload.result as string | undefined;
+        if (toolName) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: `tool-${Date.now()}`,
+              role: "tool",
+              content: result || "Tool executed",
+              timestamp: new Date().toISOString(),
+              toolName,
+            },
+          ]);
+        }
+      }
+
+      // Handle system messages
+      if (event_type === "system.message" || event_type === "error") {
+        const text = payload.text as string | undefined;
+        if (text) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: `system-${Date.now()}`,
+              role: "system",
+              content: text,
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
+      }
+    };
+
+    protocolClient.on(EventType.ASSISTANT_DELTA, handleEvent);
+    return () => {
+      protocolClient.off(EventType.ASSISTANT_DELTA, handleEvent);
+    };
+  }, [isActive, protocolClient]);
 
   // Handle Escape key to close drawer
   useEffect(() => {
@@ -595,56 +727,22 @@ export function TektosChatPanel() {
 
   const handleSend = useCallback(async (text: string) => {
     setSending(true);
-    setConnectionState("connecting");
 
-    const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}-user`,
-      role: "user",
-      content: text,
-      timestamp: new Date().toISOString(),
-    };
-    setMessages(prev => [...prev, userMsg]);
-
-    // Placeholder: connect to Tektos backend via ACP-compatible protocol
-    // In the full implementation, this would:
-    // 1. POST to /api/agent/prompt with the user message
-    // 2. Subscribe to SSE/WebSocket stream for agent updates
-    // 3. Map session/update notifications to ChatMessage objects
+    // Send via the shared ProtocolClient (WebSocket)
     try {
-      await new Promise(resolve => setTimeout(resolve, 800));
-      const assistantMsg: ChatMessage = {
-        id: `msg-${Date.now()}-assistant`,
-        role: "assistant",
-        content: `I received your request: "${text}". This is a placeholder response — the full implementation will connect to the Tektos backend via the ACP-compatible protocol.`,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-      setConnectionState("connected");
-
-      // Track as a background task
-      const taskId = `task-${Date.now()}`;
-      const task: BackgroundTask = {
-        id: taskId,
-        sessionId: `sess-placeholder`,
-        status: "running",
-        prompt: text,
-        startedAt: new Date().toISOString(),
-        messageCount: 0,
-      };
-      setActiveTasks(prev => [...prev, task]);
-      setCurrentSessionId(task.sessionId);
-    } catch {
+      await protocolClient.sendPrompt(text);
+    } catch (err) {
+      console.error("Failed to send message:", err);
       setMessages(prev => [...prev, {
         id: `msg-${Date.now()}-error`,
         role: "system",
-        content: "Failed to connect to the agent. Please check the backend is running.",
+        content: "Failed to send message. Please check the backend is running.",
         timestamp: new Date().toISOString(),
       }]);
-      setConnectionState("error");
     } finally {
       setSending(false);
     }
-  }, []);
+  }, [protocolClient]);
 
   const handleShowSession = useCallback((sessionId: string) => {
     console.log("Showing session:", sessionId);
