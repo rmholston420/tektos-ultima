@@ -1115,6 +1115,9 @@ class RuntimeSDK:
             tool_input = _json.loads(tool_input_str) if tool_input_str else {}
         except _json.JSONDecodeError:
             tool_input = {}
+        
+        # Debug: log what we received
+        log.warning(f"[SDK] TOOL_EXEC: name={tool_name} input_str_len={len(tool_input_str)} input_str={repr(tool_input_str[:300])} parsed={tool_input}")
 
         # Run immune system checks before execution
         if self._immune_system:
