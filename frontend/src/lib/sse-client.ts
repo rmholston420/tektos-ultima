@@ -7,6 +7,18 @@
  * queue is exhausted), this client hits the /api/prompt/sse endpoint
  * and consumes Server-Sent Events to render assistant deltas inline.
  *
+ * The SSE stream uses the OpenAI-compatible chat.completion.chunk format,
+ * identical to the Hermes Agent desktop GUI SSE stream:
+ *
+ *   data: {"id":"...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+ *   data: {"id":"...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}
+ *   data: {"id":"...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+ *   data: [DONE]
+ *
+ * Custom hermes.tool.progress events are emitted for tool lifecycle:
+ *   event: hermes.tool.progress
+ *   data: {"toolCallId":"...","toolName":"...","status":"...","input":{...}}
+ *
  * Usage:
  *   const client = new SSEClient();
  *   client.on("assistant_delta", (delta: { text: string }) => { … });
@@ -45,6 +57,165 @@ export interface SSESendOptions {
   sessionId: string;
   systemPrompt?: string;
   model?: string;
+}
+
+/** Parse an OpenAI-compatible chat.completion.chunk SSE frame. */
+function parseChunk(
+  data: unknown,
+  sessionId: string,
+): SSEEnvelope | null {
+  if (typeof data !== "object" || data === null) return null;
+  const obj = data as Record<string, unknown>;
+  const object = obj.object;
+  if (object !== "chat.completion.chunk") return null;
+
+  const choices = obj.choices as unknown[] | undefined;
+  if (!Array.isArray(choices) || choices.length === 0) return null;
+  const choice = choices[0] as Record<string, unknown> | undefined;
+  if (!choice) return null;
+
+  const delta = choice.delta as Record<string, unknown> | undefined;
+  const finishReason = choice.finish_reason as string | null | undefined;
+
+  // Role chunk — skip (no user-facing event)
+  if (delta?.role === "assistant") {
+    return null;
+  }
+
+  // Error chunk
+  if (finishReason === "error") {
+    const error = obj.error as Record<string, unknown> | undefined;
+    const hermes = obj.hermes as Record<string, unknown> | undefined;
+    return {
+      session_id: sessionId,
+      event_type: "session_failed",
+      payload: {
+        error: error?.message ?? "Agent error",
+        type: error?.type ?? "agent_error",
+        completed: hermes?.completed,
+        partial: hermes?.partial,
+        failed: hermes?.failed,
+        error_code: hermes?.error_code,
+      },
+    };
+  }
+
+  // Tool call delta
+  const toolCalls = delta?.tool_calls as unknown[] | undefined;
+  if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+    const tc = toolCalls[0] as Record<string, unknown>;
+    const func = tc.function as Record<string, unknown> | undefined;
+    const toolId = tc.id as string ?? "";
+    const toolName = func?.name as string ?? "";
+    const args = func?.arguments as string ?? "";
+
+    // Parse the arguments — they may be a JSON string or a raw object
+    let parsedArgs: Record<string, unknown> = {};
+    try {
+      parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
+    } catch {
+      parsedArgs = { raw: args };
+    }
+
+    // Determine if this is a start or completion based on content
+    const hasName = !!toolName;
+    const hasArgs = !!args;
+
+    if (hasName && !hasArgs) {
+      // Tool started — name provided, no arguments yet
+      return {
+        session_id: sessionId,
+        event_type: "tool_started",
+        payload: {
+          tool_id: toolId,
+          tool_name: toolName,
+          tool_input: {},
+        },
+      };
+    } else if (hasArgs) {
+      // Tool completed — arguments contain status/output
+      return {
+        session_id: sessionId,
+        event_type: "tool_completed",
+        payload: {
+          tool_id: toolId,
+          status: parsedArgs.status ?? "success",
+          output: parsedArgs.output ?? "",
+        },
+      };
+    }
+  }
+
+  // Content delta
+  const content = delta?.content as string | undefined;
+  if (content) {
+    return {
+      session_id: sessionId,
+      event_type: "assistant_delta",
+      payload: { text: content },
+    };
+  }
+
+  // Finish chunk (finish_reason is set, no content/tool_calls)
+  if (finishReason) {
+    return {
+      session_id: sessionId,
+      event_type: "assistant_completed",
+      payload: { stop_reason: finishReason },
+    };
+  }
+
+  return null;
+}
+
+/** Parse a hermes.tool.progress custom event. */
+function parseToolProgress(data: unknown, sessionId: string): SSEEnvelope | null {
+  if (typeof data !== "object" || data === null) return null;
+  const obj = data as Record<string, unknown>;
+  const status = obj.status as string | undefined;
+  const toolCallId = obj.toolCallId as string | undefined;
+  const toolName = obj.toolName as string | undefined;
+
+  if (!status) return null;
+
+  if (status === "permission_required") {
+    return {
+      session_id: sessionId,
+      event_type: "tool_permission_required",
+      payload: {
+        tool_id: toolCallId ?? "",
+        tool_name: toolName ?? "",
+        tool_input: obj.input ?? {},
+      },
+    };
+  }
+
+  // Other progress events (loop_safety_warning, resource_warning)
+  if (obj.state !== undefined) {
+    return {
+      session_id: sessionId,
+      event_type: "self_improvement_tick",
+      payload: {
+        state: obj.state,
+        details: obj.details ?? {},
+      },
+    };
+  }
+
+  if (obj.resource !== undefined) {
+    return {
+      session_id: sessionId,
+      event_type: "resource_warning",
+      payload: {
+        resource: obj.resource,
+        current: obj.current ?? 0,
+        threshold: obj.threshold ?? 0,
+        message: obj.message ?? "",
+      },
+    };
+  }
+
+  return null;
 }
 
 export class SSEClient {
@@ -110,6 +281,7 @@ export class SSEClient {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let pendingEventType: string | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -125,33 +297,46 @@ export class SSEClient {
           if (trimmed === "" || trimmed.startsWith(":")) continue;
 
           if (trimmed.startsWith("event:")) {
-            // Next data line follows immediately
+            // Custom event type (e.g., hermes.tool.progress)
+            pendingEventType = trimmed.slice(6).trim();
           } else if (trimmed.startsWith("data:")) {
             const eventData = trimmed.slice(5).trim();
-            let eventType = "system_message";
-            // Peek at next non-empty line for event type
-            // (We handle this in the next iteration, but for simplicity
-            //  we parse the full SSE block below)
-            try {
-              const parsed = JSON.parse(eventData);
-              // event_type field is in the JSON envelope
-              const envelope: SSEEnvelope = {
-                session_id: parsed.session_id ?? opts.sessionId,
-                event_type: (parsed.event_type ?? "system_message") as SSEEventType,
-                payload: parsed.payload ?? parsed,
-                seq: parsed.seq,
-                protocol_version: parsed.protocol_version,
-              };
-              this._emit(envelope);
-            } catch {
-              // Not JSON — treat as raw text delta
-              const envelope: SSEEnvelope = {
-                session_id: opts.sessionId,
-                event_type: "assistant_delta",
-                payload: { text: eventData },
-              };
+
+            // [DONE] marker
+            if (eventData === "[DONE]") {
+              break;
+            }
+
+            let envelope: SSEEnvelope | null = null;
+
+            if (pendingEventType === "hermes.tool.progress") {
+              // Custom Hermes tool progress event
+              try {
+                const parsed = JSON.parse(eventData);
+                envelope = parseToolProgress(parsed, opts.sessionId);
+              } catch {
+                // Not JSON — skip
+              }
+            } else {
+              // Standard chat.completion.chunk
+              try {
+                const parsed = JSON.parse(eventData);
+                envelope = parseChunk(parsed, opts.sessionId);
+              } catch {
+                // Not JSON — treat as raw text delta
+                envelope = {
+                  session_id: opts.sessionId,
+                  event_type: "assistant_delta",
+                  payload: { text: eventData },
+                };
+              }
+            }
+
+            if (envelope) {
               this._emit(envelope);
             }
+
+            pendingEventType = null;
           }
         }
       }

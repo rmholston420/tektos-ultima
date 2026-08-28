@@ -1,12 +1,23 @@
 /**
- * Tektos-Ultima v1 — Main Layout Shell (Streaming Architecture)
+ * Tektos-Ultima v1 — Main Layout Shell (Hermes GUI Parity)
  *
- * Uses @assistant-ui/react primitives for streaming:
- * - TektosExternalStoreAdapter bridges WebSocket to the library
- * - useExternalStoreRuntime creates the runtime from the adapter
- * - AssistantRuntimeProvider wraps the chat UI
- * - ThreadPrimitive.Root + Viewport + Messages renders messages
- * - useAui().thread().state.isRunning for streaming state
+ * Layout structure (mirrors Hermes Agent desktop GUI):
+ *   ┌─────────────────────────────────────────────────────────────┐
+ *   │ Sidebar (session management) │ ChatPage (xterm.js terminal) │
+ *   │                              │ ┌──────────────────────────┐ │
+ *   │  • Session list              │ │ Terminal area            │ │
+ *   │  • Theme selector            │ │                          │ │
+ *   │  • Nav (Chat/Dashboard)      │ │                          │ │
+ *   │                              │ │                          │ │
+ *   │                              │ │ ┌──────────────────────┐ │ │
+ *   │                              │ │ │ ChatSidebar          │ │ │
+ *   │                              │ │ │ • Model picker       │ │ │
+ *   │                              │ │ │ • Connection badge   │ │ │
+ *   │                              │ │ │ • Status strip       │ │ │
+ *   │                              │ │ │ • Session list       │ │ │
+ *   │                              │ │ │ • Footer             │ │ │
+ *   │                              │ │ └──────────────────────┘ │ │
+ *   └─────────────────────────────────────────────────────────────┘
  */
 
 "use client";
@@ -15,11 +26,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import dynamic from "next/dynamic";
 import { ProtocolClient, EventType, type WSEnvelopeClient } from "@/lib/protocol";
 import { SessionStore, type SessionSnapshot, type SessionEvent } from "@/lib/session-store";
-import { useExternalStoreRuntime, AssistantRuntimeProvider, type ExternalStoreAdapter, type ThreadMessage, type AppendMessage, type ExternalThreadQueueAdapter } from "@assistant-ui/react";
-import { TektosExternalStoreAdapter, TektosExternalStoreAdapterWrapper } from "@/lib/tektos-store-adapter";
 import { Sidebar } from "@/components/sidebar/Sidebar";
-import { Composer } from "@/components/composer/Composer";
-import { ThreadView } from "@/components/streaming/ThreadView";
 import { themeStore, type ThemeName } from "@/lib/theme-store";
 
 // Dynamic imports for client-only components (SSR-safe)
@@ -47,6 +54,13 @@ const DynamicSelfRepairPanel = dynamic(() => import("@/components/panels/SelfRep
 const DynamicThermalPanel = dynamic(() => import("@/components/panels/ThermalPanel").then((m) => m.ThermalPanel), { ssr: false });
 const DynamicSelfImprovementPanel = dynamic(() => import("@/components/panels/SelfImprovementPanel").then((m) => m.SelfImprovementPanel), { ssr: false });
 const DynamicPlannerPanel = dynamic(() => import("@/components/panels/PlannerPanel").then((m) => m.PlannerPanel), { ssr: false });
+
+// Chat components (Hermes GUI parity) — dynamic import to avoid SSR issues with @assistant-ui/react
+const DynamicChatPage = dynamic(() => import("@/components/chat/ChatPage").then((m) => m.default), { ssr: false });
+import { ChatSidebar } from "@/components/chat/ChatSidebar";
+import { ChatSessionList } from "@/components/chat/ChatSessionList";
+import { SidebarStatusStrip } from "@/components/chat/SidebarStatusStrip";
+import { SidebarFooter } from "@/components/chat/SidebarFooter";
 
 // ---------------------------------------------------------------------------
 // Page types
@@ -99,61 +113,35 @@ export default function App() {
   const [visionModel, setVisionModel] = useState("");
   const [hasHydrated, setHasHydrated] = useState(false);
   const [clientTheme, setClientTheme] = useState<ThemeName>("abyss");
-
-  // Streaming adapter + runtime
-  // Persistent base adapter holds all message data.
-  // A wrapper is memoized and recreated via useMemo keyed on adapterVersion,
-  // giving the runtime a new object reference so __internal_setAdapter
-  // bypasses its === short-circuit and re-reads fresh messages.
-  const adapterRef = useRef(new TektosExternalStoreAdapter());
-  const [adapterVersion, setAdapterVersion] = useState(0);
-  
-  const adapter = useMemo(
-    () => new TektosExternalStoreAdapterWrapper(adapterRef.current),
-    [adapterVersion]
-  );
-  
-  const runtime = useExternalStoreRuntime(adapter);
-
-  // Stream elapsed timer
-  const streamStart = useRef<number | null>(null);
-  const [streamElapsed, setStreamElapsed] = useState(0);
-
-  // Update elapsed timer during streaming
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (streamStart.current) {
-        setStreamElapsed(Math.floor((Date.now() - streamStart.current) / 1000));
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const [chatPanelCollapsed, setChatPanelCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("hermes-chat-panel-collapsed") === "1";
+  });
 
   // -------------------------------------------------------------------
   // Connection management
   // -------------------------------------------------------------------
 
+  // Track whether we've already connected the WebSocket
+  const wsConnectedRef = useRef(false);
+
   useEffect(() => {
     setHasHydrated(true);
     setClientTheme(themeStore.get());
+    protocolClient.onStateChange((state) => setConnectionState(state.state));
 
-    // Auto-create a session on load — direct API call to backend
-    let cancelled = false;
-    
-    // Create session directly via backend (bypasses Next.js dev proxy)
-    fetch('http://localhost:8020/api/sessions', {
+    // Auto-create a session on load
+    fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     }).then(async (r) => {
-      if (cancelled) return;
       if (!r.ok) {
         console.error('Session creation failed:', r.status, r.statusText);
         return;
       }
       const data = await r.json();
       
-      // Build session snapshot from API response
       const session: SessionSnapshot = {
         id: data.id,
         title: data.title || 'New Session',
@@ -168,81 +156,40 @@ export default function App() {
         updated_at: new Date().toISOString(),
       };
       
-      console.log('Auto-session created:', session.id, 'is_active:', session.is_active);
+      console.log('Auto-session created:', session.id);
       setActiveSession(session);
       protocolClient.setSessionId(session.id);
     }).catch((err) => {
-      if (!cancelled) {
-        console.error('Auto-session creation error:', err);
-      }
+      console.error('Auto-session creation error:', err);
     });
 
-    protocolClient.onStateChange((state) => setConnectionState(state.state));
+    // Check vision status
+    fetch('http://localhost:8020/api/vision/status', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.initialized) {
+          setVisionAvailable(true);
+          setVisionModel(data.model || "");
+        }
+      })
+      .catch(() => {});
 
-    const checkVision = () => {
-      if (cancelled) return;
-      fetch('http://localhost:8020/api/vision/status', { cache: 'no-store' })
-        .then((r) => r.json())
-        .then((data) => {
-          if (cancelled) return;
-          if (data.initialized) {
-            setVisionAvailable(true);
-            setVisionModel(data.model || "");
-          }
-        })
-        .catch(() => {});
-    };
+    return () => { protocolClient.disconnect(); };
+  }, []);
 
-    checkVision();
-
-    return () => { cancelled = true; protocolClient.disconnect(); };
-  }, [protocolClient]);
-
-  // -------------------------------------------------------------------
-  // Reconnect WS when session changes — no delay
-  // -------------------------------------------------------------------
-
+  // Connect WebSocket when activeSession.id is available
   useEffect(() => {
-    if (activeSession?.id) {
+    if (activeSession?.id && !wsConnectedRef.current) {
+      wsConnectedRef.current = true;
+      console.log('Connecting WebSocket for session:', activeSession.id);
       protocolClient.setSessionId(activeSession.id);
       protocolClient.connect();
     }
   }, [activeSession?.id, protocolClient]);
 
   // -------------------------------------------------------------------
-  // Event handling from backend (streaming-aware via adapter)
+  // Reconnect WS when session changes
   // -------------------------------------------------------------------
-
-  useEffect(() => {
-    const handler = (envelope: WSEnvelopeClient) => {
-      switch (envelope.event_type) {
-        case EventType.ASSISTANT_DELTA: {
-          const text = envelope.payload.text as string;
-          if (text) {
-            adapterRef.current.addDelta(text);
-            if (streamStart.current === null) {
-              streamStart.current = Date.now();
-            }
-            setAdapterVersion(v => v + 1);
-          }
-          break;
-        }
-        case EventType.ASSISTANT_COMPLETED: {
-          adapterRef.current.completeMessage();
-          streamStart.current = null;
-          setAdapterVersion(v => v + 1);
-          break;
-        }
-        default:
-          break;
-      }
-    };
-
-    protocolClient.on("*", handler);
-    return () => {
-      protocolClient.off("*", handler);
-    };
-  }, [protocolClient]);
 
   // -------------------------------------------------------------------
   // Session management
@@ -284,54 +231,17 @@ export default function App() {
   // Handlers
   // -------------------------------------------------------------------
 
-  const handleSendMessage = useCallback(
-    async (message: string) => {
-      if (!activeSession) return;
-      await adapterRef.current.sendMessage(message);
-      protocolClient.sendPrompt(message, { model: activeSession.model, cwd: activeSession.cwd });
-      setAdapterVersion(v => v + 1);
-    },
-    [activeSession, protocolClient]
-  );
-
-  const handleInterrupt = useCallback(() => {
-    protocolClient.sendInterrupt();
-    adapterRef.current.interrupt();
-    streamStart.current = null;
-    setAdapterVersion(v => v + 1);
-  }, [protocolClient]);
-
   const handleSelectSession = useCallback(
     (sessionId: string) => {
       sessionStore.getSession(sessionId).then((session) => {
         if (session) {
           setActiveSession(session);
           protocolClient.setSessionId(sessionId);
-          streamStart.current = null;
         }
       });
     },
     [sessionStore, protocolClient]
   );
-
-  const handleAttachFiles = useCallback((files: File[]) => {
-    if (!files.length || !activeSession?.id) return;
-    
-    const formData = new FormData();
-    files.forEach(file => formData.append('files', file));
-    
-    fetch(`/api/sessions/${activeSession.id}/attach`, {
-      method: 'POST',
-      body: formData,
-    }).then(res => {
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-      return res.json();
-    }).then(data => {
-      console.log('Files attached:', data);
-    }).catch(err => {
-      console.error('File upload error:', err);
-    });
-  }, [activeSession?.id]);
 
   const handleCreateSession = useCallback(() => {
     fetch('/api/sessions', {
@@ -379,28 +289,6 @@ export default function App() {
     }
   }, [activeSession]);
 
-  const handleVisionAnalyze = useCallback(async (imageBase64: string, prompt: string) => {
-    if (!activeSession?.id) return;
-    try {
-      const res = await fetch('http://localhost:8020/api/vision/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: activeSession.id,
-          image_base64: imageBase64.split(',')[1],
-          prompt: prompt,
-          model: visionModel,
-        }),
-      });
-      if (!res.ok) throw new Error(`Vision analyze failed: ${res.status}`);
-      const data = await res.json();
-      await adapterRef.current.sendMessage(`[Vision: ${data.model}]\n${data.text}`);
-      setAdapterVersion(v => v + 1);
-    } catch (err) {
-      console.error('Vision analyze error:', err);
-    }
-  }, [activeSession, visionModel]);
-
   // -------------------------------------------------------------------
   // Dashboard tab renderer
   // -------------------------------------------------------------------
@@ -441,6 +329,7 @@ export default function App() {
 
   return (
     <div className="shell">
+      {/* Left sidebar — session management */}
       <Sidebar
         sessionStore={sessionStore}
         activeSessionId={activeSession?.id ?? null}
@@ -453,18 +342,23 @@ export default function App() {
         onNavigate={setActivePage}
       />
 
+      {/* Main content area */}
       <div className="shell-main">
+        {/* Header */}
         <header className="shell-header">
           <div className="flex items-center gap-3">
             <h1 className="text-sm font-semibold text-text-primary">
               {activePage === "chat" ? (activeSession?.title || "Tektos") : "System Dashboard"}
             </h1>
             {activePage === "chat" && activeSession && (
-              <span className="text-xs text-text-muted truncate max-w-[12rem]">{activeSession.model?.split('/').pop()?.split('-').slice(0, 2).join('-')}</span>
+              <span className="text-xs text-text-muted truncate max-w-[12rem]">
+                {activeSession.model?.split('/').pop()?.split('-').slice(0, 2).join('-')}
+              </span>
             )}
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Connection status */}
             <div className="flex items-center gap-1.5">
               <div className={`w-2 h-2 rounded-full ${
                 connectionState === "connected" ? "bg-status-success" :
@@ -476,6 +370,7 @@ export default function App() {
               </span>
             </div>
 
+            {/* Page toggle */}
             <div className="flex items-center gap-1 bg-bg-3 rounded-lg p-0.5">
               <button onClick={() => setActivePage("chat")}
                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
@@ -489,8 +384,9 @@ export default function App() {
           </div>
         </header>
 
+        {/* Page content */}
         {activePage === "chat" ? (
-          <AssistantRuntimeProvider runtime={runtime}>
+          <div className="flex-1 flex flex-col min-h-0">
             {!activeSession ? (
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center space-y-4">
@@ -500,28 +396,44 @@ export default function App() {
               </div>
             ) : (
               <>
-                <ThreadView />
-                <div className="border-t border-border bg-surface/80 backdrop-blur-sm">
-                  <Composer
-                    isActive={!!activeSession}
-                    sessionId={activeSession?.id}
-                    adapter={adapterRef.current}
-                    model={activeModel}
-                    onModelChange={handleModelChange}
+                {/* Main terminal area */}
+                <div className="flex-1 flex min-h-0">
+                  <DynamicChatPage
+                    activeSessionId={activeSession.id}
+                    onSelectSession={handleSelectSession}
+                    onCreateSession={handleCreateSession}
                     connectionState={connectionState}
-                    onSendMessage={handleSendMessage}
-                    onInterrupt={handleInterrupt}
-                    onAttachFiles={handleAttachFiles}
-                    onVoiceTranscript={handleSendMessage}
-                    visionAvailable={visionAvailable}
-                    visionModel={visionModel}
-                    onVisionAnalyze={handleVisionAnalyze}
-                    onNewSession={handleCreateSession}
+                    activeModel={activeModel}
+                    onModelChange={handleModelChange}
+                    isActive={activePage === "chat"}
+                    protocolClient={protocolClient}
+                    sessionStore={sessionStore}
                   />
                 </div>
+
+                {/* Chat sidebar (right side) */}
+                {!chatPanelCollapsed && (
+                  <div className="w-80 border-l border-border/50 flex flex-col min-h-0">
+                    <ChatSidebar
+                      channel={activeSession.id}
+                      profile=""
+                      className="flex-shrink-0"
+                    />
+                    <div className="flex-1 min-h-0 overflow-y-auto">
+                      <ChatSessionList
+                        activeSessionId={activeSession.id}
+                        profile=""
+                        onPicked={handleSelectSession}
+                        onNewChat={handleCreateSession}
+                      />
+                    </div>
+                    <SidebarStatusStrip className="flex-shrink-0" />
+                    <SidebarFooter className="flex-shrink-0" />
+                  </div>
+                )}
               </>
             )}
-          </AssistantRuntimeProvider>
+          </div>
         ) : (
           <div className="flex-1 overflow-y-auto flex flex-col">
             {/* Dashboard tab bar */}

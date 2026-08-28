@@ -25,7 +25,7 @@ export class ProtocolClient {
   private lastPong = 0;
   private lastPingSent = 0;
   private host = process.env.NEXT_PUBLIC_TEKTOS_HOST || "localhost";
-  private port = parseInt(process.env.NEXT_PUBLIC_TEKTOS_PORT || "8020", 10);
+  private port = parseInt(process.env.NEXT_PUBLIC_TEKTOS_PORT || "8765", 10);
   private protocol = process.env.NEXT_PUBLIC_TEKTOS_WS_PROTOCOL || "ws";
   private pendingMessages: string[] = [];
 
@@ -64,8 +64,8 @@ export class ProtocolClient {
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
       try { this.ws.close(1000, "Session change"); } catch (_) {}
     }
-    if (!this._sessionId) { console.warn("ProtocolClient.connect: no session ID"); this.setState("disconnected"); return; }
-    const url = `${this.protocol}://${this.host}:${this.port}/ws/${this._sessionId}`;
+    // Gateway proxy: connect to the proxy endpoint (no session ID in URL)
+    const url = `${this.protocol}://${this.host}:${this.port}/`;
     console.log(`ProtocolClient.connecting to ${url}`);
     this.setState("connecting");
     this.reconnectAttempts++;
@@ -88,6 +88,15 @@ export class ProtocolClient {
             this.lastPong = Date.now();
           }
         } catch (_) {}
+        // Check if this is a JSON-RPC notification from the gateway proxy
+        try {
+          const data = JSON.parse(e.data);
+          if (data.jsonrpc === "2.0" && data.method === "event") {
+            this.handleJsonRpcNotification(data);
+            return;
+          }
+        } catch (_) {}
+        // Otherwise parse as Tektos envelope
         try { this.dispatch(JSON.parse(e.data)); } catch (err) { this.notifyError(new Error("Parse error: " + err)); }
       };
       this.ws.onclose = (ev) => {
@@ -106,9 +115,10 @@ export class ProtocolClient {
   disconnect(): void { if (this.ws) { this.ws.close(1000, "Disconnect"); this.ws = null; } this.stopHeartbeat(); this.setState("disconnected"); }
   reconnect(): void { this.disconnect(); this.connect(); }
   sendPrompt(message: string, options?: { model?: string; cwd?: string }): void {
-    const msg: any = { type: "prompt", session_id: this._sessionId, prompt: message };
-    if (options?.model) msg.model = options.model;
-    if (options?.cwd) msg.cwd = options.cwd;
+    // Gateway proxy: use JSON-RPC prompt.submit
+    const msg: any = { jsonrpc: "2.0", method: "prompt.submit", params: { session_id: this._sessionId, text: message } };
+    if (options?.model) msg.params.model = options.model;
+    if (options?.cwd) msg.params.cwd = options.cwd;
     const json = JSON.stringify(msg);
     console.log("ProtocolClient.sendPrompt:", json, "ws readyState:", this.ws?.readyState, "sessionId:", this._sessionId);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -121,7 +131,7 @@ export class ProtocolClient {
   }
   sendInterrupt(): void {
     if (this._sessionId) {
-      const json = JSON.stringify({ type: "interrupt", session_id: this._sessionId });
+      const json = JSON.stringify({ jsonrpc: "2.0", method: "session.interrupt", params: { session_id: this._sessionId } });
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(json);
       } else {
@@ -156,6 +166,32 @@ export class ProtocolClient {
     if (specific) specific.forEach((h) => { try { h(envelope); } catch (e) { this.notifyError(new Error("Event handler error: " + e)); } });
     const wildcard = this.handlers.get("*");
     if (wildcard) wildcard.forEach((h) => { try { h(envelope); } catch (e) { this.notifyError(new Error("Wildcard handler error: " + e)); } });
+  }
+
+  // Handle raw JSON-RPC notifications from the gateway proxy
+  private handleJsonRpcNotification(data: any): void {
+    if (data.jsonrpc !== "2.0" || data.method !== "event" || !data.params) return;
+    
+    const params = data.params;
+    const eventType = params.type || "";
+    const payload = params.payload || {};
+    
+    // Map gateway event types to WSEnvelopeClient format
+    const envelope: WSEnvelopeClient = {
+      session_id: payload.session_id || this._sessionId || "",
+      event_type: eventType,
+      payload: payload,
+      protocol_version: "1.0.0",
+    };
+    
+    // Handle gateway.ready specially
+    if (eventType === "gateway.ready") {
+      this.setState("connected");
+      this.startHeartbeat();
+      return;
+    }
+    
+    this.dispatch(envelope);
   }
 
   private setState(s: ConnectionState, e?: string | null): void {

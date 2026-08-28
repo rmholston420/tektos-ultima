@@ -158,7 +158,7 @@ async def lifespan(app: _FastAPI):
 
     # 5. Initialize runtime SDK
     runtime_sdk = RuntimeSDK(
-        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8091/v1"),
+        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1"),
         llm_model=_os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M"),
     )
 
@@ -1034,6 +1034,11 @@ class _PromptSSEBody(_BaseModel):
 async def prompt_sse(body: _PromptSSEBody):
     """REST fallback for prompts — streams events via SSE.
 
+    Emits OpenAI-compatible chat.completion.chunk format, identical to
+    the Hermes Agent desktop GUI SSE stream.  This is the same wire
+    format that _write_sse_chat_completion produces in the Hermes Agent
+    API server.
+
     Use this when WebSocket is unavailable (e.g., from a browser
     fetch/XHR client or from tools that don't support WS).
     """
@@ -1044,24 +1049,176 @@ async def prompt_sse(body: _PromptSSEBody):
     if not session:
         raise _HTTPException(status_code=404, detail="Session not found")
 
+    model_name = body.model or runtime_sdk._llm_model if runtime_sdk else "unknown"
+    completion_id = f"chatcmpl-{body.session_id[:8]}"
+    created = int(_time.time())
+
     async def event_generator():
-        """Yield SSE events as they arrive."""
-        event_queue: _asyncio.Queue[str] = _asyncio.Queue(maxsize=1024)
+        """Yield SSE events as OpenAI-compatible chat.completion.chunk frames."""
+        event_queue: _asyncio.Queue = _asyncio.Queue(maxsize=1024)
         approved_tools: dict[str, bool] = {}
         approval_event: _asyncio.Event = _asyncio.Event()
 
+        def _sse_frame(data: Any, *, event: str | None = None) -> str:
+            """Encode one SSE frame, identical to Hermes Agent's _sse_frame."""
+            prefix = f"event: {event}\n" if event else ""
+            return f"{prefix}data: {_json.dumps(data, ensure_ascii=True)}\n\n"
+
         async def on_event(envelope):
+            """Convert a WSEnvelope to an OpenAI-compatible SSE chunk."""
             try:
-                data = envelope.to_json()
-                # Convert envelope event_type to SSE-compatible type
                 et = envelope.event_type
+                payload = envelope.payload
+
                 if et == "assistant.delta":
-                    et = "assistant_delta"
+                    # Text/content delta
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": payload.get("text", "")},
+                            "finish_reason": None,
+                        }],
+                    }
+                    await event_queue.put(_sse_frame(chunk))
+
                 elif et == "assistant.completed":
-                    et = "assistant_completed"
-                await event_queue.put(f"event: {et}\ndata: {data}\n\n")
+                    # Finish chunk — no content, just finish_reason
+                    finish_reason = payload.get("stop_reason", "stop")
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": finish_reason,
+                        }],
+                    }
+                    await event_queue.put(_sse_frame(chunk))
+
+                elif et == "tool.started":
+                    # Tool call start — emit as a tool_call delta
+                    tool_id = payload.get("tool_id", "")
+                    tool_name = payload.get("tool_name", "")
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": 0,
+                                    "id": tool_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": "",
+                                    },
+                                }]
+                            },
+                            "finish_reason": None,
+                        }],
+                    }
+                    await event_queue.put(_sse_frame(chunk))
+
+                elif et == "tool.completed":
+                    # Tool call completion — emit as a tool_call delta with arguments
+                    tool_id = payload.get("tool_id", "")
+                    status = payload.get("status", "success")
+                    output = payload.get("output", "")
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": 0,
+                                    "id": tool_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": "",
+                                        "arguments": _json.dumps({"status": status, "output": output}),
+                                    },
+                                }]
+                            },
+                            "finish_reason": None,
+                        }],
+                    }
+                    await event_queue.put(_sse_frame(chunk))
+
+                elif et == "tool.permission_required":
+                    # Tool permission request — emit as custom hermes.tool.progress
+                    tool_id = payload.get("tool_id", "")
+                    tool_name = payload.get("tool_name", "")
+                    progress = {
+                        "toolCallId": tool_id,
+                        "toolName": tool_name,
+                        "status": "permission_required",
+                        "input": payload.get("tool_input", {}),
+                    }
+                    await event_queue.put(_sse_frame(progress, event="hermes.tool.progress"))
+
+                elif et == "session_failed":
+                    # Session failure — emit error chunk
+                    error_msg = payload.get("error", "Unknown error")
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "error",
+                        }],
+                        "error": {
+                            "message": error_msg,
+                            "type": "agent_error",
+                        },
+                        "hermes": {
+                            "completed": False,
+                            "partial": True,
+                            "failed": True,
+                            "error": error_msg,
+                            "error_code": "agent_error",
+                        },
+                    }
+                    await event_queue.put(_sse_frame(chunk))
+
+                elif et == "loop_safety_warning":
+                    # Loop safety — emit as custom hermes.tool.progress
+                    warning = {
+                        "state": payload.get("state", ""),
+                        "details": payload.get("details", {}),
+                    }
+                    await event_queue.put(_sse_frame(warning, event="hermes.tool.progress"))
+
+                elif et == "resource.warning":
+                    # Resource warning — emit as custom hermes.tool.progress
+                    warning = {
+                        "resource": payload.get("resource", ""),
+                        "current": payload.get("current", 0),
+                        "threshold": payload.get("threshold", 0),
+                        "message": payload.get("message", ""),
+                    }
+                    await event_queue.put(_sse_frame(warning, event="hermes.tool.progress"))
+
+                # Other event types (session.created, session.ready, etc.) are
+                # ignored in the SSE stream — they are handled by the WebSocket
+                # path, not the REST SSE fallback.
+
             except Exception as e:
-                log.warning("SSE event send failed: %s", e)
+                log.warning("SSE event conversion failed: %s", e)
 
         async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
             try:
@@ -1080,6 +1237,20 @@ async def prompt_sse(body: _PromptSSEBody):
                 on_tool_approval=on_tool_approval,
             )
         )
+
+        # Role chunk — first chunk sets role: assistant
+        role_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant"},
+                "finish_reason": None,
+            }],
+        }
+        yield _sse_frame(role_chunk)
 
         # Keep yielding until the task completes or the client disconnects
         while not task.done():
@@ -1100,12 +1271,8 @@ async def prompt_sse(body: _PromptSSEBody):
             except _asyncio.QueueEmpty:
                 break
 
-        # Wait for task completion
-        try:
-            await task
-        except Exception as e:
-            error_data = _json.dumps({"type": "error", "detail": str(e)})
-            yield f"event: error\ndata: {error_data}\n\n"
+        # Final [DONE] marker
+        yield "data: [DONE]\n\n"
 
     return _StreamingResponse(
         event_generator(),

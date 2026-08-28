@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tektos SSE Live Stream</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .header {
+    padding: 12px 16px;
+    background: #12121a;
+    border-bottom: 1px solid #2a2a3a;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .header h1 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #7c6ff7;
+    letter-spacing: 0.5px;
+  }
+  .header .badge {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #1a1a2e;
+    color: #7c6ff7;
+    border: 1px solid #2a2a4a;
+  }
+  .controls {
+    padding: 12px 16px;
+    background: #0e0e16;
+    border-bottom: 1px solid #1a1a2a;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .controls input {
+    flex: 1;
+    padding: 8px 12px;
+    background: #16162a;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+  .controls input:focus {
+    border-color: #7c6ff7;
+  }
+  .controls button {
+    padding: 8px 16px;
+    background: #7c6ff7;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .controls button:hover { background: #6b5ce7; }
+  .controls button:disabled { background: #3a3a5a; cursor: not-allowed; }
+  .controls button.stop { background: #e74c3c; }
+  .controls button.stop:hover { background: #c0392b; }
+  .stats {
+    padding: 6px 16px;
+    background: #0a0a12;
+    border-bottom: 1px solid #1a1a2a;
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: #888;
+    flex-shrink: 0;
+  }
+  .stats span { color: #7c6ff7; font-weight: 600; }
+  .stream {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stream::-webkit-scrollbar { width: 6px; }
+  .stream::-webkit-scrollbar-track { background: transparent; }
+  .stream::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
+  .frame {
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    word-break: break-all;
+    animation: fadeIn 0.1s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+  .frame.role { background: #1a1a2e; color: #7c6ff7; border-left: 3px solid #7c6ff7; }
+  .frame.content { background: #0e1a0e; color: #4ade80; border-left: 3px solid #4ade80; }
+  .frame.tool { background: #1a1a2e; color: #f59e0b; border-left: 3px solid #f59e0b; }
+  .frame.finish { background: #1a1a2e; color: #e0e0e0; border-left: 3px solid #e0e0e0; }
+  .frame.done { background: #1a2e1a; color: #4ade80; border-left: 3px solid #4ade80; font-weight: 600; }
+  .frame.error { background: #2e1a1a; color: #e74c3c; border-left: 3px solid #e74c3c; }
+  .frame.custom { background: #1a1a2e; color: #06b6d4; border-left: 3px solid #06b6d4; }
+  .frame .type { color: #666; font-size: 10px; margin-right: 8px; }
+  .frame .text { color: inherit; }
+  .status {
+    padding: 8px 16px;
+    background: #0a0a12;
+    border-top: 1px solid #1a1a2a;
+    font-size: 11px;
+    color: #888;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .status .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #444;
+  }
+  .status .dot.active { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+  .status .dot.error { background: #e74c3c; box-shadow: 0 0 6px #e74c3c; }
+  .format-comparison {
+    padding: 12px 16px;
+    background: #0e0e16;
+    border-top: 1px solid #1a1a2a;
+    flex-shrink: 0;
+  }
+  .format-comparison h3 {
+    font-size: 11px;
+    color: #7c6ff7;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .format-comparison .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .format-comparison .col h4 {
+    font-size: 10px;
+    color: #888;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+  }
+  .format-comparison .col pre {
+    font-size: 10px;
+    color: #aaa;
+    background: #0a0a12;
+    padding: 8px;
+    border-radius: 4px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .format-comparison .col pre .match { color: #4ade80; }
+  .format-comparison .col pre .diff { color: #e74c3c; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>⚡ Tektos SSE Live Stream</h1>
+  <span class="badge">OpenAI-Compatible Format</span>
+  <span class="badge">chat.completion.chunk</span>
+</div>
+
+<div class="controls">
+  <input id="prompt" value="Write a Python function that reverses a string using slicing." placeholder="Enter a prompt...">
+  <button id="startBtn" onclick="startStream()">▶ Start Stream</button>
+  <button id="stopBtn" class="stop" onclick="stopStream()" disabled>■ Stop</button>
+</div>
+
+<div class="stats">
+  <div>Frames: <span id="frameCount">0</span></div>
+  <div>Text chars: <span id="textChars">0</span></div>
+  <div>Duration: <span id="duration">0.0s</span></div>
+  <div>Format: <span>chat.completion.chunk</span></div>
+</div>
+
+<div class="stream" id="stream"></div>
+
+<div class="status">
+  <div class="dot" id="statusDot"></div>
+  <span id="statusText">Ready — enter a prompt and click Start</span>
+</div>
+
+<div class="format-comparison">
+  <h3>Format Verification — Tektos SSE vs Hermes Agent Desktop GUI</h3>
+  <div class="grid">
+    <div class="col">
+      <h4>✅ Tektos (After Fix)</h4>
+      <pre id="tektosFormat">data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: [DONE]</pre>
+    </div>
+    <div class="col">
+      <h4>✅ Hermes Agent Desktop GUI</h4>
+      <pre id="hermesFormat">data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"...","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: [DONE]</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+let abortController = null;
+let frameCount = 0;
+let textChars = 0;
+let startTime = null;
+let timer = null;
+
+function setStatus(text, state = 'idle') {
+  document.getElementById('statusText').textContent = text;
+  const dot = document.getElementById('statusDot');
+  dot.className = 'dot';
+  if (state === 'active') dot.classList.add('active');
+  if (state === 'error') dot.classList.add('error');
+}
+
+function addFrame(type, data) {
+  const stream = document.getElementById('stream');
+  const div = document.createElement('div');
+  div.className = `frame ${type}`;
+
+  let display = '';
+  if (type === 'role') {
+    display = `<span class="type">ROLE</span>${escapeHtml(JSON.stringify(data))}`;
+  } else if (type === 'content') {
+    const content = data.choices?.[0]?.delta?.content || '';
+    display = `<span class="type">CONTENT</span>${escapeHtml(content)}`;
+  } else if (type === 'finish') {
+    display = `<span class="type">FINISH</span>${escapeHtml(JSON.stringify(data))}`;
+  } else if (type === 'done') {
+    display = `<span class="type">DONE</span>✓ Stream complete`;
+  } else if (type === 'error') {
+    display = `<span class="type">ERROR</span>${escapeHtml(JSON.stringify(data))}`;
+  } else if (type === 'tool') {
+    display = `<span class="type">TOOL</span>${escapeHtml(JSON.stringify(data))}`;
+  } else if (type === 'custom') {
+    display = `<span class="type">CUSTOM</span>${escapeHtml(JSON.stringify(data))}`;
+  } else {
+    display = `<span class="type">RAW</span>${escapeHtml(JSON.stringify(data))}`;
+  }
+
+  div.innerHTML = display;
+  stream.appendChild(div);
+  stream.scrollTop = stream.scrollHeight;
+
+  frameCount++;
+  document.getElementById('frameCount').textContent = frameCount;
+
+  // Count text chars
+  if (type === 'content') {
+    const content = data.choices?.[0]?.delta?.content || '';
+    textChars += content.length;
+    document.getElementById('textChars').textContent = textChars;
+  }
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function startStream() {
+  const prompt = document.getElementById('prompt').value.trim();
+  if (!prompt) return;
+
+  abortController = new AbortController();
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  setStatus('Connecting...', 'active');
+
+  // Create session first
+  try {
+    const sessionResp = await fetch('http://localhost:8020/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'SSE Live Demo',
+        model: 'Qwen3.6-35B-A3B-Q4_K_M',
+        permission_mode: 'auto'
+      })
+    });
+
+    if (!sessionResp.ok) throw new Error(`Session creation failed: ${sessionResp.status}`);
+    const session = await sessionResp.json();
+    const sessionId = session.id;
+
+    // Start the SSE stream
+    startTime = Date.now();
+    timer = setInterval(() => {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      document.getElementById('duration').textContent = elapsed + 's';
+    }, 100);
+
+    const resp = await fetch('http://localhost:8020/api/prompt/sse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        prompt: prompt,
+        system_prompt: 'You are a helpful coding assistant.'
+      }),
+      signal: abortController.signal
+    });
+
+    if (!resp.ok) throw new Error(`SSE request failed: ${resp.status}`);
+    if (!resp.body) throw new Error('No response body');
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let pendingEvent = null;
+
+    setStatus('Streaming...', 'active');
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(':')) continue;
+
+        if (trimmed.startsWith('event:')) {
+          pendingEvent = trimmed.slice(6).trim();
+        } else if (trimmed.startsWith('data:')) {
+          const dataStr = trimmed.slice(5).trim();
+
+          if (dataStr === '[DONE]') {
+            addFrame('done', {});
+            setStatus('Stream complete ✓', 'idle');
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            clearInterval(timer);
+            document.getElementById('duration').textContent = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
+            break;
+          }
+
+          let data;
+          try {
+            data = JSON.parse(dataStr);
+          } catch {
+            addFrame('raw', dataStr);
+            continue;
+          }
+
+          // Determine frame type
+          if (data.object === 'chat.completion.chunk') {
+            const choices = data.choices || [];
+            if (choices.length > 0) {
+              const delta = choices[0].delta || {};
+              const finishReason = choices[0].finish_reason;
+
+              if (delta.role === 'assistant') {
+                addFrame('role', data);
+              } else if (delta.content) {
+                addFrame('content', data);
+              } else if (delta.tool_calls) {
+                addFrame('tool', data);
+              } else if (finishReason) {
+                addFrame('finish', data);
+              } else {
+                addFrame('content', data);
+              }
+            }
+          } else if (pendingEvent === 'hermes.tool.progress') {
+            addFrame('custom', data);
+          } else {
+            addFrame('raw', data);
+          }
+
+          pendingEvent = null;
+        }
+      }
+    }
+  } catch (err) {
+    setStatus(`Error: ${err.message}`, 'error');
+    addFrame('error', { error: err.message });
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    clearInterval(timer);
+  }
+}
+
+function stopStream() {
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+  setStatus('Stream stopped', 'idle');
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  clearInterval(timer);
+}
+</script>
+
+</body>
+</html>

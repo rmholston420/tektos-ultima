@@ -318,7 +318,7 @@ const STREAMDOWN_COMPONENTS: StreamdownTextComponents = {
 const StreamingTextPart = memo(function StreamingTextPart() {
   return (
     <div className={MARKDOWN_CONTAINER_CLASS}>
-      <StreamdownTextPrimitive defer components={STREAMDOWN_COMPONENTS} />
+      <StreamdownTextPrimitive components={STREAMDOWN_COMPONENTS} />
     </div>
   );
 });
@@ -460,7 +460,7 @@ export function ThreadView() {
   }
 
   return (
-    <ThreadPrimitive.Root className="flex-1 relative">
+    <ThreadPrimitive.Root className="relative flex-1 min-h-0">
       <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto">
         <ThreadPrimitive.Messages
           components={{

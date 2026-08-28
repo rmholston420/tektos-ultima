@@ -244,8 +244,8 @@ class PromptInjectionDetector:
          "Prompt extraction attempt"),
         (r"(?i)(act\s+as\s+if\s+(you\s+)?(were|are)\s+(not|never)\s+(an|a)\s+(AI|assistant|bot))",
          "Identity override"),
-        (r"(?i)(this\s+is\s+(not|a)\s+(a\s+)?(test|simulation|exercise|roleplay))",
-         "Reality override"),
+        (r"(?i)(this\s+is\s+(not|a)\s+(a\s+)?(test|simulation|exercise|roleplay)\s+(?:and|but|so|then|now|here|there|anyway|anyhow|regardless|nevermind|forget|disregard|ignore)\s+(?:all|the|my|your|previous|above|earlier|any|every)\s+(?:instructions|prompts|rules|constraints))",
+         "Reality override with instruction dismissal"),
         (r"(?i)(output\s+(only|just)\s+(the\s+)?(code|data|json|response))",
          "Output manipulation"),
     ]
