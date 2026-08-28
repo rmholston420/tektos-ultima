@@ -786,6 +786,11 @@ class RuntimeSDK:
         max_turns = 100  # Hard limit on total turns to prevent infinite loops
         last_tool_calls_this_turn: list[str] = []
         last_text_length_this_turn = 0
+        # Repeated-command loop detection (Terminal-Bench fix): track how many
+        # times each bash command has been run. The model sometimes hammers the
+        # same failing command (e.g. re-checking a bad download) for 8+ turns.
+        # After 3 identical runs, inject a strategy-change nudge.
+        _bash_cmd_counts: dict[str, int] = {}
         while True:
             # Check loop safety before this turn
             safety_report = self._loop_monitor.check_turn(
@@ -870,8 +875,12 @@ class RuntimeSDK:
                     "model": self._llm_model,
                     "messages": messages,
                     "stream": True,
-                    "temperature": 0.7,
+                    "temperature": 0.1,
                     "max_tokens": 4096,
+                    # Qwen3.6 fix: preserve_thinking=true keeps reasoning traces in history,
+                    # preventing the "empty arguments after 2-3 turns" bug documented at
+                    # https://github.com/earendil-works/pi/issues/3325
+                    "chat_template_kwargs": {"preserve_thinking": True},
                 }
 
                 # Enable function calling with available tools
@@ -1140,6 +1149,31 @@ class RuntimeSDK:
                                                 break
 
                                 log.info(f"[TOOL CALL] Executing: name={tc_name} id={tc_id[:8]} args_len={len(validated_args)}")
+
+                                # Repeated-command loop detection: nudge the model
+                                # to change strategy after 3 identical bash commands.
+                                if tc_name == "bash":
+                                    try:
+                                        _cmd_key = (_json.loads(validated_args).get("command", "") if validated_args else "").strip()
+                                    except Exception:
+                                        _cmd_key = ""
+                                    if _cmd_key:
+                                        _bash_cmd_counts[_cmd_key] = _bash_cmd_counts.get(_cmd_key, 0) + 1
+                                        if _bash_cmd_counts[_cmd_key] == 3:
+                                            messages.append({
+                                                "role": "user",
+                                                "content": (
+                                                    f"LOOP DETECTED: You have run the same command 3 times: {_cmd_key[:200]}\n"
+                                                    "It is not working. STOP repeating it.\n"
+                                                    "Change strategy:\n"
+                                                    "- If a download failed or returned an error page, try a DIFFERENT URL or mirror (e.g. archive.org, GitHub releases, a different host).\n"
+                                                    "- If a build fails, read the actual error and fix the cause, or use a prebuilt binary / package manager.\n"
+                                                    "- If you lack permissions, do NOT retry sudo — work around it (user-level installs, --break-system-packages, pure-Python alternatives).\n"
+                                                    "- Prefer writing code that solves the task directly over downloading external sources."
+                                                ),
+                                            })
+                                            log.info(f"[SDK] Loop detection: 3 identical bash commands in {session.id[:8]}, strategy-change nudge injected")
+
                                 # Checkpoint: save state before tool execution for rollback
                                 _checkpoint = {
                                     "messages": [m.copy() for m in messages],
@@ -1147,13 +1181,13 @@ class RuntimeSDK:
                                     "turn": turn,
                                     "stall_count": stall_count,
                                 }
-                                await on_event(tool_started(session.id, tc_id, tc_name, {}))
+                                await on_event(tool_started(session.id, tc_id, tc_name, _validated_input))
                                 # Persist tool_started to event store
                                 try:
                                     await append_event(session.id, "tool.started", {
                                         "tool_id": tc_id,
                                         "tool_name": tc_name,
-                                        "tool_input": {},
+                                        "tool_input": _validated_input,
                                     })
                                 except Exception:
                                     pass
@@ -1205,6 +1239,22 @@ class RuntimeSDK:
                                     "tool_call_id": tc_id,
                                     "content": result_text,
                                 })
+
+                                # Multi-turn decomposition: after research step completes (web_search),
+                                # inject a forced transition to implementation. This prevents the model
+                                # from staying in research mode across turns.
+                                if tc_name == "web_search" and _decomposition_injected:
+                                    # Check if this was the last web_search in the session
+                                    web_search_count = sum(1 for m in messages if isinstance(m.get("content"), str) and "web_search" in m["content"].lower())
+                                    if web_search_count >= 1:
+                                        # Force transition to code writing
+                                        force_msg = (
+                                            "RESEARCH COMPLETE. You have done your research.\n"
+                                            "NOW WRITE CODE. Use file_write to create the implementation file.\n"
+                                            "Do NOT search again. Do NOT plan further. Write the file now."
+                                        )
+                                        messages.append({"role": "user", "content": force_msg})
+                                        log.info(f"[SDK] Multi-turn decomposition: forced code transition after web_search")
 
                                 # Check for stall after tool execution
                                 if len(current_text) < 100:
@@ -1282,14 +1332,11 @@ class RuntimeSDK:
         except _json.JSONDecodeError:
             tool_input = {}
         
-        # Qwen3.6-35B quirk: model sends tool calls with empty arguments
-        # and puts the actual content in the text stream. When arguments are
-        # empty for file_write/bash, extract content from accumulated text.
-        if not tool_input and tool_input_str == "":
-            # For file_write: look for file content in current_text
-            # For bash: look for command in current_text
-            # The text stream contains the actual content the model wants to write/execute
-            pass  # tool_input stays {} — sandbox will handle empty params
+        # Qwen3.6-35B quirk: model sends tool calls with empty arguments.
+        # Text extraction from current_text is handled upstream in _stream_llm
+        # before this function is called. If we reach here with empty args,
+        # the sandbox will return an error and the retry/re-decompose logic
+        # will handle recovery.
 
         # Run immune system checks before execution
         if self._immune_system:

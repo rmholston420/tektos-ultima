@@ -88,12 +88,20 @@ class SandboxProvider:
     # ------------------------------------------------------------------
 
     def _execute_bash(self, params: dict[str, Any]) -> str:
-        """Execute a shell command within timeout."""
+        """Execute a shell command within timeout.
+
+        Recovery behaviors (added for Terminal-Bench task success):
+        - If the command fails with a permission error and does not already
+          use sudo, automatically retry once with `sudo -n` (passwordless).
+        - If the command fails with PEP 668 (externally-managed-environment),
+          append a hint suggesting --break-system-packages or pipx/venv.
+        """
         command = params.get("command", "")
         if not command:
             return "Error: No command provided"
 
         log.info(f"[TOOL: bash] {command[:200]}")
+        note = ""
 
         try:
             result = subprocess.run(
@@ -104,6 +112,37 @@ class SandboxProvider:
                 timeout=self.bash_timeout,
                 cwd=str(self.fs_root),
             )
+
+            # Permission denied without sudo -> auto-retry with sudo -n.
+            # Piping to tail/head masks the exit code (pipe status = last
+            # segment), so detect permission errors from the output text too.
+            combined_out = (result.stdout or "") + (result.stderr or "")
+            if (
+                "sudo" not in command.split()[0:2]
+                and (
+                    (result.returncode != 0 and self._is_permission_error(result))
+                    or ("are you root?" in combined_out)
+                )
+            ):
+                log.info(f"[TOOL: bash] permission error, retrying with sudo -n")
+                sudo_cmd = f"sudo -n {command}"
+                result = subprocess.run(
+                    sudo_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.bash_timeout,
+                    cwd=str(self.fs_root),
+                )
+                if "interactive authentication is required" in (result.stdout or "") + (result.stderr or ""):
+                    note = (
+                        "[auto-retried with sudo -n, but passwordless sudo is NOT available]\n"
+                        "You do NOT have root access on this system. Do NOT attempt sudo again.\n"
+                        "Work around it: install Python packages with pip --break-system-packages, "
+                        "use user-level tools, or write code that avoids needing root.\n"
+                    )
+                else:
+                    note = "[auto-retried with sudo -n]\n"
 
             output = ""
             if result.stdout:
@@ -116,12 +155,37 @@ class SandboxProvider:
             exit_code = result.returncode
             status = "success" if exit_code == 0 else "failed"
 
-            return f"Exit {exit_code}: {status}\n{output}"
+            # PEP 668 hint: pip install blocked by externally-managed-environment
+            if exit_code != 0 and "externally-managed-environment" in output:
+                output += (
+                    "\n[HINT] This system uses PEP 668. To install a Python package, "
+                    "use one of:\n"
+                    "  pip install --break-system-packages <pkg>\n"
+                    "  pipx install <pkg>\n"
+                    "  python3 -m venv /tmp/venv && /tmp/venv/bin/pip install <pkg>\n"
+                )
+
+            return f"{note}Exit {exit_code}: {status}\n{output}" if note else f"Exit {exit_code}: {status}\n{output}"
 
         except subprocess.TimeoutExpired:
             return f"Error: Command timed out after {self.bash_timeout}s"
         except Exception as exc:
             return f"Error executing command: {exc}"
+
+    @staticmethod
+    def _is_permission_error(result: subprocess.CompletedProcess) -> bool:
+        """Detect permission-denied style failures in output."""
+        text = (result.stdout or "") + (result.stderr or "")
+        markers = (
+            "Permission denied",
+            "permission denied",
+            "are you root?",
+            "requires root",
+            "insufficient permissions",
+            "dpkg frontend lock",
+            "interactive authentication is required",
+        )
+        return any(m in text for m in markers)
 
     # ------------------------------------------------------------------
     # File operations
