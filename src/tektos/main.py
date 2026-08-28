@@ -1110,6 +1110,16 @@ async def lifespan(app: _FastAPI):
     runtime_sdk = RuntimeSDK(
         llm_base_url=llm_base_url,
         llm_model=llm_model,
+        # Generous loop-safety limits for complex build tasks (CompCert, POV-Ray).
+        # The SDK default (15 turns / 65K tokens / 300s) hard-stops agents mid-build.
+        loop_safety_config=LoopSafetyConfig(
+            max_turns=100,
+            max_tokens_per_turn=8192,
+            max_tokens_total=500000,
+            max_wall_time_seconds=3600.0,
+            repetition_window=3,
+            repetition_threshold=2,
+        ),
         context_compactor=_context_compactor,
         # High-ROI modules — wired for maximum agent capability
         rag_retriever=_rag_retriever,
