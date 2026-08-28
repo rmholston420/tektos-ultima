@@ -197,7 +197,11 @@ class ThermalRegulator:
             # Apply via NVML
             self.gpu_optimizer._ensure_nvml()
             handle = nvml.nvmlDeviceGetHandleByIndex(self.gpu_optimizer.gpu_index)
-            nvml.nvmlDeviceSetPowerLimit(handle, decision.gpu_power_limit * 1000)
+            # nvmlDeviceSetPowerLimit may not exist in all pynvml versions
+            if hasattr(nvml, 'nvmlDeviceSetPowerLimit'):
+                nvml.nvmlDeviceSetPowerLimit(handle, decision.gpu_power_limit * 1000)
+            else:
+                logger.debug("nvmlDeviceSetPowerLimit not available in this pynvml version")
 
             logger.info(
                 "ThermalRegulator: %s — power=%dW, clock=%dMHz (%s) | CPU: %s (%s)",

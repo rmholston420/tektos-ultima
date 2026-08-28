@@ -122,6 +122,7 @@ async def lifespan(app: _FastAPI):
     global _tool_registry, _mcp_client
     global _metabolism, _voice_manager
     global _self_repair_engine
+    global _event_bus, _state_machine
     global _immune_system, _loop_safety_monitor, _loop_guard
     global _hierarchical_agent, _long_running_agent, _coding_agent_executor
     global _memory_persistence, _hindsight_client, _reflection_engine, _synthesis_engine
@@ -566,13 +567,17 @@ async def lifespan(app: _FastAPI):
 
     # 11. Initialize voice system (ears and voice) — optional, may fail if model unavailable
     global _voice_manager
-    from tektos.voice import get_voice_manager
-    _voice_manager = get_voice_manager()
     try:
-        await _voice_manager.initialize()
-        log.info("Voice system initialized")
+        from tektos.voice import get_voice_manager
+        _voice_manager = get_voice_manager()
+        try:
+            await _voice_manager.initialize()
+            log.info("Voice system initialized")
+        except Exception as e:
+            log.warning("Voice system initialization failed (non-fatal): %s", e)
     except Exception as e:
-        log.warning("Voice system initialization failed (non-fatal): %s", e)
+        log.warning("Voice system import failed (non-fatal): %s", e)
+        _voice_manager = None
     log.info("Metabolism engine initialized (VRAM + context budget + power)")
 
     # 11. Start runtime SDK
@@ -1760,7 +1765,7 @@ async def get_skill_stats():
 
 
 @app.get("/api/skills/search")
-async def search_skills(query: str, limit: int = 20):
+async def search_skills(query: str = "", limit: int = 20):
     """Search skills by name, description, or trigger conditions."""
     if not _skill_manager:
         return {"error": "Skill manager not initialized"}
@@ -2461,7 +2466,11 @@ async def detect_schema_patterns(table: str = "sessions", top_k: int = 10):
     """Detect data patterns that suggest schema changes."""
     if not schema_engine:
         return {"error": "Schema evolution engine not initialized"}
-    patterns = schema_engine.detect_patterns(table, top_k=top_k)
+    try:
+        patterns = schema_engine.detect_patterns(table, top_k=top_k)
+    except Exception as exc:
+        log.warning("Schema pattern detection failed for table '%s': %s", table, exc)
+        return {"error": str(exc), "table": table}
     return [
         {
             "field": p.field_name,
@@ -2622,37 +2631,45 @@ class _DBRestoreBody(_BaseModel):
 @app.get("/api/db")
 async def get_db_stats():
     """Get database statistics: tables, rows, sizes."""
-    if not db_manager:
-        return {"error": "Database manager not initialized"}
-    return db_manager.get_stats()
+    try:
+        from tektos.db_manager import DatabaseManager
+        db_path = str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db")
+        mgr = DatabaseManager(db_path)
+        return mgr.get_stats()
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 @app.get("/api/db/schema")
 async def get_db_schema():
     """Get full database schema with column types and indexes."""
-    if not db_manager:
-        return {"error": "Database manager not initialized"}
-    snapshot = db_manager.introspect()
-    return {
-        "tables": {
-            name: {
-                "columns": [
-                    {
-                        "name": c.name,
-                        "type": c.col_type,
-                        "notnull": c.notnull,
-                        "pk": c.pk,
-                        "default": c.default_value,
-                    }
-                    for c in t.columns
-                ],
-                "indexes": [i.name for i in t.indexes],
-                "row_count": t.row_count,
-                "size_bytes": t.size_bytes,
+    try:
+        from tektos.db_manager import DatabaseManager
+        db_path = str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db")
+        mgr = DatabaseManager(db_path)
+        snapshot = mgr.introspect()
+        return {
+            "tables": {
+                name: {
+                    "columns": [
+                        {
+                            "name": c.name,
+                            "type": c.col_type,
+                            "notnull": c.notnull,
+                            "pk": c.pk,
+                            "default": c.default_value,
+                        }
+                        for c in t.columns
+                    ],
+                    "indexes": [i.name for i in t.indexes],
+                    "row_count": t.row_count,
+                    "size_bytes": t.size_bytes,
+                }
+                for name, t in snapshot.tables.items()
             }
-            for name, t in snapshot.tables.items()
         }
-    }
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 @app.get("/api/db/tables/{table_name}/sample")
@@ -3350,17 +3367,21 @@ async def tag_archive_session(session_id: str, req: TagRequest):
 
 
 @app.get("/api/search")
-async def search_sessions(query: str, limit: int = 100):
+async def search_sessions(query: str = "", limit: int = 100):
     """Search sessions and events."""
-    sessions = await session_manager.search_sessions(query)
-    events = await search_events(query, limit=limit)
-    return {
-        "sessions": [
-            {"id": s.id, "title": s.title, "tag": s.tag}
-            for s in sessions
-        ],
-        "events": events,
-    }
+    try:
+        sessions = await session_manager.search_sessions(query)
+        from tektos.store.event_store import search_events as _search_events
+        events = await _search_events(query, limit=limit)
+        return {
+            "sessions": [
+                {"id": s.id, "title": s.title, "tag": s.tag}
+                for s in sessions
+            ],
+            "events": events,
+        }
+    except Exception as exc:
+        return {"error": str(exc), "sessions": [], "events": []}
 
 
 # ---------------------------------------------------------------------------
@@ -3642,11 +3663,16 @@ async def orchestrator_status():
 @app.get("/api/nervous-system/status")
 async def nervous_system_status():
     """Nervous system (event bus + state machine) status."""
+    from tektos.event_bus import get_event_bus
+    from tektos.state_machine import get_state_machine
+    eb = get_event_bus()
+    sm = get_state_machine()
     return {
         "status": "active",
-        "event_bus": _event_bus is not None,
-        "state_machine": _state_machine is not None,
-        "state": _state_machine.current_state.value if _state_machine else "unknown",
+        "event_bus": eb is not None,
+        "state_machine": sm is not None,
+        "total_sessions": sm._transitions_completed if sm else 0,
+        "states": dict(sm._states) if sm else {},
     }
 
 
