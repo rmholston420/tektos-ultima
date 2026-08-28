@@ -118,7 +118,13 @@ export function ImmuneSystemPanel() {
       const responses = await responsesRes.json();
       const detectors = await detectorsRes.json();
 
-      setState({ health, threats, memory, responses, detectors });
+      setState({
+        health: health || {},
+        threats: Array.isArray(threats) ? threats : [],
+        memory: memory || {},
+        responses: Array.isArray(responses) ? responses : [],
+        detectors: Array.isArray(detectors) ? detectors : [],
+      });
     } catch (err) {
       console.error("Failed to load immune system:", err);
     } finally {

@@ -446,8 +446,9 @@ class TestEndToEndSelfImprovementLoop:
         # Run cycle
         cycle = loop.run("Create a module.")
 
-        # Experience should still be there
-        assert len(loop._experience) == 1
+        # Experience should still be there (cycle generates additional
+        # experiences from reflection, so we check >= 1)
+        assert len(loop._experience) >= 1
 
         # New cycle should pick it up
         cycle2 = loop.run("Create another module.")

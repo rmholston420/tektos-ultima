@@ -201,7 +201,7 @@ class MemorySystem:
         ),
         MemoryTier.PROCEDURAL: TierConfig(
             tier=MemoryTier.PROCEDURAL,
-            capacity=1000,  # Skills + wisdom + ADRs
+            capacity=10000,  # Skills + wisdom + ADRs — scaled up to avoid capacity blocks
             decay_seconds=0.0,  # No decay
             retrieval_speed_ms=100.0,  # Fast (cached)
             transfer_threshold=0.0,  # Does not transfer further

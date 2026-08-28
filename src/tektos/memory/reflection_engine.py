@@ -335,6 +335,27 @@ class ReflectionEngine:
         session.direct_experience_entries = len(direct_insights)
         session.insights.extend(direct_insights)
 
+        # If no memories to examine, generate a baseline insight about the
+        # reflection focus itself — this ensures the loop always produces
+        # at least one insight even on cold starts
+        if not all_memories:
+            baseline = ReflectionInsight(
+                source="reflection_engine",
+                content=(
+                    f"Reflection triggered with no prior memory. "
+                    f"Focus: {focus or 'general self-examination'}. "
+                    f"System is starting fresh — no prior execution traces to learn from. "
+                    f"Recommendation: build execution history to enable pattern-based learning."
+                ),
+                is_direct_experience=True,
+                trust_score=0.7,
+                what="cold_start_reflection",
+                why="No prior memories — baseline insight about system state",
+                how="Active reflection on empty memory state",
+            )
+            session.insights.append(baseline)
+            session.direct_experience_entries += 1
+
         # Step 4: Check for biases
         bias_insights = self.check_for_biases(all_memories)
         session.biases_detected = len(bias_insights)

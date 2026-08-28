@@ -248,6 +248,15 @@ async def lifespan(app: _FastAPI):
     _tool_registry = ToolRegistry(event_bus=_event_bus)
     _tool_registry.load_built_in(_sandbox)
     _mcp_client = MCPClient(registry=_tool_registry)
+    try:
+        _mcp_client.connect(
+            server_url=_os.getenv("TEKTOS_MCP_SERVER_URL", "http://127.0.0.1:3001/mcp"),
+            transport=_os.getenv("TEKTOS_MCP_TRANSPORT", "http"),
+        )
+        log.info("MCP client connected")
+    except Exception as exc:
+        log.warning("MCP client connection failed (non-fatal): %s", exc)
+    _mcp_client = _mcp_client  # keep reference
 
     # Register database management tools (need db_manager instance)
     _db_tools_registered = False
@@ -741,7 +750,8 @@ async def lifespan(app: _FastAPI):
         from tektos.plugin_loader import PluginRegistry
         _plugin_registry = PluginRegistry()
         _plugin_loader = PluginLoader(registry=_plugin_registry)
-        log.info("Plugin loader initialized")
+        _plugin_loader.load_plugins()
+        log.info("Plugin loader initialized and plugins loaded")
     except Exception as exc:
         log.warning("Failed to initialize plugin loader: %s", exc)
         _plugin_loader = None
@@ -764,6 +774,11 @@ async def lifespan(app: _FastAPI):
         _neo4j_backend = Neo4jProceduralMemory(
             config=Neo4jMemoryConfig(host=_neo4j_host, port=_neo4j_port),
         )
+        try:
+            _neo4j_backend.connect()
+            log.info("Neo4j procedural memory backend connected")
+        except Exception as exc:
+            log.warning("Neo4j backend connection failed (non-fatal): %s", exc)
         log.info("Neo4j procedural memory backend initialized")
     except Exception as exc:
         log.warning("Failed to initialize Neo4j backend: %s", exc)
@@ -779,6 +794,11 @@ async def lifespan(app: _FastAPI):
         _postgres_backend = PostgresLongTermMemory(
             config=PostgresMemoryConfig(host=_postgres_host, port=_postgres_port, database=_postgres_db),
         )
+        try:
+            _postgres_backend.connect()
+            log.info("Postgres long-term memory backend connected")
+        except Exception as exc:
+            log.warning("Postgres backend connection failed (non-fatal): %s", exc)
         log.info("Postgres long-term memory backend initialized")
     except Exception as exc:
         log.warning("Failed to initialize Postgres backend: %s", exc)
@@ -794,6 +814,11 @@ async def lifespan(app: _FastAPI):
         _redis_backend = RedisWorkingMemory(
             config=RedisMemoryConfig(host=_redis_host, port=_redis_port, db=_redis_db),
         )
+        try:
+            _redis_backend.connect()
+            log.info("Redis working memory backend connected")
+        except Exception as exc:
+            log.warning("Redis backend connection failed (non-fatal): %s", exc)
         log.info("Redis working memory backend initialized")
     except Exception as exc:
         log.warning("Failed to initialize Redis backend: %s", exc)
@@ -852,6 +877,34 @@ async def lifespan(app: _FastAPI):
         log.warning("Failed to initialize self-improvement loop orchestrator: %s", exc)
         _self_improvement_loop_orchestrator = None
 
+    # 16b. Initialize dreamtime background task — runs periodic contemplation
+    _dreamtime_task: Any = None
+    _dreamtime_interval: float = float(_os.getenv("TEKTOS_DREAMTIME_INTERVAL", "300"))  # 5 minutes default
+    _dreamtime_enabled: bool = _os.getenv("TEKTOS_DREAMTIME_ENABLED", "true").lower() == "true"
+
+    async def _dreamtime_loop() -> None:
+        """Background task: run dreamtime periodically."""
+        while True:
+            await _asyncio.sleep(_dreamtime_interval)
+            if memory_system and hasattr(memory_system, "dreamtime") and memory_system.dreamtime:
+                try:
+                    result = memory_system.dreamtime.run_contemplation(max_memories=30)
+                    log.info(
+                        "Dreamtime cycle complete: %d sources → %d insights (novel=%s, score=%.2f)",
+                        result.source_count,
+                        result.insight_count,
+                        result.is_novel,
+                        result.novelty_score,
+                    )
+                except Exception as exc:
+                    log.warning("Dreamtime cycle failed: %s", exc)
+
+    if _dreamtime_enabled:
+        _dreamtime_task = _asyncio.create_task(_dreamtime_loop())
+        log.info("Dreamtime background task started (interval=%ds)", _dreamtime_interval)
+    else:
+        log.info("Dreamtime background task disabled (set TEKTOS_DREAMTIME_ENABLED=true to enable)")
+
     # 17. Initialize infrastructure — search, gitops, recovery, telemetry
     try:
         from tektos.search.unified_search import UnifiedSearch
@@ -859,6 +912,11 @@ async def lifespan(app: _FastAPI):
             root_dir=str(_Path(__file__).parent / ".." / ".."),
             max_results=20,
         )
+        try:
+            _unified_search.index()
+            log.info("Unified search indexed")
+        except Exception as exc:
+            log.warning("Unified search indexing failed (non-fatal): %s", exc)
         log.info("Unified search initialized (RAG-style file search)")
     except Exception as exc:
         log.warning("Failed to initialize unified search: %s", exc)
@@ -883,6 +941,11 @@ async def lifespan(app: _FastAPI):
             check_interval=30,
             max_retries=3,
         )
+        try:
+            await _auto_recovery.start_monitoring()
+            log.info("Auto-recovery monitoring started")
+        except Exception as exc:
+            log.warning("Auto-recovery monitoring start failed (non-fatal): %s", exc)
         log.info("Auto-recovery engine initialized (service health monitoring)")
     except Exception as exc:
         log.warning("Failed to initialize auto-recovery: %s", exc)
@@ -895,12 +958,26 @@ async def lifespan(app: _FastAPI):
             collection_interval=10.0,
             max_buffer_size=10000,
         )
+        try:
+            await _telemetry_collector.start_collection()
+            log.info("Telemetry collection started")
+        except Exception as exc:
+            log.warning("Telemetry collection start failed (non-fatal): %s", exc)
         log.info("Telemetry collector initialized (system metrics)")
     except Exception as exc:
         log.warning("Failed to initialize telemetry collector: %s", exc)
         _telemetry_collector = None
 
     log.info("All modules initialized — Tektos-Ultima-v1 ready")
+
+    # 12. Initialize hook system — register BuiltinHooks with the HookManager
+    from tektos.runtime.hooks import HookManager
+    _hook_manager = HookManager(resource_monitor=thermal_monitor)
+    app.state.hook_manager = _hook_manager
+    # Wire the global hook manager into the RuntimeSDK so _fire_hook() works
+    from tektos.runtime import sdk as _sdk
+    _sdk._hook_manager = _hook_manager
+    log.info("Hook system initialized with BuiltinHooks")
 
     log.info("Tektos-Ultima-v1 backend started (schema v%d)", schema_engine.get_current_version())
     yield
@@ -952,6 +1029,9 @@ async def lifespan(app: _FastAPI):
         log.info("Self-improvement loop (simple) stopped")
     if _self_improvement_loop_orchestrator:
         log.info("Self-improvement loop orchestrator stopped")
+    if _dreamtime_task:
+        _dreamtime_task.cancel()
+        log.info("Dreamtime background task stopped")
     if thermal_monitor:
         try:
             await thermal_monitor.stop()
@@ -1524,6 +1604,108 @@ async def delete_memory(tier: str, entry_id: str):
 
     deleted = fn(entry_id)
     return {"deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# REST API — Dreamtime (Passive Reflection)
+# ---------------------------------------------------------------------------
+
+
+class _DreamtimeRunBody(_BaseModel):
+    max_memories: int = _Field(default=50, description="Max memories to gather for processing")
+    focus_area: str | None = _Field(default=None, description="Optional focus area for targeted processing")
+
+
+@app.get("/api/dreamtime/summary")
+async def get_dreamtime_summary():
+    """Get dreamtime system summary: state, total dreams, total insights."""
+    if not memory_system or not hasattr(memory_system, "dreamtime") or not memory_system.dreamtime:
+        return {"error": "Dreamtime engine not initialized"}
+    return memory_system.dreamtime.get_summary()
+
+
+@app.get("/api/dreamtime/history")
+async def get_dreamtime_history(limit: int = 10):
+    """Get recent dreamtime results."""
+    if not memory_system or not hasattr(memory_system, "dreamtime") or not memory_system.dreamtime:
+        return {"error": "Dreamtime engine not initialized"}
+    results = memory_system.dreamtime.get_dream_history(limit=limit)
+    return {
+        "dreams": [
+            {
+                "id": d.id,
+                "source_count": d.source_count,
+                "insight_count": d.insight_count,
+                "is_novel": d.is_novel,
+                "novelty_score": d.novelty_score,
+                "insights": d.insights,
+                "timestamp": d.timestamp,
+            }
+            for d in results
+        ]
+    }
+
+
+@app.post("/api/dreamtime/run")
+async def run_dreamtime(body: _DreamtimeRunBody = _DreamtimeRunBody()):
+    """Run a complete dreamtime/contemplation cycle.
+
+    Gathers memories from long-term and procedural tiers, performs
+    associative cross-pollination, generates insights, and saves them
+    to long-term or procedural memory based on novelty score.
+    """
+    if not memory_system or not hasattr(memory_system, "dreamtime") or not memory_system.dreamtime:
+        return {"error": "Dreamtime engine not initialized"}
+    result = memory_system.dreamtime.run_contemplation(
+        max_memories=body.max_memories,
+        focus_area=body.focus_area,
+    )
+    return {
+        "id": result.id,
+        "source_count": result.source_count,
+        "insight_count": result.insight_count,
+        "is_novel": result.is_novel,
+        "novelty_score": result.novelty_score,
+        "insights": result.insights,
+        "timestamp": result.timestamp,
+    }
+
+
+@app.post("/api/dreamtime/trigger-skill-generation")
+async def trigger_dreamtime_skill_generation():
+    """Trigger skill generation from recent dreamtime insights.
+
+    Takes the most recent dreamtime insights and attempts to create
+    skills from them via the skill manager.
+    """
+    if not memory_system or not hasattr(memory_system, "dreamtime") or not memory_system.dreamtime:
+        return {"error": "Dreamtime engine not initialized"}
+    if _skill_manager is None:
+        return {"error": "Skill manager not initialized"}
+
+    # Get recent dreamtime insights
+    dreams = memory_system.dreamtime.get_dream_history(limit=5)
+    insights: list[str] = []
+    for d in dreams:
+        insights.extend(d.insights)
+
+    if not insights:
+        return {"message": "No recent dreamtime insights to generate skills from", "skills_created": 0}
+
+    # Create skills from insights (treat each insight as a lesson)
+    skills = _skill_manager.create_skill_from_reflection(
+        lessons=insights[:10],  # Cap at 10 lessons
+        what_worked=[],
+        what_failed=[],
+        what_to_avoid=[],
+        recommendations=[],
+    )
+
+    return {
+        "insights_processed": len(insights),
+        "skills_created": len(skills),
+        "skill_names": [s.name for s in skills],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2271,21 +2453,7 @@ async def run_planner(body: dict[str, Any]):
 # REST API — Schema Evolution
 # ---------------------------------------------------------------------------
 
-@app.get("/api/schema")
-async def get_schema():
-    """Get current schema version and table structure."""
-    if not schema_engine:
-        return {"error": "Schema evolution engine not initialized"}
-    introspection = schema_engine.introspect()
-    evolution_history = schema_engine.get_evolution_history()
-    si_metrics = self_improvement.get_learning_metrics() if self_improvement else {"total_tasks": 0}
-    return {
-        "version": schema_engine.get_current_version(),
-        "schema": schema_engine.get_schema(),
-        "evolution_history": evolution_history,
-        "introspection": introspection,
-        "self_improvement": si_metrics,
-    }
+# (Duplicate /api/schema endpoint removed — kept the more complete version at line ~3462)
 
 
 @app.get("/api/schema/patterns")
@@ -2948,6 +3116,14 @@ async def create_session(req: CreateSessionRequest):
             resume_session_id=req.resume_session_id,
         )
 
+    # Fire session.created hook
+    try:
+        hm = app.state.hook_manager
+        if hm:
+            await hm.fire("session.created", session_id=session.id, model=req.model or runtime_sdk._llm_model)
+    except Exception:
+        log.exception("Hook session.created failed")
+
     return {
         "id": session.id,
         "title": session.title or "",
@@ -3329,6 +3505,8 @@ async def vision_status():
 @app.get("/api/schema")
 async def get_schema_info():
     """Expose current schema version, history, and self-model for agent introspection."""
+    if not schema_engine:
+        return {"error": "Schema evolution engine not initialized"}
     schema = schema_engine.get_schema()
     history = schema_engine.get_evolution_history()
     snapshot = schema_engine.introspect()
@@ -3607,25 +3785,72 @@ async def get_telemetry():
 # Hooks API
 # ---------------------------------------------------------------------------
 
+class _FireHookBody(_BaseModel):
+    event_type: str
+    session_id: str | None = None
+    tool_name: str | None = None
+    tool_input: dict[str, Any] | None = None
+    model: str | None = None
+    task_description: str | None = None
+    outcome: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
 @app.get("/api/hooks")
 async def list_hooks():
     """List all registered hooks with their metadata."""
     try:
-        from tektos.runtime.hooks import HookRegistry
-        registry = HookRegistry()
-        hooks = registry.list_hooks()
-        return [
-            {
-                "name": h.get("name", "unknown"),
-                "priority": h.get("priority", 0),
-                "handler": h.get("handler", ""),
-                "registered_at": h.get("registered_at", ""),
-            }
-            for h in hooks
-        ]
+        hm = app.state.hook_manager
+        if hm is None:
+            return {"error": "Hook system not initialized"}
+        hooks = hm.list_hooks()
+        return {
+            "hooks": [
+                {"event_type": et, "handlers": handlers}
+                for et, handlers in hooks.items()
+            ]
+        }
     except Exception as exc:
         log.warning("Hook listing failed: %s", exc)
-        return []
+        return {"error": str(exc)}
+
+
+@app.post("/api/hooks/fire")
+async def fire_hook(body: _FireHookBody):
+    """Manually trigger a hook event."""
+    try:
+        hm = app.state.hook_manager
+        if hm is None:
+            raise _HTTPException(status_code=503, detail="Hook system not initialized")
+
+        results = await hm.fire(
+            body.event_type,
+            session_id=body.session_id,
+            tool_name=body.tool_name,
+            tool_input=body.tool_input,
+            model=body.model,
+            task_description=body.task_description,
+            outcome=body.outcome,
+            metadata=body.metadata or {},
+            stop_on_abort=False,
+        )
+        return {
+            "event_type": body.event_type,
+            "results": [
+                {
+                    "outcome": r.outcome.value,
+                    "message": r.message,
+                    "blocking": r.blocking,
+                    "data": r.data,
+                }
+                for r in results
+            ],
+        }
+    except _HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("Hook fire failed: %s", exc)
+        raise _HTTPException(status_code=500, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -3720,8 +3945,7 @@ async def list_scheduled_tasks():
 async def route_task(task: str = "", category: str = "general"):
     """Route a task to the best model based on category and complexity."""
     try:
-        from tektos.routing import ModelRouter
-        router = ModelRouter()
+        router = app.state.model_router
         decision = router.route(task=task, category=category)
         return {
             "task": task,
@@ -3929,6 +4153,13 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                     await websocket.send_text(system_message(
                         session_id, f"Tool {tool_id} approved", "info"
                     ).to_json())
+                    # Fire session.approve hook
+                    try:
+                        hm = app.state.hook_manager
+                        if hm:
+                            await hm.fire("session.approve", session_id=session_id, tool_name=tool_id)
+                    except Exception:
+                        log.exception("Hook session.approve failed")
                 except KeyError:
                     await websocket.send_text(_json.dumps({
                         "type": "error",
@@ -3943,6 +4174,13 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                     await websocket.send_text(system_message(
                         session_id, f"Tool {tool_id} rejected", "warning"
                     ).to_json())
+                    # Fire session.reject hook
+                    try:
+                        hm = app.state.hook_manager
+                        if hm:
+                            await hm.fire("session.reject", session_id=session_id, tool_name=tool_id)
+                    except Exception:
+                        log.exception("Hook session.reject failed")
                 except KeyError:
                     await websocket.send_text(_json.dumps({
                         "type": "error",

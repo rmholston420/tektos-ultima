@@ -10,6 +10,7 @@ jest.mock("@/lib/api", () => ({
   api: {
     updateConfig: jest.fn().mockResolvedValue(undefined),
     togglePlugin: jest.fn().mockResolvedValue(undefined),
+    getPlugins: jest.fn().mockResolvedValue([]),
   },
   PluginInfo: Object,
 }));
@@ -179,11 +180,11 @@ describe("SettingsPanel", () => {
     consoleSpy.mockRestore();
   });
 
-  it("renders plugin section with loading state", () => {
+  it("renders plugin section with no-plugins message", () => {
     render(<SettingsPanel />);
     const pluginsSection = screen.getByText("Plugins");
     fireEvent.click(pluginsSection);
-    expect(screen.getByText("Loading plugins...")).toBeInTheDocument();
+    expect(screen.getByText("No plugins configured")).toBeInTheDocument();
   });
 
   it("renders keys section with API key entries", () => {

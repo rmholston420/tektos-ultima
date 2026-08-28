@@ -226,6 +226,22 @@ class HookRegistry:
 
 hooks = HookRegistry()
 
+# Global hook manager — set during lifespan initialization
+_hook_manager = None
+
+
+def _fire_hook(event_type: str, **kwargs) -> None:
+    """Fire a hook through the global HookManager (set during lifespan).
+
+    Errors are silently caught so hooks never break the main flow.
+    """
+    if _hook_manager is None:
+        return
+    try:
+        _asyncio.create_task(_hook_manager.fire(event_type, **kwargs, stop_on_abort=False))  # type: ignore[union-attr]
+    except Exception:
+        log.exception("Hook fire failed for %s", event_type)
+
 
 class RuntimeSDK:
     """Bridge between llama.cpp and WebSocket protocol.
@@ -303,6 +319,12 @@ class RuntimeSDK:
 
             start_time = _time.monotonic()
 
+            # Fire session.start hook
+            try:
+                await _fire_hook("session.start", session_id=session.id, model=self._llm_model, task_description=prompt[:200])
+            except Exception:
+                log.exception("Hook session.start failed")
+
             try:
                 await self._stream_llm(session, prompt, system_prompt, on_event, on_tool_approval)
             except Exception as exc:
@@ -310,20 +332,23 @@ class RuntimeSDK:
                 if on_event:
                     await on_event(session_failed(session.id, str(exc)))
                 session.status = "failed"
+
+                # Fire session.fail hook
+                try:
+                    await _fire_hook("session.fail", session_id=session.id, model=self._llm_model, task_description=prompt[:200], outcome="exception")
+                except Exception:
+                    log.exception("Hook session.fail failed")
             else:
                 session.status = "ready"
 
+                # Fire session.complete hook
+                try:
+                    await _fire_hook("session.complete", session_id=session.id, model=self._llm_model, task_description=prompt[:200], outcome="success")
+                except Exception:
+                    log.exception("Hook session.complete failed")
+
             finally:
                 wall_time = _time.monotonic() - start_time
-
-                # Run completion hook
-                await hooks.run("session.completed", HookContext(
-                    session_id=session.id,
-                    model=self._llm_model,
-                    task_description=prompt[:200],
-                    outcome="success" if session.status == "ready" else "failure",
-                    wall_time=wall_time,
-                ))
 
                 # Check resource constraints
                 await self._check_resources(session)
@@ -700,14 +725,40 @@ class RuntimeSDK:
 
         # Execute tool (actual execution via SandboxProvider or MCP registry)
         try:
+            # Fire tool.before hook before execution
+            try:
+                await _fire_hook("tool.before", session_id=session.id, tool_name=tool_name, tool_input=tool_input)  # type: ignore[misc]
+            except Exception:
+                log.exception("Hook tool.before failed")
+
+            # Fire tool.execute hook before execution
+            try:
+                await _fire_hook("tool.execute", session_id=session.id, tool_name=tool_name, tool_input=tool_input)  # type: ignore[misc]
+            except Exception:
+                log.exception("Hook tool.execute failed")
+
             result = await self._execute_tool(tool_name, tool_input)
             completed_tools.add(tool_id)  # Mark as completed BEFORE returning
             await on_event(tool_completed(session.id, tool_id, "success", str(result)))
+
+            # Fire tool.after hook after successful execution
+            try:
+                await _fire_hook("tool.after", session_id=session.id, tool_name=tool_name, tool_input=tool_input, outcome="success")  # type: ignore[misc]
+            except Exception:
+                log.exception("Hook tool.after failed")
+
             return str(result)
         except Exception as exc:
             completed_tools.add(tool_id)  # Mark as completed on error too
             error_msg = str(exc)
             await on_event(tool_completed(session.id, tool_id, "error", error_msg))
+
+            # Fire tool.after hook after failed execution
+            try:
+                await _fire_hook("tool.after", session_id=session.id, tool_name=tool_name, tool_input=tool_input, outcome="error", message=error_msg)  # type: ignore[misc]
+            except Exception:
+                log.exception("Hook tool.after failed")
+
             return f"Error: {error_msg}"
 
     async def _execute_tool(self, tool_name: str, tool_input: dict[str, Any]) -> str:

@@ -20,6 +20,7 @@ The spiral staircase.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any

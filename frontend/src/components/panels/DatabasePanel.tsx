@@ -126,10 +126,10 @@ export function DatabasePanel() {
       const backups = await backupsRes.json();
 
       setState({
-        stats,
-        schema,
-        analyses,
-        backups,
+        stats: stats || {},
+        schema: schema || {},
+        analyses: analyses || {},
+        backups: Array.isArray(backups) ? backups : [],
         selectedTable: null,
         sampleData: [],
         loadingSample: false,

@@ -13,7 +13,7 @@
 
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { api, type PluginInfo } from "@/lib/api";
 
 const SECTION_ICONS = {
@@ -33,6 +33,10 @@ export function SettingsPanel({ initialConfig }: SettingsPanelProps) {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string>("models");
+
+  useEffect(() => {
+    api.getPlugins().then(setPlugins).catch(() => {}).finally(() => setLoading(false));
+  }, []);
 
   const toggleSection = (section: string) => {
     setExpanded(expanded === section ? "" : section);
@@ -198,8 +202,11 @@ export function SettingsPanel({ initialConfig }: SettingsPanelProps) {
                       </button>
                     </div>
                   ))}
-                  {plugins.length === 0 && (
+                  {loading && plugins.length === 0 && (
                     <div className="text-center py-4 text-text-muted text-sm">Loading plugins...</div>
+                  )}
+                  {!loading && plugins.length === 0 && (
+                    <div className="text-center py-4 text-text-muted text-sm">No plugins configured</div>
                   )}
                 </div>
               )}

@@ -82,6 +82,23 @@ def generate_spec(
     spec_notes = list(notes) if notes else []
     if synthesis_guidance:
         spec_notes.append(f"[SELF-IMPROVEMENT GUIDANCE — Past execution lessons]\n{synthesis_guidance}")
+        # Weave actionable guidance into requirements so the Coding Agent
+        # sees them as first-class spec items, not just notes
+        for line in synthesis_guidance.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("["):
+                continue
+            # Skip context/tag lines (indented under guidance)
+            if line.startswith("Context:") or line.startswith("Tags:"):
+                continue
+            # Strip priority markers (⚑ HIGH:, ⚠ URGENT:, -) to get actionable text
+            actionable = line
+            for prefix in ["⚑ HIGH:", "⚠ URGENT:", "⚑ HIGH", "⚠ URGENT", "⚑ ", "⚠ ", "- "]:
+                if actionable.startswith(prefix):
+                    actionable = actionable[len(prefix):].strip()
+                    break
+            if actionable and actionable not in requirements:
+                requirements.append(actionable)
 
     return BuildSpec(
         original_prompt=original_prompt,

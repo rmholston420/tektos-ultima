@@ -55,7 +55,7 @@ export function SkillsPanel() {
       ]);
       const skillsData = await skillsRes.json();
       const statsData = await statsRes.json();
-      setSkills(skillsData.skills || []);
+      setSkills(Array.isArray(skillsData.skills) ? skillsData.skills : []);
       setStats(statsData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load skills");

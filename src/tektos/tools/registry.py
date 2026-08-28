@@ -371,14 +371,115 @@ class MCPClient:
         }
 
     def _connect_sse(self, url: str) -> dict[str, Any]:
-        """Connect via SSE to MCP server."""
-        log.info(f"MCP SSE connect to {url} (placeholder — requires aiohttp)")
-        return {
-            "status": "partial",
-            "url": url,
-            "tools_imported": 0,
-            "note": "SSE transport requires async HTTP client library",
-        }
+        """Connect via SSE to MCP server.
+
+        Follows the MCP SSE transport spec:
+        1. GET the SSE endpoint (e.g. http://host:port/sse) — returns a stream
+        2. Parse the stream for the "endpoint" message (JSON-RPC base URL)
+        3. POST jsonrpc "initialize" to the endpoint
+        4. POST jsonrpc "tools/list" to the endpoint
+        5. Import discovered tools into the registry
+        """
+        import asyncio
+        import json as _json
+
+        try:
+            import aiohttp
+        except ImportError:
+            log.warning("aiohttp not installed — SSE transport unavailable")
+            return {
+                "status": "error",
+                "url": url,
+                "tools_imported": 0,
+                "note": "SSE transport requires aiohttp: pip install aiohttp",
+            }
+
+        async def _do_connect():
+            async with aiohttp.ClientSession() as session:
+                # Step 1: GET the SSE endpoint to receive the stream
+                sse_base_url = url.rstrip("/")
+                if not sse_base_url.endswith("/sse"):
+                    sse_base_url = f"{sse_base_url}/sse"
+
+                async with session.get(
+                    sse_base_url,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    resp.raise_for_status()
+                    # Read SSE lines looking for the "endpoint" message
+                    endpoint_url = None
+                    async for line in resp.content:
+                        text = line.decode("utf-8", errors="replace").strip()
+                        if not text:
+                            continue
+                        if text.startswith("data: "):
+                            data_payload = text[6:].strip()
+                            try:
+                                msg = _json.loads(data_payload)
+                                if "endpoint" in msg:
+                                    endpoint_url = msg["endpoint"]
+                                    break
+                            except _json.JSONDecodeError:
+                                continue
+
+                # Fallback: if no endpoint found, derive it from the SSE URL
+                if not endpoint_url:
+                    # SSE URL is like http://host:port/sse → endpoint is http://host:port/mcp
+                    base = sse_base_url.rsplit("/sse", 1)[0]
+                    endpoint_url = f"{base}/mcp"
+                    log.info("SSE endpoint not found in stream; using derived URL: %s", endpoint_url)
+
+                # Step 2: Send MCP initialize request
+                init_payload = _json.dumps({
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "tektos", "version": "0.1.0"},
+                    },
+                    "id": 1,
+                }).encode()
+
+                async with session.post(
+                    endpoint_url,
+                    data=init_payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    resp.raise_for_status()
+                    init_response = _json.loads(await resp.text())
+                    log.info("MCP initialize response: %s", init_response.get("result", {}))
+
+                # Step 3: Call tools/list to discover tools
+                list_payload = _json.dumps({
+                    "jsonrpc": "2.0",
+                    "method": "tools/list",
+                    "params": {},
+                    "id": 2,
+                }).encode()
+
+                async with session.post(
+                    endpoint_url,
+                    data=list_payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    resp.raise_for_status()
+                    data = _json.loads(await resp.text())
+
+                tools = data.get("result", {}).get("tools", [])
+                for tool_def in tools:
+                    self._import_tool(tool_def)
+
+                return {
+                    "status": "ok",
+                    "url": url,
+                    "tools_imported": self._imported_count,
+                    "tool_names": [t["name"] for t in tools],
+                }
+
+        return asyncio.run(_do_connect())
 
     def _import_tool(self, tool_def: dict[str, Any]) -> None:
         """Import an MCP tool definition into the registry."""

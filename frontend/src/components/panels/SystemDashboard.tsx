@@ -55,7 +55,7 @@ function AnimatedSparkline({
   const [areaD, setAreaD] = useState("");
 
   useEffect(() => {
-    if (data.length < 2 || !svgRef.current) return;
+    if (!Array.isArray(data) || data.length < 2 || !svgRef.current) return;
     const w = svgRef.current.clientWidth || 200;
     const max = Math.max(...data, warningThreshold || Infinity, dangerThreshold || Infinity) * 1.1;
     const min = Math.min(...data, 0);
