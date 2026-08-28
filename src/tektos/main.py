@@ -3430,6 +3430,67 @@ async def switch_model(session_id: str, req: ModelRequest):
         raise _HTTPException(status_code=500, detail=str(exc))
 
 
+# ---------------------------------------------------------------------------
+# REST API — Delegation (subagent spawning)
+# ---------------------------------------------------------------------------
+
+class DelegateRequest(_BaseModel):
+    """Request body for delegating a subtask to a subagent."""
+    session_id: str
+    goal: str
+    context: str | None = None
+    timeout: int = 600
+
+
+@app.post("/api/delegate")
+async def delegate_task(req: DelegateRequest):
+    """Spawn a subagent to work on a subtask.
+    
+    This implements the delegate_task tool's backend endpoint.
+    The subagent runs in an isolated context and its final summary
+    is returned when complete.
+    """
+    if session_manager is None:
+        raise _HTTPException(status_code=503, detail="Session manager not initialized")
+    
+    # Create a new session for the subagent
+    sub_session = await session_manager.create_session(
+        model=runtime_sdk._llm_model if runtime_sdk else "unknown",
+    )
+    
+    # Build the subagent prompt
+    subagent_prompt = f"""You are a subagent working on a specific subtask.
+
+GOAL: {req.goal}
+
+CONTEXT: {req.context or 'No additional context provided.'}
+
+WORKFLOW:
+1. Analyze the goal and plan your approach
+2. Use available tools (bash, file_write, file_read, web_search, etc.) to complete the task
+3. Write your implementation to files
+4. Execute and verify your work
+5. Return a concise summary of what you accomplished
+
+IMPORTANT:
+- Focus only on the goal provided
+- Do not deviate from the task
+- Return a clear summary of your work when complete
+"""
+    
+    # Submit the prompt to the subagent session
+    await runtime_sdk.submit_prompt(
+        session=sub_session,
+        prompt=subagent_prompt,
+        system_prompt="You are a specialized subagent. Complete your assigned task efficiently.",
+    )
+    
+    return {
+        "subagent_id": sub_session.id,
+        "status": "started",
+        "goal": req.goal,
+    }
+
 @app.get("/api/sessions/{session_id}/events")
 async def get_session_events(
     session_id: str,

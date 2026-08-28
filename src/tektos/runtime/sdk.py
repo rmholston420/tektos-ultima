@@ -593,10 +593,15 @@ class RuntimeSDK:
         
 
         # 8. Task decomposition — break complex tasks into numbered sub-tasks
+        # Track decomposition state for re-triggering
+        _decomposition_injected = False
+        _subtask_failures = 0
+        
         if self._task_decomposer and prompt:
             try:
                 plan = self._task_decomposer.decompose(prompt)
                 _pre_prompt_context += "\n" + self._task_decomposer.format_for_prompt(plan) + "\n"
+                _decomposition_injected = True
                 log.info(f"[SDK] Task decomposer created {len(plan.sub_tasks)} sub-tasks for session {session.id[:8]}")
             except Exception as exc:
                 log.debug(f"[SDK] Task decomposition failed (non-fatal): {exc}")
@@ -621,12 +626,21 @@ class RuntimeSDK:
                 "- delegate_task: Spawn a subagent for parallel workstreams\n"
                 "\n"
                 "CRITICAL WORKFLOW — FOLLOW THIS EXACTLY:\n"
+                "BEFORE ANY TOOL CALL — THINK FIRST:\n"
+                "  1. What exactly am I trying to accomplish?\n"
+                "  2. What arguments does this tool need? (Check required fields!)\n"
+                "  3. What could go wrong?\n"
+                "  → Write your thinking in the text stream, THEN call the tool.\n"
+                "\n"
                 "STEP 1: QUICK RESEARCH (MAX 1 web_search call) — Search once for the key information you need.\n"
                 "  → AFTER 1 SEARCH, YOU MUST STOP AND WRITE CODE. No more searching.\n"
                 "STEP 2: WRITE — IMMEDIATELY write your implementation to a file using file_write.\n"
                 "  → This is MANDATORY. Do NOT skip. Do NOT keep researching.\n"
+                "  → ALWAYS provide ALL required arguments: path AND content for file_write.\n"
                 "STEP 3: EXECUTE — Run your code using bash.\n"
                 "STEP 4: VERIFY — Check the output and verify correctness.\n"
+                "  → Run the code, check the output, verify the file exists.\n"
+                "  → If verification fails, FIX THE CODE and try again.\n"
                 "\n"
                 "HARDEST RULE — RESEARCH LIMIT:\n"
                 "- You may call web_search AT MOST ONCE per task.\n"
@@ -634,6 +648,20 @@ class RuntimeSDK:
                 "- If you don't know something, use your best knowledge and write the code.\n"
                 "- It is better to write imperfect code than to research forever.\n"
                 "- Research loops are the #1 cause of task failure. BREAK THE LOOP.\n"
+                "\n"
+                "TOOL FAILURE RECOVERY:\n"
+                "- If a tool fails, READ THE ERROR MESSAGE carefully.\n"
+                "- Common fix: make sure you provide ALL required arguments.\n"
+                "- For file_write: you MUST provide both 'path' and 'content'.\n"
+                "- For bash: you MUST provide 'command'.\n"
+                "- If you're unsure, use web_search to look up the correct approach.\n"
+                "- After fixing, try again with the corrected arguments.\n"
+                "\n"
+                "VERIFICATION CHECKLIST (before declaring task complete):\n"
+                "  □ The output file exists at the correct path\n"
+                "  □ The file contains the expected content\n"
+                "  □ The code runs without errors\n"
+                "  □ The output matches the expected result\n"
                 "\n"
                 "RULES:\n"
                 "- ALWAYS write code to a file using file_write before running it.\n"
@@ -1046,7 +1074,79 @@ class RuntimeSDK:
                                         if _extracted_path and _extracted_content:
                                             tc_args = _json.dumps({"path": _extracted_path, "content": _extracted_content})
                                             log.info(f"[SDK] Extracted file_write args from text stream: path={_extracted_path[:50]} content_len={len(_extracted_content)}")
-                                log.info(f"[TOOL CALL] Executing: name={tc_name} id={tc_id[:8]} args_len={len(tc_args)}")
+
+                                # Tool call JSON validation + retry for malformed Qwen3.6 output
+                                # Qwen3.6 sometimes sends malformed JSON in tool arguments.
+                                # Validate before execution and retry with corrected args.
+                                max_retries = 2
+                                retry_count = 0
+                                validated_args = tc_args
+                                while retry_count <= max_retries:
+                                    try:
+                                        _validated_input = _json.loads(validated_args) if validated_args else {}
+                                        # Validate required fields for known tools
+                                        if tc_name == "file_write":
+                                            if "path" not in _validated_input or "content" not in _validated_input:
+                                                # Try to extract from text stream as fallback
+                                                if current_text and retry_count == 0:
+                                                    import re as _re2
+                                                    _path_m = _re2.search(r'(?:write|create|save)\s+(?:to\s+)?(/[^\s\n]+)', current_text, _re2.IGNORECASE)
+                                                    if _path_m:
+                                                        _c_start = _path_m.end()
+                                                        _c_content = current_text[_c_start:].strip()
+                                                        if _c_content:
+                                                            _validated_input = {"path": _path_m.group(1), "content": _c_content}
+                                                            validated_args = _json.dumps(_validated_input)
+                                                            log.info(f"[SDK] Retry {retry_count+1}: extracted missing args from text for {tc_name}")
+                                                            continue
+                                                # If still missing, inject explicit error guidance for model
+                                                missing = [k for k in ["path", "content"] if k not in _validated_input]
+                                                log.warning(f"[SDK] Tool {tc_name} missing required fields: {missing}. Args: {validated_args[:200]}")
+                                                # Still execute — sandbox will return error, model learns
+                                                break
+                                        elif tc_name == "bash":
+                                            if "command" not in _validated_input:
+                                                # Try to extract command from text stream
+                                                if current_text and retry_count == 0:
+                                                    import re as _re3
+                                                    _cmd_m = _re3.search(r'(?:run|execute|bash)\s+(?:the\s+)?(?:command\s+)?([^\s\n]+)', current_text, _re3.IGNORECASE)
+                                                    if _cmd_m:
+                                                        _validated_input = {"command": _cmd_m.group(1).strip()}
+                                                        validated_args = _json.dumps(_validated_input)
+                                                        log.info(f"[SDK] Retry {retry_count+1}: extracted bash command from text")
+                                                        continue
+                                                log.warning(f"[SDK] Tool bash missing 'command' field. Args: {validated_args[:200]}")
+                                                break
+                                        else:
+                                            # For other tools, just validate it's parseable JSON
+                                            pass
+                                        break  # Valid JSON, proceed
+                                    except (_json.JSONDecodeError, ValueError):
+                                        retry_count += 1
+                                        if retry_count <= max_retries:
+                                            # Try to fix common JSON issues
+                                            _fixed = validated_args
+                                            # Remove trailing commas
+                                            _fixed = _re.sub(r',\s*}', '}', _fixed)
+                                            _fixed = _re.sub(r',\s*]', ']', _fixed)
+                                            # Fix single quotes to double quotes (common Qwen3.6 issue)
+                                            if "'" in _fixed and '"' not in _fixed:
+                                                _fixed = _fixed.replace("'", '"')
+                                            if _fixed != validated_args:
+                                                validated_args = _fixed
+                                                log.info(f"[SDK] Retry {retry_count}: fixed JSON for {tc_name}")
+                                            else:
+                                                log.warning(f"[SDK] Tool {tc_name} has unfixable JSON: {validated_args[:200]}")
+                                                break
+
+                                log.info(f"[TOOL CALL] Executing: name={tc_name} id={tc_id[:8]} args_len={len(validated_args)}")
+                                # Checkpoint: save state before tool execution for rollback
+                                _checkpoint = {
+                                    "messages": [m.copy() for m in messages],
+                                    "current_text": current_text,
+                                    "turn": turn,
+                                    "stall_count": stall_count,
+                                }
                                 await on_event(tool_started(session.id, tc_id, tc_name, {}))
                                 # Persist tool_started to event store
                                 try:
@@ -1060,8 +1160,39 @@ class RuntimeSDK:
 
                                 result_text = await self._handle_tool_completion(
                                     session, on_event, tc_id, tc_name,
-                                    tc_args, _completed_tools, on_tool_approval,
+                                    validated_args, _completed_tools, on_tool_approval,
                                 )
+                                # Checkpoint restore: if tool failed, rollback to checkpoint
+                                if result_text.startswith("Error:") or result_text.startswith("BLOCKED:"):
+                                    log.warning(f"[SDK] Tool {tc_name} failed: {result_text[:200]}. Rolling back to checkpoint.")
+                                    messages = _checkpoint["messages"]
+                                    current_text = _checkpoint["current_text"]
+                                    turn = _checkpoint["turn"]
+                                    stall_count = _checkpoint["stall_count"]
+                                    # Inject explicit error guidance for the model
+                                    error_guidance = (
+                                        f"Tool '{tc_name}' failed with: {result_text}\n"
+                                        f"Please fix your approach and try again.\n"
+                                        f"Common fixes:\n"
+                                        f"- Make sure you provide ALL required arguments\n"
+                                        f"- Check the exact file path and content format\n"
+                                        f"- Use web_search to verify the correct approach\n"
+                                    )
+                                    messages.append({"role": "user", "content": error_guidance})
+                                    
+                                    # Re-trigger task decomposition after repeated failures
+                                    _subtask_failures += 1
+                                    if _subtask_failures >= 2 and self._task_decomposer and _decomposition_injected:
+                                        try:
+                                            # Re-decompose with failure context
+                                            failure_context = f"Previous attempts failed. Last error: {result_text[:200]}"
+                                            updated_prompt = f"{prompt}\n\nFAILURE CONTEXT: {failure_context}\n\nPlease reconsider your approach and break this into smaller, more manageable steps."
+                                            new_plan = self._task_decomposer.decompose(updated_prompt)
+                                            _pre_prompt_context += "\n## RE-DECOMPOSITION (attempt " + str(_subtask_failures) + ")\n" + self._task_decomposer.format_for_prompt(new_plan) + "\n"
+                                            log.info(f"[SDK] Re-decomposition triggered after {_subtask_failures} failures")
+                                        except Exception as exc:
+                                            log.warning(f"[SDK] Re-decomposition failed: {exc}")
+                                    continue
 
                                 messages.append({
                                     "role": "assistant",
