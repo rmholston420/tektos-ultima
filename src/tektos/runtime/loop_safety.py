@@ -292,7 +292,8 @@ class LoopSafetyMonitor:
         # Pattern 2: same text length repeated (stuck)
         if len(snapshots) >= 3:
             lengths = [s.text_length for s in snapshots[-3:]]
-            if len(set(lengths)) == 1 and lengths[0] > 0:
+            min_len = min(lengths)
+            if min_len > 0 and max(lengths) / min_len <= 1.10:
                 return True
 
         # Pattern 3: repeated tool calls with zero text output
