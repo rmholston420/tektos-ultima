@@ -12,7 +12,7 @@ import time
 import sys
 
 BACKEND = "http://localhost:8020"
-TIMEOUT = 600  # 10 minutes per task
+TIMEOUT = 3600  # 1 hour per task (matches SDK max_wall_time_seconds=3600)
 
 TASKS = [
     {
@@ -44,7 +44,14 @@ TASKS = [
             "- All standard piece movements (pawns, knights, bishops, rooks, queens, kings)\n"
             "- A move is illegal if it leaves the king in check\n\n"
             "IMPORTANT: The file MUST be at /app/re.json. Write it using bash commands or file_write.\n\n"
-            "Start by exploring the /app directory, then write your solution."
+            "CRITICAL EXECUTION RULES:\n"
+            "- You MUST create /app/re.json before you stop. Do NOT end your turn after only planning, "
+            "analyzing, or experimenting — write the actual solution file.\n"
+            "- The Python package `chess` is installed and available: use it to enumerate all legal "
+            "moves (and verify your regex pairs produce exactly the same FENs) before finalizing.\n"
+            "- Verify your work: run a quick test that applies your re.json pairs to a known starting "
+            "FEN and confirms the output matches chess.legal_moves(). Fix until correct, then write the file.\n\n"
+            "Start by exploring the /app directory, then implement and write your solution."
         )
     },
     {
@@ -251,6 +258,15 @@ def main():
     print("=" * 60)
     print("Terminal-Bench 2.1: 5 Hard Tasks — Qwen3.8-27B")
     print("=" * 60)
+
+    # Optional: run a subset by name, e.g. `... test_terminal_bench_5_tasks_qwen38.py regex-chess`
+    only = set(sys.argv[1:])
+    if only:
+        TASKS[:] = [t for t in TASKS if t["name"] in only]
+        print(f"Filtering to tasks: {sorted(only)}")
+        if not TASKS:
+            print("No matching tasks. Valid names:", [t['name'] for t in TASKS])
+            sys.exit(1)
 
     # Check backend
     try:

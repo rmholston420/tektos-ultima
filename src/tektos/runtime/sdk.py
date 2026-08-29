@@ -784,22 +784,36 @@ class RuntimeSDK:
         stall_count = 0  # Track consecutive stalls
         max_stalls = 2  # Allow up to 2 stall recoveries before giving up
         max_turns = 100  # Hard limit on total turns to prevent infinite loops
+        _text_only_nudges = 0  # Anti-abandonment: text-only turns nudged (no completion signal)
         last_tool_calls_this_turn: list[str] = []
         last_text_length_this_turn = 0
+        # Real tool data from the PREVIOUS turn, consumed by check_turn at the
+        # top of THIS iteration. (check_turn records a snapshot per call; passing
+        # [] meant repetition detection was blind — it never saw real tool calls.)
+        _prev_tool_names: list[str] = []
+        _prev_input_ids: list[str] = []
+        _prev_text_len = 0
         # Repeated-command loop detection (Terminal-Bench fix): track how many
         # times each bash command has been run. The model sometimes hammers the
         # same failing command (e.g. re-checking a bad download) for 8+ turns.
         # After 3 identical runs, inject a strategy-change nudge.
         _bash_cmd_counts: dict[str, int] = {}
         while True:
-            # Check loop safety before this turn
+            # Check loop safety before this turn — pass REAL tool data from the
+            # previous turn so repetition detection can see actual commands.
             safety_report = self._loop_monitor.check_turn(
                 turn_num=turn + 1,
-                tool_calls=[],  # will be updated after LLM response
-                text_length=0,  # will be updated after LLM response
+                tool_calls=_prev_tool_names,
+                text_length=_prev_text_len,
+                input_ids=_prev_input_ids,
             )
+            _prev_tool_names = []
+            _prev_input_ids = []
+            _prev_text_len = 0
 
             if not safety_report.is_safe():
+                # Hard stop: CRITICAL or STOPPED state (max turns/tokens/time,
+                # confirmed repetition). Break the agent loop.
                 log.info(f"[SDK] Loop safety triggered")
                 log.warning(
                     f"Loop safety triggered in {session.id[:8]}: "
@@ -824,6 +838,13 @@ class RuntimeSDK:
                     ))
                 # Break out of the loop — safety mechanism activated
                 break
+            elif safety_report.state == LoopState.WARNING:
+                # Advisory tier: log and emit, but let the agent continue.
+                # The monitor demotes back to NORMAL when behavior changes.
+                log.info(
+                    f"[SDK] Loop safety WARNING (continuing) in {session.id[:8]}: "
+                    f"warnings={safety_report.warnings}"
+                )
 
             turn += 1
 
@@ -1050,6 +1071,10 @@ class RuntimeSDK:
                 # Phase 2: Stream complete — now process accumulated data
                 log.info(f"[SDK] Stream complete. finish_reason={finish_reason} text_len={len(current_text)} tool_calls={len(tool_calls_acc)}")
 
+                # Capture this turn's text length for loop-safety repetition
+                # detection (consumed by check_turn at the top of the NEXT iteration).
+                _prev_text_len = len(current_text)
+
                 # Build the complete assistant message with ALL accumulated tool calls
                 tool_calls_this_turn = list(tool_calls_acc.values())
                 for _k, _v in tool_calls_acc.items():
@@ -1073,8 +1098,8 @@ class RuntimeSDK:
                                     # Try to parse it as a path + content pattern.
                                     # Look for patterns like: "write to /path/to/file\n<content>"
                                     # or "create /path/to/file\n<content>"
-                                    import re as _re
-                                    _path_match = _re.search(r'(?:write|create|save)\s+(?:to\s+)?(/[^\s\n]+)', current_text, _re.IGNORECASE)
+                                    import re as _re_fw
+                                    _path_match = _re_fw.search(r'(?:write|create|save)\s+(?:to\s+)?(/[^\s\n]+)', current_text, _re_fw.IGNORECASE)
                                     if _path_match:
                                         _extracted_path = _path_match.group(1)
                                         # Content is everything after the path mention
@@ -1136,8 +1161,9 @@ class RuntimeSDK:
                                             # Try to fix common JSON issues
                                             _fixed = validated_args
                                             # Remove trailing commas
-                                            _fixed = _re.sub(r',\s*}', '}', _fixed)
-                                            _fixed = _re.sub(r',\s*]', ']', _fixed)
+                                            import re as _re_fix
+                                            _fixed = _re_fix.sub(r',\s*}', '}', _fixed)
+                                            _fixed = _re_fix.sub(r',\s*\]', ']', _fixed)
                                             # Fix single quotes to double quotes (common Qwen3.6 issue)
                                             if "'" in _fixed and '"' not in _fixed:
                                                 _fixed = _fixed.replace("'", '"')
@@ -1149,6 +1175,19 @@ class RuntimeSDK:
                                                 break
 
                                 log.info(f"[TOOL CALL] Executing: name={tc_name} id={tc_id[:8]} args_len={len(validated_args)}")
+
+                                # Record real tool data for loop-safety repetition
+                                # detection. input_id = "name:hash(args)" so that
+                                # different commands using the same tool are NOT
+                                # flagged as a loop, but identical repeated commands ARE.
+                                try:
+                                    import hashlib as _hl
+                                    _arg_sig = (validated_args or "")[:512]
+                                    _input_id = f"{tc_name}:{_hl.md5(_arg_sig.encode()).hexdigest()[:12]}"
+                                except Exception:
+                                    _input_id = tc_name
+                                _prev_tool_names.append(tc_name)
+                                _prev_input_ids.append(_input_id)
 
                                 # Repeated-command loop detection: nudge the model
                                 # to change strategy after 3 identical bash commands.
@@ -1287,7 +1326,56 @@ class RuntimeSDK:
                                 else:
                                     stall_count = 0
                     elif saw_any_text or current_text:
-                        # Text-only response — no tool calls
+                        # Text-only response — no tool calls this turn.
+                        #
+                        # TERMINATION GUARD (Terminal-Bench fix): a text-only turn
+                        # does NOT automatically mean the task is complete. Qwen
+                        # routinely emits a short narrative turn ("let me try the
+                        # next step...") mid-task and then stops, which used to
+                        # end the whole session with no output file produced.
+                        #
+                        # We only treat a text-only turn as final when the model
+                        # gives an explicit completion signal. Otherwise we nudge
+                        # it to keep working (with a bounded retry count so a
+                        # genuinely-finished task can still end).
+                        _explicit_done = any(
+                            marker in current_text.lower()
+                            for marker in (
+                                "task is complete",
+                                "i've completed",
+                                "i have completed",
+                                "all done",
+                                "successfully created",
+                                "successfully wrote",
+                                "file has been written",
+                                "the file is at",
+                                "final answer",
+                            )
+                        )
+                        _tool_activity = sum(1 for m in messages if isinstance(m.get("content"), str) is False and m.get("tool_calls"))
+
+                        if not _explicit_done and _text_only_nudges < 3:
+                            # Model went quiet but didn't signal completion —
+                            # push it back to work instead of ending the session.
+                            _text_only_nudges += 1
+                            messages.append({"role": "assistant", "content": current_text})
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    "STOP. You have not finished the task yet — no output file has been "
+                                    "created. A text-only response does NOT complete the task.\n"
+                                    "Continue working: use your tools (bash / file_write) to actually "
+                                    "produce the required output file, then verify it exists. "
+                                    "Do not stop until the deliverable is written and confirmed."
+                                ),
+                            })
+                            log.info(
+                                f"[SDK] Anti-abandonment nudge #{_text_only_nudges} for session {session.id[:8]} "
+                                f"(text-only turn, no completion signal)"
+                            )
+                            continue
+
+                        # Genuine completion (explicit signal) or nudge budget exhausted.
                         await on_event(assistant_completed(session.id, stop_reason or "end_turn"))
                         # Persist assistant.completed to event store
                         try:

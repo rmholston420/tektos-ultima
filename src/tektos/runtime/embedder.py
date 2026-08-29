@@ -60,7 +60,7 @@ class EmbedderClient:
         """Create the httpx client and verify the embedder is reachable."""
         self._client = httpx.AsyncClient(timeout=30.0)
         try:
-            resp = await self._client.get("/v1/models")
+            resp = await self._client.get(f"{self._base_url}/models")
             resp.raise_for_status()
             log.info("Embedder started: model=%s", self._model)
         except Exception as exc:

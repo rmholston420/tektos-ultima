@@ -17,6 +17,7 @@ Format:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -337,7 +338,7 @@ class StateManager:
                 HindsightConfig,
             )
             client = HindsightClient(
-                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177"))
+                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"))
             )
             results = client.recall(
                 query=f"LAST_KNOWN_STATE project:{self.project} progress",
@@ -383,7 +384,7 @@ class StateManager:
             summary = "\n".join(summary_lines)
             
             client = HindsightClient(
-                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177"))
+                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"))
             )
             client.retain(
                 content=md,

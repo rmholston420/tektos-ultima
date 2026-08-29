@@ -75,7 +75,7 @@ class TestTektosConfig:
 
     @patch.dict(os.environ, {
         "TEKTOS_LLM_BASE_URL": "http://llm:8091/v1",
-        "TEKTOS_HINDSIGHT_URL": "http://hindsight:9177",
+        "TEKTOS_HINDSIGHT_URL": "http://127.0.0.1:9000",
         "TEKTOS_SEARXNG_URL": "http://search:8888/search",
         "TEKTOS_VISION_URL": "http://vision:8083",
         "TEKTOS_API_KEY_ENABLED": "true",

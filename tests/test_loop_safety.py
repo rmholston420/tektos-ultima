@@ -86,7 +86,7 @@ class TestLoopSafetyReport:
 
     def test_is_safe_warning(self):
         report = LoopSafetyReport(state=LoopState.WARNING)
-        assert report.is_safe() is False  # Only NORMAL is safe
+        assert report.is_safe() is True  # WARNING is advisory — agent continues
         assert report.is_critical() is False
 
     def test_is_safe_critical(self):

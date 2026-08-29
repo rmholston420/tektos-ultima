@@ -664,7 +664,7 @@ class AutoRecoveryManager:
             )
             
             client = HindsightClient(
-                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177"))
+                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"))
             )
             results = client.recall(
                 query="LAST_KNOWN_STATE tektos progress objective",

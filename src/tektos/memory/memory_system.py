@@ -248,8 +248,10 @@ class MemorySystem:
             for lt in long_term:
                 self.tiers[MemoryTier.LONG_TERM].append(self._dict_to_entry(lt))
 
-            # Procedural memory
-            procedural = self.persistence.load_procedural()
+            # Procedural memory — load up to capacity (FIFO from DB)
+            procedural = self.persistence.load_procedural(
+                limit=self.configs[MemoryTier.PROCEDURAL].capacity
+            )
             for p in procedural:
                 self.tiers[MemoryTier.PROCEDURAL].append(self._dict_to_entry(p))
 
@@ -381,11 +383,27 @@ class MemorySystem:
         """
         config = self.configs[tier]
 
-        # Enforce capacity
+        # Enforce capacity with FIFO pruning (not ValueError)
         if len(self.tiers[tier]) >= config.capacity:
-            raise ValueError(
-                f"{tier.value} memory is at capacity ({config.capacity}). "
-                f"Remove old entries or increase capacity."
+            # Remove oldest entries to make room
+            excess = len(self.tiers[tier]) - config.capacity + 1
+            pruned = self.tiers[tier][:excess]
+            self.tiers[tier] = self.tiers[tier][excess:]
+            # Also prune from persistence
+            if self.persistence:
+                for p in pruned:
+                    try:
+                        if tier == MemoryTier.WORKING:
+                            self.persistence.delete_working(p.id)
+                        elif tier == MemoryTier.LONG_TERM:
+                            self.persistence.delete_long_term(p.id)
+                        elif tier == MemoryTier.PROCEDURAL:
+                            self.persistence.delete_procedural(p.id)
+                    except Exception:
+                        pass  # Best-effort cleanup
+            log.info(
+                "Pruned %d oldest %s entries (capacity %d reached)",
+                excess, tier.value, config.capacity,
             )
 
         entry = MemoryEntry(

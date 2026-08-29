@@ -146,36 +146,24 @@ class TaskDecomposer:
         )
 
     def _decompose_code_generation(self, task: str) -> DecompositionPlan:
-        """Decompose: research → scaffold → implement → test."""
+        """Decompose: scaffold → implement → test. NO research step — model gets stuck there."""
         return DecompositionPlan(
             original_task=task,
             sub_tasks=[
                 SubTask(
                     step_number=1,
-                    description="Research the task: search web for relevant documentation, examples, or specifications",
-                    expected_output="Key requirements and approach identified",
-                    tools_needed=["web_search", "web_extract"],
+                    description="Create the file with complete implementation. Write ALL code now — do not plan or research first.",
+                    expected_output="File created with full working implementation",
+                    tools_needed=["file_write"],
                 ),
                 SubTask(
                     step_number=2,
-                    description="Create a file skeleton/outline with function signatures and structure",
-                    expected_output="File created with basic structure (even if incomplete)",
-                    tools_needed=["file_write"],
-                ),
-                SubTask(
-                    step_number=3,
-                    description="Implement the core logic in the file",
-                    expected_output="File contains complete implementation",
-                    tools_needed=["file_write"],
-                ),
-                SubTask(
-                    step_number=4,
-                    description="Test the implementation with sample inputs",
+                    description="Test the implementation with sample inputs using bash",
                     expected_output="Test runs successfully, output matches expectations",
                     tools_needed=["bash"],
                 ),
                 SubTask(
-                    step_number=5,
+                    step_number=3,
                     description="Fix any issues and verify final output",
                     expected_output="Final file is correct and complete",
                     tools_needed=["file_write", "bash"],
@@ -184,33 +172,27 @@ class TaskDecomposer:
         )
 
     def _decompose_regex_task(self, task: str) -> DecompositionPlan:
-        """Decompose regex/pattern tasks: understand → generate → validate."""
+        """Decompose regex/pattern tasks: generate → validate. NO research step."""
         return DecompositionPlan(
             original_task=task,
             sub_tasks=[
                 SubTask(
                     step_number=1,
-                    description="Research the problem: understand the input format, rules, and expected output",
-                    expected_output="Clear understanding of input/output format and constraints",
-                    tools_needed=["web_search", "web_extract"],
-                ),
-                SubTask(
-                    step_number=2,
-                    description="Design the regex patterns: list each pattern and its replacement",
-                    expected_output="List of regex patterns with descriptions",
-                    tools_needed=["bash"],  # Write to /tmp/patterns.txt for reference
-                ),
-                SubTask(
-                    step_number=3,
-                    description="Generate the output file (e.g., re.json) with all regex pairs",
-                    expected_output="Output file created at the specified path",
+                    description="Write the complete Python script that implements the regex transformations. Write ALL code now.",
+                    expected_output="Python script created with full implementation",
                     tools_needed=["file_write"],
                 ),
                 SubTask(
-                    step_number=4,
-                    description="Validate: test the output against sample inputs",
-                    expected_output="Output file passes validation tests",
+                    step_number=2,
+                    description="Test the script with sample inputs using bash",
+                    expected_output="Script runs correctly on test inputs",
                     tools_needed=["bash"],
+                ),
+                SubTask(
+                    step_number=3,
+                    description="Fix any issues and verify final output",
+                    expected_output="Final script is correct and complete",
+                    tools_needed=["file_write", "bash"],
                 ),
             ],
         )

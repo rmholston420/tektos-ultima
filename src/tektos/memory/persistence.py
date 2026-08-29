@@ -127,10 +127,12 @@ class MemoryPersistence:
 
     def __init__(self, db_path: str | Path | None = None) -> None:
         if db_path is None:
-            data_dir = Path(__file__).parent.parent / "data"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            db_path = data_dir / "memory.db"
+            # Canonical location: project root / data / memory.db
+            # __file__ = src/tektos/memory/persistence.py
+            # parent.parent.parent.parent = project root
+            db_path = Path(__file__).parent.parent.parent.parent / "data" / "memory.db"
         self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
         self.decay_thread: threading.Thread | None = None
         self.decay_interval: float = 60.0

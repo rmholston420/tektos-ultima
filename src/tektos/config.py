@@ -20,7 +20,7 @@ class LLMConfig(BaseModel):
 class HindsightConfig(BaseModel):
     """Configuration for the Hindsight memory daemon."""
     base_url: str = Field(
-        default="http://127.0.0.1:9177",
+        default="http://127.0.0.1:9000",
         description="Hindsight API base URL (TEKTOS_HINDSIGHT_URL env var)"
     )
     timeout: float = Field(default=30.0, description="Request timeout in seconds")
@@ -63,7 +63,7 @@ class TektosConfig(BaseModel):
     def from_env(cls) -> "TektosConfig":
         """Load config from environment variables with defaults."""
         llm_url = os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8091/v1")
-        hindsight_url = os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177")
+        hindsight_url = os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000")
         searxng_url = os.getenv("TEKTOS_SEARXNG_URL", "http://localhost:8888/search")
         vision_url = os.getenv("TEKTOS_VISION_URL", "http://127.0.0.1:8083")
         api_key_enabled = os.getenv("TEKTOS_API_KEY_ENABLED", "false").lower() == "true"

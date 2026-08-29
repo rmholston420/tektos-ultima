@@ -33,6 +33,19 @@ FS_ROOT = Path(os.getenv("TEKTOS_FS_ROOT", "/")).resolve()
 # Increased from 30s to 300s for downloads, builds, and multi-step operations
 BASH_TIMEOUT = int(os.getenv("TEKTOS_BASH_TIMEOUT", "300"))
 
+
+def _docker_exec(container: str, command: str, timeout: int = 600) -> subprocess.CompletedProcess:
+    """Execute a shell command inside a Docker container via docker exec.
+
+    Used by the Terminal-Bench integration to proxy tool execution into
+    per-task containers managed by Harbor. The command runs as root in
+    the container with /app as working directory (TB convention).
+    """
+    return subprocess.run(
+        ["docker", "exec", "-w", "/app", container, "bash", "-c", command],
+        shell=False, capture_output=True, text=True, timeout=timeout,
+    )
+
 # Security: max output size (bytes)
 MAX_OUTPUT_SIZE = 100_000
 
@@ -45,10 +58,14 @@ class SandboxProvider:
         fs_root: Path | None = None,
         bash_timeout: int = BASH_TIMEOUT,
         max_output_size: int = MAX_OUTPUT_SIZE,
+        docker_container: str | None = None,
     ) -> None:
         self.fs_root = (fs_root or FS_ROOT).resolve()
         self.bash_timeout = bash_timeout
         self.max_output_size = max_output_size
+        # When set, all file/bash operations are proxied into this Docker
+        # container via `docker exec` (Terminal-Bench Harbor integration).
+        self.docker_container = docker_container
 
         # Verify sandbox root exists
         if not self.fs_root.exists():
@@ -102,6 +119,17 @@ class SandboxProvider:
 
         log.info(f"[TOOL: bash] {command[:200]}")
         note = ""
+
+        # Terminal-Bench mode: proxy into the task's Docker container.
+        if self.docker_container:
+            try:
+                result = _docker_exec(self.docker_container, command, timeout=self.bash_timeout)
+                output = (result.stdout or "") + ((("\n" + result.stderr) if result.stderr else ""))
+                return f"Exit {result.returncode}: {'success' if result.returncode == 0 else 'failed'}\n{output[:self.max_output_size]}"
+            except subprocess.TimeoutExpired:
+                return f"Error: Command timed out after {self.bash_timeout}s"
+            except Exception as exc:
+                return f"Error executing command in container: {exc}"
 
         try:
             result = subprocess.run(
@@ -196,6 +224,19 @@ class SandboxProvider:
         file_path = params.get("path", "")
         if not file_path:
             return "Error: No path provided"
+
+        # Terminal-Bench mode: read from the task container.
+        if self.docker_container:
+            try:
+                result = _docker_exec(self.docker_container, f"cat {file_path} 2>&1", timeout=30)
+                if result.returncode != 0:
+                    return f"Error: File not found: {file_path}"
+                content = result.stdout or ""
+                if len(content) > self.max_output_size:
+                    content = content[: self.max_output_size] + "\n... (truncated)"
+                return content
+            except Exception as exc:
+                return f"Error reading file in container: {exc}"
 
         resolved = self._safe_path(file_path)
         if not resolved:

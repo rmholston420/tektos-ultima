@@ -234,6 +234,14 @@ class ObservabilityManager:
         self._health_checks: dict[str, bool] = {}
         self._alerts: list[dict[str, Any]] = []
     
+    def start(self) -> None:
+        """Initialize the observability manager."""
+        log.info("Observability manager started")
+
+    async def stop(self) -> None:
+        """Clean up the observability manager."""
+        log.info("Observability manager stopped")
+
     def start_trace(self, name: str, attributes: dict[str, Any] | None = None) -> str:
         """Start a new trace.
         

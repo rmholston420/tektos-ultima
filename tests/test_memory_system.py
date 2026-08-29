@@ -210,8 +210,13 @@ class TestMemorySystemCore:
             MemoryEntry(content="1", tier=MemoryTier.WORKING),
             MemoryEntry(content="2", tier=MemoryTier.WORKING),
         ]
-        with pytest.raises(ValueError, match="at capacity"):
-            fresh_memory.add_working_memory("overflow", significance=0.3)
+        # FIFO pruning: oldest entry is removed, new one added
+        fresh_memory.add_working_memory("overflow", significance=0.3)
+        assert len(fresh_memory.tiers[MemoryTier.WORKING]) == 2
+        # Oldest entry ("1") should have been pruned
+        contents = [e.content for e in fresh_memory.tiers[MemoryTier.WORKING]]
+        assert "1" not in contents
+        assert "overflow" in contents
 
     def test_novelty_tracking(self, fresh_memory: MemorySystem):
         fresh_memory.add_working_memory("normal", significance=0.3, is_novel=False)

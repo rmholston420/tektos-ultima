@@ -48,9 +48,11 @@ class StopReason(str, Enum):
 class TurnSnapshot:
     """Snapshot of a single LLM turn for repetition detection."""
     turn_num: int
-    tool_calls: tuple[str, ...]  # frozen for hashability
-    text_length: int
-    tokens_used: int
+    tool_calls: tuple[str, ...]  # tool names, frozen for hashability
+    input_ids: tuple[str, ...] = ()  # "name:hash(args)" per call — distinguishes
+                                     # different commands that use the same tool
+    text_length: int = 0
+    tokens_used: int = 0
 
 
 @dataclass
@@ -89,7 +91,9 @@ class LoopSafetyReport:
     warnings: list[str] = field(default_factory=list)
 
     def is_safe(self) -> bool:
-        return self.state == LoopState.NORMAL
+        # WARNING is a non-fatal advisory tier — the agent may continue.
+        # Only CRITICAL/STOPPED (hard limits, confirmed repetition) are unsafe.
+        return self.state not in (LoopState.CRITICAL, LoopState.STOPPED)
 
     def is_critical(self) -> bool:
         return self.state in (LoopState.CRITICAL, LoopState.STOPPED)
@@ -123,6 +127,7 @@ class LoopSafetyMonitor:
         tokens_used: int = 0,
         tool_calls: list[str] | None = None,
         text_length: int = 0,
+        input_ids: list[str] | None = None,
     ) -> LoopSafetyReport:
         """Check if the current turn is safe to continue.
 
@@ -131,6 +136,10 @@ class LoopSafetyMonitor:
             tokens_used: Tokens used in this turn.
             tool_calls: List of tool names called in this turn.
             text_length: Character length of assistant text in this turn.
+            input_ids: Per-call "name:hash(args)" identifiers. When provided,
+                repetition detection compares these (actual command content)
+                instead of bare tool names, so a sequence of *different* bash
+                commands is not flagged as a loop.
 
         Returns:
             LoopSafetyReport reflecting the current state AFTER this turn.
@@ -139,6 +148,7 @@ class LoopSafetyMonitor:
         self._snapshots.append(TurnSnapshot(
             turn_num=turn_num,
             tool_calls=tuple(tool_calls or []),
+            input_ids=tuple(input_ids or []),
             text_length=text_length,
             tokens_used=tokens_used,
         ))
@@ -194,6 +204,12 @@ class LoopSafetyMonitor:
                     )
                 elif rep_count >= 1:
                     self._state = LoopState.WARNING
+            elif self._state == LoopState.WARNING and not self._has_warned_threshold:
+                # Behavior changed — repetition no longer detected on this
+                # window. Demote back to NORMAL so a recovered agent is not
+                # latched in WARNING for the rest of the session.
+                self._repetition_count = 0
+                self._state = LoopState.NORMAL
 
         # 4. Check warning thresholds
         if self._state == LoopState.NORMAL and not self._has_warned_threshold:
@@ -282,19 +298,30 @@ class LoopSafetyMonitor:
         # Only consider turns that actually made tool calls for pattern 1
         toolful = [s for s in snapshots if s.tool_calls]
         if len(toolful) >= self.config.repetition_threshold:
-            tool_sequences = [s.tool_calls for s in toolful]
-            last_seq = tool_sequences[-1]
+            # Prefer comparing actual command content (input_ids) so that a
+            # sequence of *different* bash commands is not flagged as a loop.
+            with_inputs = [s for s in toolful if s.input_ids]
+            seq_getter = (lambda s: s.input_ids) if len(with_inputs) == len(toolful) \
+                else (lambda s: s.tool_calls)
+            sequences = [seq_getter(s) for s in toolful]
+            last_seq = sequences[-1]
             if last_seq:  # non-empty
-                match_count = sum(1 for ts in tool_sequences[:-1] if ts == last_seq)
+                match_count = sum(1 for ts in sequences[:-1] if ts == last_seq)
                 if match_count >= self.config.repetition_threshold - 1:
                     return True
 
-        # Pattern 2: same text length repeated (stuck)
+        # Pattern 2: same text length repeated (stuck in output generation).
+        # Only applies to turns with NO tool calls — a turn that emits similar
+        # text while also making different tool calls is legitimate progress,
+        # not a loop. Requiring zero tools avoids false positives on agents
+        # that produce comparable-length reasoning before each distinct command.
         if len(snapshots) >= 3:
-            lengths = [s.text_length for s in snapshots[-3:]]
-            min_len = min(lengths)
-            if min_len > 0 and max(lengths) / min_len <= 1.10:
-                return True
+            recent_text = [s for s in snapshots[-3:] if not s.tool_calls]
+            if len(recent_text) == 3:
+                lengths = [s.text_length for s in recent_text]
+                min_len = min(lengths)
+                if min_len > 0 and max(lengths) / min_len <= 1.10:
+                    return True
 
         # Pattern 3: repeated tool calls with zero text output
         recent = snapshots[-self.config.repetition_window:]
