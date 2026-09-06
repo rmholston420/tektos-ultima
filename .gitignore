@@ -91,3 +91,4 @@ frontend/src/__tests__/
 
 # Frontend build artifacts
 tektos-ultima/
+tektos-hindsight.log

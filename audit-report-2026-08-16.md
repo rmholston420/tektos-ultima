@@ -121,7 +121,7 @@ Multiple hardcoded localhost URLs that should be configurable:
 
 **Fix:** Move to config with environment variable overrides:
 ```python
-base_url = os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177")
+base_url = os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000")
 ```
 
 **Unbounded Loops (2 instances)**
