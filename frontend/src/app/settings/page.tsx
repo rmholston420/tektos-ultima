@@ -57,7 +57,7 @@ export default function SettingsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="text-text-base">{a.label}</div>
                   <div className="text-11 text-text-faint">
-                    {a.section} \u00b7 {a.id}
+                    {a.section} · {a.id}
                   </div>
                 </div>
                 {active ? (

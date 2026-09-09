@@ -24,7 +24,7 @@ export default function RunsPage() {
       <div className="hairline flex items-center justify-between px-4 py-3">
         <h1 className="text-14 font-medium text-text-base">Runs</h1>
         <span className="text-11 text-text-muted">
-          {runs.length} in session {sessionId ? `\u00b7 ${sessionId.slice(0, 8)}` : ""}
+          {runs.length} in session {sessionId ? `· ${sessionId.slice(0, 8)}` : ""}
         </span>
       </div>
       {runs.length === 0 ? (
@@ -47,9 +47,9 @@ export default function RunsPage() {
                   <div className="mt-0.5 flex items-center gap-2 text-11 text-text-faint">
                     <span className="font-mono">{m.id.slice(0, 8)}</span>
                     {m.tool_call_ids.length > 0 && (
-                      <span>\u00b7 {m.tool_call_ids.length} tool{m.tool_call_ids.length === 1 ? "" : "s"}</span>
+                      <span>· {m.tool_call_ids.length} tool{m.tool_call_ids.length === 1 ? "" : "s"}</span>
                     )}
-                    {usage?.total !== undefined && <span>\u00b7 {usage.total} tok</span>}
+                    {usage?.total !== undefined && <span>· {usage.total} tok</span>}
                   </div>
                 </div>
               </li>

@@ -218,7 +218,7 @@ export function Composer() {
         )}
       </div>
       <div className="mt-1.5 px-1 text-10 text-text-faint">
-        Enter to send \u00b7 Shift+Enter for newline \u00b7 Esc to interrupt
+        Enter to send · Shift+Enter for newline · Esc to interrupt
       </div>
     </form>
   );

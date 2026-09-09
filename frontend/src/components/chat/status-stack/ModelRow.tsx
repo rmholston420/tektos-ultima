@@ -14,7 +14,7 @@ export function ModelRow() {
     <StatusRow icon={<Cpu className="h-3 w-3" />} tone="info" data-testid="status-model">
       <span className="text-text-muted">model</span>{" "}
       <span className="font-mono text-text-base">
-        {model ?? "\u2014 (no session yet)"}
+        {model ?? "— (no session yet)"}
       </span>
     </StatusRow>
   );

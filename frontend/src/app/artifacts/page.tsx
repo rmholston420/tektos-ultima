@@ -59,8 +59,8 @@ export default function ArtifactsPage() {
               )}
               <div className="mt-2 flex items-center gap-2 text-11 text-text-muted">
                 <span>v{a.version}</span>
-                {typeof a.bytes === "number" && <span>\u00b7 {a.bytes} B</span>}
-                <span>\u00b7 {a.kind}</span>
+                {typeof a.bytes === "number" && <span>· {a.bytes} B</span>}
+                <span>· {a.kind}</span>
               </div>
             </li>
           ))}
