@@ -185,18 +185,45 @@ export function applyEnvelope(env: WSEnvelope): void {
     }
 
     case "assistant.completed": {
+      // The backend's assistant.completed payload is intentionally sparse
+      // (see sdk.py — it emits just {stop_reason} on natural completion and
+      // on loop_safety break). The full text lives in the accumulated
+      // assistant.delta stream, not in this event. Prior code overwrote
+      // `text: p.text` unconditionally, which erased the whole visible
+      // message the instant completion fired.
+      //
+      // Fix: keep the accumulated delta text (and reasoning) unless the
+      // completion payload explicitly carries a replacement. Also fall back
+      // to the newest open assistant message when message_id is missing so
+      // we don't create a ghost message keyed under `undefined`.
       const p = env.payload as {
-        message_id: string;
-        text: string;
+        message_id?: string;
+        text?: string;
         reasoning?: string;
+        stop_reason?: string;
         usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       };
-      const existing = $messages.get()[p.message_id];
+
+      let msgId = p.message_id;
+      if (!msgId) {
+        const order = $messageOrder.get();
+        const byId = $messages.get();
+        for (let i = order.length - 1; i >= 0; i--) {
+          const m = byId[order[i]];
+          if (m && m.role === "assistant" && !m.completed) {
+            msgId = order[i];
+            break;
+          }
+        }
+      }
+      if (!msgId) return;
+
+      const existing = $messages.get()[msgId];
       const msg: AssistantMessage = {
-        id: p.message_id,
+        id: msgId,
         role: "assistant",
-        text: p.text,
-        reasoning: p.reasoning,
+        text: p.text ?? existing?.text ?? "",
+        reasoning: p.reasoning ?? existing?.reasoning,
         created_at: existing?.created_at ?? now,
         completed: true,
         correlation_id: env.correlation_id ?? existing?.correlation_id,
@@ -207,11 +234,11 @@ export function applyEnvelope(env: WSEnvelope): void {
               completion: p.usage.completion_tokens,
               total: p.usage.total_tokens,
             }
-          : undefined,
+          : existing?.usage,
       };
-      $messages.setKey(p.message_id, msg);
-      if (!$messageOrder.get().includes(p.message_id)) {
-        $messageOrder.set([...$messageOrder.get(), p.message_id]);
+      $messages.setKey(msgId, msg);
+      if (!$messageOrder.get().includes(msgId)) {
+        $messageOrder.set([...$messageOrder.get(), msgId]);
       }
       return;
     }
