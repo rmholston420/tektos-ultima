@@ -206,7 +206,12 @@ class SchemaEvolutionEngine:
         return conn
 
     def _ensure_evolution_log(self, conn: sqlite3.Connection) -> None:
-        """Create the evolution log table if it doesn't exist."""
+        """Create the evolution log table if it doesn't exist.
+
+        Also runs a small forward-only migration to add ``rollback_sql``
+        to pre-existing databases so ``rollback_last`` has data to work
+        with even on legacy stores.
+        """
         conn.execute("""
             CREATE TABLE IF NOT EXISTS _schema_evolution_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -215,9 +220,16 @@ class SchemaEvolutionEngine:
                 "table" TEXT,
                 column TEXT,
                 proposed_sql TEXT,
+                rollback_sql TEXT,
                 created_at REAL NOT NULL
             )
         """)
+        # Add rollback_sql to legacy tables that predate this column.
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(_schema_evolution_log)").fetchall()
+        }
+        if "rollback_sql" not in existing_cols:
+            conn.execute("ALTER TABLE _schema_evolution_log ADD COLUMN rollback_sql TEXT")
 
     # ── Version management ─────────────────────────────────────────────
 
@@ -465,7 +477,7 @@ class SchemaEvolutionEngine:
                 column_default=default,
                 column_notnull=False,
                 proposed_sql=f"ALTER TABLE {pattern.table} ADD COLUMN {pattern.field_name} {pattern.suggested_type} DEFAULT {default}",
-                rollback_sql=f"CREATE TABLE {pattern.table}_backup AS SELECT * FROM {pattern.table}",
+                rollback_sql=f"ALTER TABLE {pattern.table} DROP COLUMN {pattern.field_name}",
             )
 
         elif pattern.pattern_type == "missing_column":
@@ -477,7 +489,7 @@ class SchemaEvolutionEngine:
                 column_type=pattern.suggested_type,
                 column_default=None,
                 proposed_sql=f"ALTER TABLE {pattern.table} ADD COLUMN {pattern.field_name} {pattern.suggested_type}",
-                rollback_sql=f"CREATE TABLE {pattern.table}_backup AS SELECT * FROM {pattern.table}",
+                rollback_sql=f"ALTER TABLE {pattern.table} DROP COLUMN {pattern.field_name}",
             )
 
         # Default fallback
@@ -501,9 +513,11 @@ class SchemaEvolutionEngine:
             )
             "NOT NULL" if kwargs.get("column_notnull") else ""
             proposal.proposed_sql = f"ALTER TABLE {kwargs['table']} ADD COLUMN {kwargs['column']} {kwargs['column_type']}{default}{' NOT NULL' if kwargs.get('column_notnull') else ''}".strip()
-            proposal.rollback_sql = (
-                f"CREATE TABLE {kwargs['table']}_backup AS SELECT * FROM {kwargs['table']}"
-            )
+            # SQLite 3.35+ supports DROP COLUMN, which is the actual
+            # inverse of ADD COLUMN. Older backends can override this
+            # rollback_sql before calling apply_proposal if they need to
+            # fall back to the table-swap dance.
+            proposal.rollback_sql = f"ALTER TABLE {kwargs['table']} DROP COLUMN {kwargs['column']}"
 
         elif action == "create_table":
             cols = ", ".join(
@@ -537,15 +551,16 @@ class SchemaEvolutionEngine:
             # Update version
             self._increment_version(conn)
 
-            # Log migration
+            # Log migration with rollback SQL so rollback_last can replay it.
             conn.execute(
-                'INSERT INTO _schema_evolution_log (version, action, "table", column, proposed_sql, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+                'INSERT INTO _schema_evolution_log (version, action, "table", column, proposed_sql, rollback_sql, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
                 (
                     self._get_schema_version(conn),
                     proposal.action,
                     proposal.table,
                     proposal.column,
                     proposal.proposed_sql,
+                    proposal.rollback_sql,
                     time.time(),
                 ),
             )
@@ -574,22 +589,71 @@ class SchemaEvolutionEngine:
             return True
 
     def rollback_last(self) -> bool:
-        """Rollback the last migration (if it has rollback SQL)."""
+        """Rollback the most recent applied migration.
+
+        Reads the latest applied entry from ``_schema_evolution_log`` (skipping
+        internal ``version_increment`` markers), executes its stored
+        ``rollback_sql`` inside a transaction, then bumps the version and
+        logs the rollback so the history is auditable.
+
+        Returns True when a rollback ran, False when there is nothing to
+        roll back or the previous migration recorded no rollback SQL.
+        """
         conn = self._get_conn()
         try:
-            # Get last migration
+            self._ensure_evolution_log(conn)
+            # Find the last real migration (ignore version_increment markers).
             row = conn.execute(
-                "SELECT action, proposed_sql FROM _schema_evolution_log ORDER BY version DESC LIMIT 1"
+                """
+                SELECT id, version, action, "table", column, proposed_sql, rollback_sql
+                FROM _schema_evolution_log
+                WHERE action != 'version_increment'
+                ORDER BY version DESC, id DESC
+                LIMIT 1
+                """
             ).fetchone()
 
             if not row:
                 log.warning("No migrations to rollback")
                 return False
 
-            # For now, we'd need to store rollback SQL per migration
-            # Simplified: just drop the last column
-            log.warning("Full rollback not yet implemented — consider manual rollback")
-            return False
+            _row_id, version, action, table, column, proposed_sql, rollback_sql = row
+
+            if not rollback_sql:
+                log.warning(
+                    "Cannot rollback v%d (%s on %s.%s): no rollback SQL stored",
+                    version,
+                    action,
+                    table,
+                    column,
+                )
+                return False
+
+            try:
+                conn.execute("BEGIN")
+                conn.execute(rollback_sql)
+                new_version = self._get_schema_version(conn) + 1
+                conn.execute(
+                    "INSERT INTO _schema_evolution_log "
+                    '(version, action, "table", column, proposed_sql, rollback_sql, created_at) '
+                    "VALUES (?, 'rollback', ?, ?, ?, NULL, ?)",
+                    (new_version, table, column, rollback_sql, time.time()),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+            log.info(
+                "Rolled back v%d (%s on %s.%s) → v%d via: %s",
+                version,
+                action,
+                table,
+                column,
+                new_version,
+                (proposed_sql or "")[:80],
+            )
+            return True
 
         finally:
             conn.close()
