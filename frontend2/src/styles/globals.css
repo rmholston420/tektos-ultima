@@ -1,0 +1,73 @@
+@import "tailwindcss";
+@import "../lib/theme/tokens.css";
+
+@theme {
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+html,
+body {
+  background: var(--surface-1);
+  color: var(--text-base);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 18px;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--primary) 35%, transparent);
+  color: var(--text-base);
+}
+
+/* Focus ring — visible, accessible, respects theme */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Hairline utility — replaces border in most places */
+.hairline {
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+
+/* Tabular numerics for numeric values (resource meter, cost, timers) */
+.tabular {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Hide scrollbars for horizontal rails, keep functionality */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--surface-8);
+  border-radius: 999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-9);
+}
+
+/* Pulse animation for the agent-active dot */
+@keyframes tektos-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.animate-tektos-pulse {
+  animation: tektos-pulse 1.2s var(--ease) infinite;
+}

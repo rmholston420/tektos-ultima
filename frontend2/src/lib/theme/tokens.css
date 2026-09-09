@@ -1,0 +1,114 @@
+/**
+ * Tektos design tokens.
+ *
+ * One source per concern. Every color, radius, motion, and z-index used
+ * in components must resolve to a variable defined here. No inline hex.
+ *
+ * Accent (moss green + warm amber) locked 2026-09-08 per redesign plan.
+ * Dark mode is default. Light mode is exposed under [data-theme="light"].
+ */
+
+:root,
+[data-theme="dark"] {
+  /* Surface ramp (13 steps). --surface-0 is app background. */
+  --surface-0: #101010;
+  --surface-1: #171614;
+  --surface-2: #1C1B19;
+  --surface-3: #201F1D;
+  --surface-4: #25231F;
+  --surface-5: #2A2825;
+  --surface-6: #2F2D2A;
+  --surface-7: #343230;
+  --surface-8: #393836;
+  --surface-9: #45433F;
+  --surface-10: #57544F;
+  --surface-11: #797876;
+  --surface-12: #BDBAB6;
+
+  /* Text */
+  --text-base: #CDCCCA;
+  --text-muted: #797876;
+  --text-faint: #5A5957;
+
+  /* Accent — moss green (agent-owned surfaces the user acts on) */
+  --primary: #8EB08A;
+  --primary-hover: #A5C4A0;
+
+  /* Agent-active — warm amber (peripherally visible during long runs) */
+  --agent: #D6B25A;
+  --agent-hover: #E5C56F;
+
+  /* Semantic */
+  --error: #D163A7;
+  --warning: #BB653B;
+  --success: #6DAA45;
+
+  /* Hairline stroke (not a border) */
+  --stroke: color-mix(in oklch, var(--text-base) 12%, transparent);
+
+  /* Radius */
+  --radius: 0.75rem;
+  --radius-sm: 0.375rem;
+
+  /* Elevation */
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.28);
+
+  /* Motion */
+  --dur-fast: 100ms;
+  --dur-narrative: 240ms;
+  --ease: cubic-bezier(0.4, 0.0, 0.2, 1);
+
+  /* Z-index ladder */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-header: 20;
+  --z-overlay: 30;
+  --z-modal: 40;
+  --z-palette: 50;
+  --z-toast: 60;
+
+  /* Rail widths */
+  --left-rail-width: 260px;
+  --left-rail-width-collapsed: 56px;
+  --right-rail-width: 380px;
+  --composer-measured-height: 96px;
+}
+
+[data-theme="light"] {
+  --surface-0: #F7F6F2;
+  --surface-1: #F9F8F5;
+  --surface-2: #FBFBF9;
+  --surface-3: #F3F1EB;
+  --surface-4: #EEECE6;
+  --surface-5: #E9E6DF;
+  --surface-6: #E3E0D8;
+  --surface-7: #D9D6CD;
+  --surface-8: #D4D1CA;
+  --surface-9: #BDBAB1;
+  --surface-10: #97948C;
+  --surface-11: #7A7974;
+  --surface-12: #4A4842;
+
+  --text-base: #28251D;
+  --text-muted: #7A7974;
+  --text-faint: #BAB9B4;
+
+  --primary: #6E8B6B;
+  --primary-hover: #587058;
+
+  --agent: #C79A3E;
+  --agent-hover: #B08933;
+
+  --error: #A12C7B;
+  --warning: #964219;
+  --success: #437A22;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-narrative: 0ms;
+  }
+}
