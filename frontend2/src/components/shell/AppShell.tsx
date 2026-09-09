@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { $connectionError, $connectionState } from "@/lib/stores/connection";
 import { $sessionId, $sessionModel } from "@/lib/stores/session";
 import { useProtocol } from "@/lib/hooks/useProtocol";
+import { ChatRegion } from "@/components/chat/ChatRegion";
 
 /**
  * AppShell: three-region layout scaffold.
@@ -22,6 +23,7 @@ export function AppShell() {
   const error = useStore($connectionError);
   const sessionId = useStore($sessionId);
   const model = useStore($sessionModel);
+  void sessionId; void model;
 
   const dotClass =
     state === "connected"
@@ -57,26 +59,8 @@ export function AppShell() {
         </div>
       </aside>
 
-      <main
-        aria-label="Chat"
-        className="min-h-0 grid grid-rows-[1fr_auto] bg-surface-1"
-      >
-        <section className="min-h-0 overflow-auto scrollbar-thin p-6">
-          <div className="mx-auto max-w-[720px] text-text-muted text-13 space-y-3">
-            <div>Frontend2 online. Transcript renders in Phase 2.</div>
-            {sessionId && (
-              <div className="tabular text-11 text-text-faint">
-                session {sessionId.slice(0, 8)}
-                {model && <> · model {model}</>}
-              </div>
-            )}
-          </div>
-        </section>
-        <section className="hairline bg-surface-2 p-3">
-          <div className="mx-auto max-w-[720px] text-11 text-text-faint">
-            Composer + status stack land in Phases 2-4.
-          </div>
-        </section>
+      <main aria-label="Chat" className="min-h-0">
+        <ChatRegion />
       </main>
 
       <aside

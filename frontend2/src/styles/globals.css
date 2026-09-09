@@ -63,6 +63,42 @@ body {
   background: var(--surface-9);
 }
 
+/* Prose (Markdown output) */
+.tektos-prose p { margin: 0 0 0.75rem; }
+.tektos-prose p:last-child { margin-bottom: 0; }
+.tektos-prose ul, .tektos-prose ol { margin: 0 0 0.75rem; padding-left: 1.5rem; }
+.tektos-prose li { margin: 0.125rem 0; }
+.tektos-prose h1, .tektos-prose h2, .tektos-prose h3, .tektos-prose h4 {
+  font-weight: 600; margin: 1rem 0 0.5rem; line-height: 1.3;
+}
+.tektos-prose h1 { font-size: 20px; }
+.tektos-prose h2 { font-size: 16px; }
+.tektos-prose h3 { font-size: 14px; }
+.tektos-prose h4 { font-size: 13px; color: var(--text-muted); }
+.tektos-prose a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.tektos-prose a:hover { color: var(--primary-hover); }
+.tektos-prose code:not(pre code) {
+  background: var(--surface-4); padding: 1px 4px; border-radius: 3px;
+  font-family: var(--font-mono); font-size: 12px;
+}
+.tektos-prose pre.tektos-code {
+  background: var(--surface-0); border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem; overflow-x: auto; margin: 0.5rem 0 0.75rem;
+  box-shadow: inset 0 0 0 1px var(--stroke);
+}
+.tektos-prose pre code { font-family: var(--font-mono); font-size: 12px; line-height: 1.6; }
+.tektos-prose blockquote {
+  border-left: 2px solid var(--stroke); padding-left: 0.75rem;
+  color: var(--text-muted); margin: 0 0 0.75rem;
+}
+.tektos-prose table {
+  border-collapse: collapse; margin: 0.5rem 0 0.75rem; font-size: 12px;
+}
+.tektos-prose th, .tektos-prose td {
+  border: 1px solid var(--stroke); padding: 4px 8px; text-align: left;
+}
+.tektos-prose th { background: var(--surface-3); font-weight: 600; }
+
 /* Pulse animation for the agent-active dot */
 @keyframes tektos-pulse {
   0%, 100% { opacity: 0.6; }
