@@ -18,16 +18,13 @@ Covers:
 import json
 import os
 import tempfile
-from pathlib import Path
 
 import pytest
 
 from tektos.migrations.schema_evolution import (
+    FieldPattern,
     SchemaEvolutionEngine,
     SchemaProposal,
-    FieldPattern,
-    TableInfo,
-    ColumnInfo,
 )
 
 
@@ -167,12 +164,8 @@ class TestDetectPatternsEdgeCases:
                 payload TEXT
             )
         """)
-        conn.execute(
-            "INSERT INTO events (id, payload) VALUES (1, 'not valid json')"
-        )
-        conn.execute(
-            "INSERT INTO events (id, payload) VALUES (2, '{\"user\": \"alice\"}')"
-        )
+        conn.execute("INSERT INTO events (id, payload) VALUES (1, 'not valid json')")
+        conn.execute('INSERT INTO events (id, payload) VALUES (2, \'{"user": "alice"}\')')
         conn.commit()
         conn.close()
 
@@ -192,7 +185,7 @@ class TestDetectPatternsEdgeCases:
             )
         """)
         conn.execute(
-            "INSERT INTO users (id, name, payload) VALUES (1, 'alice', '{\"name\": \"alice\", \"age\": 30}')"
+            'INSERT INTO users (id, name, payload) VALUES (1, \'alice\', \'{"name": "alice", "age": 30}\')'
         )
         conn.commit()
         conn.close()
@@ -462,16 +455,82 @@ class TestApplyMigration:
         """rollback_last should return False with no migrations."""
         assert not engine.rollback_last()
 
-    def test_rollback_last_with_migrations(self, engine):
-        """rollback_last should log warning but return False for simplified impl."""
+    def test_rollback_last_returns_false_when_no_rollback_sql(self, engine):
+        """A logged migration with NULL rollback_sql cannot be undone."""
         conn = engine._get_conn()
         conn.execute("CREATE TABLE tbl (id INTEGER)")
         conn.execute(
-            "INSERT INTO _schema_evolution_log (version, action, 'table', column, proposed_sql, created_at) VALUES (1, 'custom', 'tbl', '', 'CREATE TABLE tbl (id INTEGER)', 0)"
+            "INSERT INTO _schema_evolution_log "
+            '(version, action, "table", column, proposed_sql, rollback_sql, created_at) '
+            "VALUES (1, 'custom', 'tbl', '', 'CREATE TABLE tbl (id INTEGER)', NULL, 0)"
         )
+        conn.commit()
+        conn.close()
+        assert engine.rollback_last() is False
+
+    def test_rollback_last_executes_stored_rollback_sql(self, engine):
+        """apply_proposal -> rollback_last actually reverses the change."""
+        # Seed a base table.
+        conn = engine._get_conn()
+        conn.execute("CREATE TABLE things (id INTEGER PRIMARY KEY)")
+        conn.commit()
         conn.close()
 
-        assert not engine.rollback_last()  # Simplified: always returns False
+        # Apply add_column via a real proposal (populates rollback_sql).
+        proposal = engine.propose(
+            reason="add colour",
+            action="add_column",
+            table="things",
+            column="colour",
+            column_type="TEXT",
+        )
+        assert "DROP COLUMN colour" in proposal.rollback_sql
+        assert engine.apply_proposal(proposal) is True
+
+        # Column exists.
+        conn = engine._get_conn()
+        cols_before = {r[1] for r in conn.execute("PRAGMA table_info(things)").fetchall()}
+        conn.close()
+        assert "colour" in cols_before
+
+        # Rollback and verify the column is gone.
+        assert engine.rollback_last() is True
+        conn = engine._get_conn()
+        cols_after = {r[1] for r in conn.execute("PRAGMA table_info(things)").fetchall()}
+        conn.close()
+        assert "colour" not in cols_after
+
+        # History records the rollback as its own event.
+        history_actions = [h["action"] for h in engine.get_evolution_history()]
+        assert "rollback" in history_actions
+
+    def test_ensure_evolution_log_adds_rollback_sql_column_to_legacy_db(self, tmp_path):
+        """Legacy DBs missing rollback_sql should get it added on first open."""
+        import sqlite3
+
+        db_path = tmp_path / "legacy.db"
+        # Simulate the pre-P7 schema (no rollback_sql column).
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE _schema_evolution_log ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  version INTEGER NOT NULL, action TEXT NOT NULL,"
+            '  "table" TEXT, column TEXT, proposed_sql TEXT, created_at REAL NOT NULL'
+            ")"
+        )
+        conn.commit()
+        conn.close()
+
+        # Constructing the engine runs _ensure_evolution_log, which should
+        # forward-migrate the schema.
+        from tektos.migrations.schema_evolution import SchemaEvolutionEngine
+
+        SchemaEvolutionEngine(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(_schema_evolution_log)")}
+        conn.close()
+        assert "rollback_sql" in cols
 
 
 # ── get_evolution_history ────────────────────────────────────────────────
@@ -610,6 +669,7 @@ class TestGetMigrationFunctions:
 
     def test_get_migration_functions_returns_copy(self, engine):
         """get_migration_functions should return a dict (not the internal one)."""
+
         @engine.register_migration(7, "test")
         def test_fn():
             pass

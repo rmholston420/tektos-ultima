@@ -20,10 +20,36 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from mcp import ClientSession
 
 log = logging.getLogger(__name__)
+
+
+def _import_mcp_stdio() -> tuple[Any, Any, Any]:
+    """Lazy-import the MCP stdio client, ClientSession, and StdioServerParameters.
+
+    Kept lazy so a plain Tektos install (which does not require the
+    ``mcp`` extra) can still import ``tektos.runtime.mcp_integration``.
+
+    Returns:
+        Tuple of ``(stdio_client, ClientSession, StdioServerParameters)``.
+
+    Raises:
+        RuntimeError: If the ``mcp`` package is not installed.
+    """
+    try:
+        from mcp import ClientSession
+        from mcp.client.stdio import StdioServerParameters, stdio_client
+    except ImportError as exc:
+        raise RuntimeError(
+            "MCP stdio support requires the 'mcp' extra: pip install 'tektos[mcp]'"
+        ) from exc
+    return stdio_client, ClientSession, StdioServerParameters
 
 
 @dataclass
@@ -89,6 +115,7 @@ class MCPClient:
         command: str | None = None,
         url: str | None = None,
         args: list[str] | None = None,
+        env: dict[str, str] | None = None,
     ):
         """Initialize MCP client.
 
@@ -97,14 +124,20 @@ class MCPClient:
             command: Command to run the MCP server (stdio mode).
             url: URL of the MCP server (HTTP mode).
             args: Arguments for the MCP server command.
+            env: Extra environment variables for stdio subprocess.
         """
         self.server_name = server_name
         self.command = command
         self.url = url
         self.args = args or []
+        self.env = env
         self._tools: dict[str, MCPTool] = {}
         self._connected: bool = False
         self._last_error: str | None = None
+        # Stdio mode holds a persistent ClientSession behind an
+        # AsyncExitStack so we can shut both down cleanly on close().
+        self._stdio_stack: AsyncExitStack | None = None
+        self._stdio_session: ClientSession | None = None
 
     async def connect(self) -> bool:
         """Connect to the MCP server.
@@ -150,10 +183,54 @@ class MCPClient:
                     self._tools[mcp_tool.name] = mcp_tool
 
     async def _connect_stdio(self) -> None:
-        """Connect to MCP server via stdio."""
-        # For now, stdio mode is a placeholder
-        # In production, this would use subprocess to communicate with the MCP server
-        log.warning(f"[MCP] Stdio mode not yet implemented for {self.server_name}")
+        """Connect to MCP server via stdio.
+
+        Uses the official ``mcp`` Python SDK: spawns the server as a
+        subprocess, initializes a ``ClientSession`` over its stdio
+        streams, and holds both the session and the underlying transport
+        open behind an :class:`AsyncExitStack` for the lifetime of this
+        client. Tools are discovered via ``session.list_tools()`` and
+        wrapped as :class:`MCPTool` entries.
+        """
+        assert self.command is not None  # narrowed by connect()
+        stdio_client, ClientSession, StdioServerParameters = _import_mcp_stdio()
+
+        params = StdioServerParameters(
+            command=self.command,
+            args=list(self.args),
+            env=self.env,
+        )
+
+        stack = AsyncExitStack()
+        try:
+            # stdio_client() yields (read_stream, write_stream); the
+            # ClientSession wraps those for MCP framing/dispatch.
+            read_stream, write_stream = await stack.enter_async_context(stdio_client(params))
+            session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+            await session.initialize()
+
+            tools_response = await session.list_tools()
+            for tool in tools_response.tools:
+                # SDK v1 exposes ``inputSchema`` (camelCase from the wire
+                # format); SDK v2 renames it to ``input_schema``. Support
+                # both so we don't couple to a specific SDK version.
+                schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", {})
+                mcp_tool = MCPTool(
+                    name=tool.name,
+                    description=tool.description or "",
+                    input_schema=schema or {},
+                    source=self.server_name,
+                )
+                self._tools[mcp_tool.name] = mcp_tool
+
+            # Only publish the session once initialization + discovery
+            # succeeded, so failures don't leave a half-open handle.
+            self._stdio_stack = stack
+            self._stdio_session = session
+        except BaseException:
+            # If anything fails during startup, unwind subprocess + streams.
+            await stack.aclose()
+            raise
 
     async def invoke_tool(self, tool_name: str, arguments: dict[str, Any]) -> MCPToolResult:
         """Invoke an MCP tool.
@@ -176,13 +253,14 @@ class MCPClient:
         try:
             if self.url:
                 return await self._invoke_http(tool_name, arguments)
-            else:
-                return MCPToolResult(
-                    tool_name=tool_name,
-                    success=False,
-                    content="",
-                    error="MCP server not connected",
-                )
+            if self._stdio_session is not None:
+                return await self._invoke_stdio(tool_name, arguments)
+            return MCPToolResult(
+                tool_name=tool_name,
+                success=False,
+                content="",
+                error="MCP server not connected",
+            )
         except Exception as exc:
             return MCPToolResult(
                 tool_name=tool_name,
@@ -190,6 +268,53 @@ class MCPClient:
                 content="",
                 error=str(exc),
             )
+
+    async def _invoke_stdio(self, tool_name: str, arguments: dict[str, Any]) -> MCPToolResult:
+        """Invoke tool over the persistent stdio ClientSession.
+
+        The MCP SDK returns a ``CallToolResult`` whose ``.content`` is a
+        list of ``TextContent`` / ``ImageContent`` / etc. blocks. We
+        concatenate any text blocks into the ``content`` field and drop
+        non-text blocks into ``metadata`` so callers can still see them.
+        """
+        assert self._stdio_session is not None
+        result = await self._stdio_session.call_tool(tool_name, arguments)
+
+        text_parts: list[str] = []
+        other_blocks: list[dict[str, Any]] = []
+        for block in result.content or []:
+            block_type = getattr(block, "type", None)
+            if block_type == "text":
+                text_parts.append(getattr(block, "text", ""))
+            else:
+                # Best-effort serialization of non-text content blocks.
+                other_blocks.append(
+                    block.model_dump() if hasattr(block, "model_dump") else {"type": block_type}
+                )
+
+        # v1: isError; v2: is_error.
+        is_error = bool(getattr(result, "is_error", False) or getattr(result, "isError", False))
+        return MCPToolResult(
+            tool_name=tool_name,
+            success=not is_error,
+            content="\n".join(text_parts),
+            error="tool reported isError=true" if is_error else None,
+            metadata={"other_blocks": other_blocks} if other_blocks else {},
+        )
+
+    async def close(self) -> None:
+        """Shut down the stdio subprocess/session if one is open.
+
+        HTTP-mode clients are stateless (per-request httpx clients) and
+        need no cleanup.
+        """
+        if self._stdio_stack is not None:
+            try:
+                await self._stdio_stack.aclose()
+            finally:
+                self._stdio_stack = None
+                self._stdio_session = None
+        self._connected = False
 
     async def _invoke_http(self, tool_name: str, arguments: dict[str, Any]) -> MCPToolResult:
         """Invoke tool via HTTP."""
@@ -293,6 +418,14 @@ class MCPToolRegistry:
             content="",
             error=f"Tool {tool_name} not found in any MCP server",
         )
+
+    async def close_all(self) -> None:
+        """Shut down every registered client's stdio subprocess/session."""
+        for client in self._clients.values():
+            try:
+                await client.close()
+            except Exception as exc:  # pragma: no cover - best effort
+                log.warning(f"[MCP] Error closing client {client.server_name}: {exc}")
 
     @property
     def tools(self) -> list[MCPTool]:

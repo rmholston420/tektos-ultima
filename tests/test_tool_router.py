@@ -4,20 +4,21 @@ Covers: ToolCategory, ErrorType, ToolCapability, ToolPerformance, ToolRoute,
 ToolRouter (routing, execution with recovery, error classification, stats).
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from tektos.runtime.tool_router import (
-    ToolCategory,
     ErrorType,
     ToolCapability,
+    ToolCategory,
     ToolPerformance,
     ToolRoute,
     ToolRouter,
 )
 
-
 # ── ToolCategory ─────────────────────────────────────────────────────────────
+
 
 class TestToolCategory:
     def test_all_categories_exist(self):
@@ -32,6 +33,7 @@ class TestToolCategory:
 
 # ── ErrorType ────────────────────────────────────────────────────────────────
 
+
 class TestErrorType:
     def test_all_error_types_exist(self):
         assert ErrorType.TIMEOUT.value == "timeout"
@@ -44,6 +46,7 @@ class TestErrorType:
 
 
 # ── ToolCapability ───────────────────────────────────────────────────────────
+
 
 class TestToolCapability:
     def test_creation(self):
@@ -76,6 +79,7 @@ class TestToolCapability:
 
 
 # ── ToolPerformance ──────────────────────────────────────────────────────────
+
 
 class TestToolPerformance:
     def test_default_values(self):
@@ -122,6 +126,7 @@ class TestToolPerformance:
 
 # ── ToolRoute ────────────────────────────────────────────────────────────────
 
+
 class TestToolRoute:
     def test_creation(self):
         route = ToolRoute(
@@ -148,6 +153,7 @@ class TestToolRoute:
 
 
 # ── ToolRouter ───────────────────────────────────────────────────────────────
+
 
 class TestToolRouter:
     def test_init_default_capabilities(self):
@@ -227,11 +233,33 @@ class TestToolRouter:
         assert "Default routing" in route.reason
 
     def test_execute_tool_success(self):
-        router = ToolRouter()
+        # With a real ToolRegistry, execute_with_recovery calls the
+        # registered handler and packages the result string.
+        from tektos.tools.registry import ToolDefinition, ToolRegistry
+
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition(
+                name="read_file",
+                description="read a file",
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=lambda params: f"read {params.get('path')}",
+            )
+        )
+        router = ToolRouter(tool_registry=registry)
         result = router.execute_with_recovery("read_file", {"path": "/test.py"})
         assert result["success"] is True
         assert result["tool"] == "read_file"
-        assert "Executed read_file" in result["result"]
+        assert result["result"] == "read /test.py"
+
+    def test_execute_tool_without_registry_raises_after_retries(self):
+        # If no registry is configured we can't actually dispatch. The
+        # retry loop exhausts and returns a failure envelope carrying the
+        # RuntimeError message from _execute_tool.
+        router = ToolRouter()
+        result = router.execute_with_recovery("read_file", {"path": "/test.py"}, max_retries=1)
+        assert result["success"] is False
+        assert "no ToolRegistry configured" in result["error"]
 
     def test_execute_tool_unknown_raises(self):
         router = ToolRouter()
@@ -239,7 +267,18 @@ class TestToolRouter:
             router.execute_with_recovery("nonexistent_tool", {})
 
     def test_execute_tool_tracks_performance(self):
-        router = ToolRouter()
+        from tektos.tools.registry import ToolDefinition, ToolRegistry
+
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition(
+                name="read_file",
+                description="read a file",
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=lambda params: "ok",
+            )
+        )
+        router = ToolRouter(tool_registry=registry)
         router.execute_with_recovery("read_file", {"path": "/test.py"})
         perf = router.performance["read_file"]
         assert perf.total_calls == 1
@@ -248,9 +287,11 @@ class TestToolRouter:
 
     def test_execute_tool_failure_tracks_performance(self):
         router = ToolRouter()
+
         # Override _execute_tool to raise
         def failing_execute(tool_name, args):
             raise RuntimeError("File not found")
+
         router._execute_tool = failing_execute
 
         result = router.execute_with_recovery("read_file", {"path": "/missing.py"}, max_retries=1)
@@ -263,11 +304,13 @@ class TestToolRouter:
     def test_execute_tool_retry_on_failure(self):
         router = ToolRouter()
         call_count = [0]
+
         def flaky_execute(tool_name, args):
             call_count[0] += 1
             if call_count[0] < 3:
                 raise RuntimeError("Transient error")
             return {"success": True, "tool": tool_name}
+
         router._execute_tool = flaky_execute
 
         result = router.execute_with_recovery("read_file", {"path": "/test.py"}, max_retries=3)
@@ -276,8 +319,10 @@ class TestToolRouter:
 
     def test_execute_tool_exhausts_retries(self):
         router = ToolRouter()
+
         def always_fails(tool_name, args):
             raise RuntimeError("Permanent error")
+
         router._execute_tool = always_fails
 
         result = router.execute_with_recovery("read_file", {"path": "/test.py"}, max_retries=2)
@@ -335,7 +380,18 @@ class TestToolRouter:
         router._apply_recovery_strategy(ErrorType.RESOURCE, "terminal", {})
 
     def test_get_tool_stats(self):
-        router = ToolRouter()
+        from tektos.tools.registry import ToolDefinition, ToolRegistry
+
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition(
+                name="read_file",
+                description="read",
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=lambda params: "ok",
+            )
+        )
+        router = ToolRouter(tool_registry=registry)
         router.execute_with_recovery("read_file", {"path": "/test.py"})
         stats = router.get_tool_stats()
         assert "read_file" in stats
@@ -454,11 +510,13 @@ class TestToolRouter:
     def test_execute_with_recovery_custom_max_retries(self):
         router = ToolRouter()
         call_count = [0]
+
         def flaky(tool_name, args):
             call_count[0] += 1
             if call_count[0] < 2:
                 raise RuntimeError("Transient")
             return {"success": True}
+
         router._execute_tool = flaky
 
         result = router.execute_with_recovery("read_file", {}, max_retries=5)
@@ -468,9 +526,11 @@ class TestToolRouter:
     def test_execute_with_recovery_uses_capability_max_retries(self):
         router = ToolRouter()
         call_count = [0]
+
         def always_fails(tool_name, args):
             call_count[0] += 1
             raise RuntimeError("Error")
+
         router._execute_tool = always_fails
 
         # read_file has max_retries=3
@@ -481,9 +541,11 @@ class TestToolRouter:
     def test_execute_with_recovery_no_max_retries_param(self):
         router = ToolRouter()
         call_count = [0]
+
         def always_fails(tool_name, args):
             call_count[0] += 1
             raise RuntimeError("Error")
+
         router._execute_tool = always_fails
 
         # delegate_task has max_retries=2

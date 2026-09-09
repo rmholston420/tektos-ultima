@@ -20,6 +20,7 @@ from enum import Enum
 from typing import Any
 
 from tektos.runtime.embedder import EmbedderClient
+from tektos.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -113,13 +114,19 @@ class ToolRouter:
     def __init__(
         self,
         embedder_client: EmbedderClient | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         """Initialize the tool router.
 
         Args:
             embedder_client: Optional EmbedderClient for semantic tool matching.
+            tool_registry: Optional ToolRegistry used to actually dispatch
+                tool calls in ``execute_with_recovery``. When omitted, calls
+                to ``execute_with_recovery`` raise ``RuntimeError`` so
+                bare-router tests can exercise routing without a registry.
         """
         self._embedder = embedder_client
+        self.tool_registry = tool_registry
         self.capabilities: dict[str, ToolCapability] = {}
         self.performance: dict[str, ToolPerformance] = {}
         self._init_default_capabilities()
@@ -316,22 +323,43 @@ class ToolRouter:
         }
 
     def _execute_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Execute a tool (placeholder for actual tool execution).
+        """Execute a tool via the injected ToolRegistry.
+
+        If no ToolRegistry was configured (bare-router use cases such as
+        routing-only tests), raise so ``execute_with_recovery`` surfaces
+        a clear error instead of silently succeeding with a stub string.
 
         Args:
             tool_name: Name of the tool.
             args: Tool arguments.
 
         Returns:
-            Tool execution result.
+            ``{"success": True, "tool": str, "args": dict, "result": str}``
+            on success. Handler failures are re-raised as ``RuntimeError``
+            so ``execute_with_recovery`` can classify and retry them.
         """
-        # In production, this would call the actual tool
-        # For now, return a placeholder result
+        if self.tool_registry is None:
+            raise RuntimeError(
+                f"Cannot execute tool '{tool_name}': no ToolRegistry configured. "
+                "Pass tool_registry=... when constructing ToolRouter."
+            )
+
+        result_text = self.tool_registry.execute(tool_name, args)
+
+        # ToolRegistry.execute returns a plain string. Failures surface as
+        # 'Error: <message>', 'Unknown tool: ...' or 'Tool ... is disabled'.
+        if isinstance(result_text, str):
+            lowered = result_text.lower()
+            if lowered.startswith("error:"):
+                raise RuntimeError(result_text[len("Error: ") :].strip())
+            if lowered.startswith("unknown tool") or "is disabled" in lowered:
+                raise RuntimeError(result_text)
+
         return {
             "success": True,
             "tool": tool_name,
             "args": args,
-            "result": f"Executed {tool_name} with args: {args}",
+            "result": result_text,
         }
 
     def _classify_error(self, error: Exception) -> ErrorType:

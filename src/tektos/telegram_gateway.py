@@ -677,28 +677,68 @@ class TelegramGateway:
             reply_markup=keyboard,
         )
 
-        # Store permission request state
+        # Store permission request state (session_id captured so we can
+        # route the decision back to the shared approval registry).
         self._pending_permissions[user_id] = {
             "tool_id": tool_id,
             "tool_name": tool_name,
             "tool_input": tool_input,
+            "session_id": self._user_sessions.get(user_id),
         }
+
+    # Free-text tokens the user can send instead of tapping the inline
+    # buttons. Matching is case-insensitive and whitespace-tolerant.
+    _APPROVE_TOKENS = frozenset({"y", "yes", "ok", "okay", "approve", "approved", "go", "do it"})
+    _REJECT_TOKENS = frozenset({"n", "no", "nope", "reject", "rejected", "deny", "cancel", "stop"})
 
     async def _handle_permission_response(
         self,
         message: Message,
         state: FSMContext,
     ) -> None:
-        """Handle user response to permission request."""
-        # For now, just reject text responses
-        user_id = message.from_user.id
-        await state.set_state(None)
+        """Handle a free-text reply to a pending permission request.
 
-        if user_id in self._pending_permissions:
+        Accepts "y/yes/ok/approve" as approval, "n/no/reject/deny" as
+        rejection, and re-prompts on anything else. Previously every text
+        reply was silently treated as a rejection.
+        """
+        user_id = message.from_user.id
+        text = (message.text or "").strip().lower()
+
+        if user_id not in self._pending_permissions:
+            await state.set_state(None)
+            await message.answer("No pending permission request.")
+            return
+
+        if text in self._APPROVE_TOKENS:
+            await state.set_state(None)
             pending = self._pending_permissions.pop(user_id)
-            tool_id = pending["tool_id"]
-            # Reject the tool
-            await self._handle_tool_approval(message, tool_id, False)
+            await self._resolve_tool_approval(
+                user_id=user_id,
+                tool_id=pending["tool_id"],
+                tool_name=pending["tool_name"],
+                session_id=pending.get("session_id"),
+                approved=True,
+            )
+            return
+
+        if text in self._REJECT_TOKENS:
+            await state.set_state(None)
+            pending = self._pending_permissions.pop(user_id)
+            await self._resolve_tool_approval(
+                user_id=user_id,
+                tool_id=pending["tool_id"],
+                tool_name=pending["tool_name"],
+                session_id=pending.get("session_id"),
+                approved=False,
+            )
+            return
+
+        # Unrecognised text — don't consume the pending request, just remind
+        # the user what tokens are accepted so they can retry.
+        await message.answer(
+            "Reply 'yes' to approve or 'no' to reject, or tap one of the buttons above."
+        )
 
     async def _handle_tool_approval(
         self,
@@ -706,25 +746,53 @@ class TelegramGateway:
         tool_id: str,
         approved: bool,
     ) -> None:
-        """Handle tool approval/rejection."""
+        """Handle a tool approval/rejection from an inline-button tap."""
         user_id = callback.from_user.id
 
-        if user_id in self._pending_permissions:
-            pending = self._pending_permissions.pop(user_id)
-            tool_name = pending["tool_name"]
+        if user_id not in self._pending_permissions:
+            return
 
+        pending = self._pending_permissions.pop(user_id)
+        await self._resolve_tool_approval(
+            user_id=user_id,
+            tool_id=tool_id,
+            tool_name=pending["tool_name"],
+            session_id=pending.get("session_id"),
+            approved=approved,
+        )
+
+    async def _resolve_tool_approval(
+        self,
+        *,
+        user_id: int,
+        tool_id: str,
+        tool_name: str,
+        session_id: str | None,
+        approved: bool,
+    ) -> None:
+        """Confirm the decision to the user and signal the runtime SDK."""
+        # Signal the SDK's approval waiter via the shared registry.
+        if session_id:
+            from tektos.runtime.approval_registry import get_approval_registry
+
+            registry = get_approval_registry()
             if approved:
-                await self.bot.send_message(
-                    chat_id=user_id,
-                    text=f"✅ *Approved* `{tool_name}`",
-                    parse_mode="Markdown",
-                )
+                registry.approve(session_id, tool_id)
             else:
-                await self.bot.send_message(
-                    chat_id=user_id,
-                    text=f"❌ *Rejected* `{tool_name}`",
-                    parse_mode="Markdown",
-                )
+                registry.reject(session_id, tool_id)
+
+        if approved:
+            await self.bot.send_message(
+                chat_id=user_id,
+                text=f"✅ *Approved* `{tool_name}`",
+                parse_mode="Markdown",
+            )
+        else:
+            await self.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ *Rejected* `{tool_name}`",
+                parse_mode="Markdown",
+            )
 
     async def start(self) -> None:
         """Start the Telegram bot (polling mode)."""

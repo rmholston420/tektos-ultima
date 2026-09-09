@@ -1391,7 +1391,12 @@ async def lifespan(app: _FastAPI):
         from tektos.runtime.task_decomposer import TaskDecomposer
         from tektos.runtime.tool_router import ToolRouter
 
-        _tool_router = ToolRouter(embedder_client=_embedder_client)
+        # Pass the initialized ToolRegistry so execute_with_recovery can
+        # actually dispatch tool calls instead of returning placeholders.
+        _tool_router = ToolRouter(
+            embedder_client=_embedder_client,
+            tool_registry=_tool_registry,
+        )
         _task_decomposer = TaskDecomposer()
         log.info("Tool router and task decomposer initialized")
     except Exception as exc:
@@ -1605,9 +1610,10 @@ async def prompt_sse(body: _PromptSSEBody):
 
     async def event_generator():
         """Yield SSE events as OpenAI-compatible chat.completion.chunk frames."""
+        from tektos.runtime.approval_registry import get_approval_registry
+
         event_queue: _asyncio.Queue = _asyncio.Queue(maxsize=1024)
-        approved_tools: dict[str, bool] = {}
-        approval_event: _asyncio.Event = _asyncio.Event()
+        approval_registry = get_approval_registry()
 
         def _sse_frame(data: Any, *, event: str | None = None) -> str:
             """Encode one SSE frame, identical to Hermes Agent's _sse_frame."""
@@ -1787,12 +1793,11 @@ async def prompt_sse(body: _PromptSSEBody):
                 log.warning("SSE event conversion failed: %s", e)
 
         async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
+            approval_registry.register(session.id, tool_id, tool_name)
             try:
-                await _asyncio.wait_for(approval_event.wait(), timeout=30.0)
-                return approved_tools.get(tool_id, False)
-            except _asyncio.TimeoutError:
-                log.warning("Tool approval timeout for %s", tool_id)
-                return False
+                return await approval_registry.wait_for_decision(session.id, tool_id, timeout=30.0)
+            finally:
+                approval_registry.discard(session.id, tool_id)
 
         task = _asyncio.create_task(
             runtime_sdk.submit_prompt(
@@ -2616,19 +2621,26 @@ class _RegisterToolBody(_BaseModel):
 
 @app.post("/api/tools/register")
 async def register_tool(body: _RegisterToolBody):
-    """Register a new tool at runtime."""
-    if not _tool_registry:
-        return {"error": "Tool registry not initialized"}
-    from tektos.tools.registry import ToolDefinition
+    """Registering arbitrary tools over HTTP is not supported.
 
-    tool = ToolDefinition(
-        name=body.name,
-        description=body.description,
-        parameters=body.parameters,
-        handler=lambda p: f"Tool {body.name} executed",  # placeholder
+    A ToolDefinition needs a real handler callable; accepting one by
+    JSON body would either be a security hole (arbitrary-code upload)
+    or a placeholder that returns a canned string on every invocation
+    (which is what this endpoint used to do). Real tools must be added
+    in-process via ``ToolRegistry.register`` at startup, or through MCP
+    integration for external tools. This route stays wired so callers
+    get a clear 501 instead of silently registering a no-op tool.
+    """
+    # Reference body so mypy/ruff don't flag the unused parameter.
+    _ = body
+    raise _HTTPException(
+        status_code=501,
+        detail=(
+            "Runtime tool registration over HTTP is not implemented. "
+            "Register tools in-process via ToolRegistry.register or expose "
+            "them through MCP."
+        ),
     )
-    _tool_registry.register(tool)
-    return {"status": "registered", "name": tool.name}
 
 
 @app.post("/api/tools/{tool_name}/enable")
@@ -5090,8 +5102,9 @@ async def _handle_prompt(
     system_prompt: str | None,
 ) -> None:
     """Handle a prompt submission. Streams events to the WebSocket."""
-    approved_tools: dict[str, bool] = {}
-    approval_event: _asyncio.Event = _asyncio.Event()
+    from tektos.runtime.approval_registry import get_approval_registry
+
+    registry = get_approval_registry()
 
     async def on_event(envelope):
         """Send envelope to WebSocket."""
@@ -5101,13 +5114,17 @@ async def _handle_prompt(
             log.warning("WebSocket send failed (client may have disconnected): %s", e)
 
     async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
-        """Wait for user approval on a tool call."""
+        """Wait for user approval on a tool call.
+
+        Registers the pending approval in the process-wide registry so the
+        WebSocket approve/reject handlers can resolve it. Returns False on
+        timeout so the SDK rejects the tool call rather than hanging.
+        """
+        registry.register(session.id, tool_id, tool_name)
         try:
-            await _asyncio.wait_for(approval_event.wait(), timeout=30.0)
-            return approved_tools.get(tool_id, False)
-        except _asyncio.TimeoutError:
-            log.warning(f"Tool approval timeout for {tool_id}")
-            return False
+            return await registry.wait_for_decision(session.id, tool_id, timeout=30.0)
+        finally:
+            registry.discard(session.id, tool_id)
 
     await runtime_sdk.submit_prompt(
         session=session,
@@ -5235,22 +5252,11 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
             elif msg_type == "approve":
                 # Approve a tool call
                 tool_id = data.get("tool_id")
-                try:
-                    # Approve is handled in the runtime SDK's approval callback
-                    # For now, emit a system message
-                    await websocket.send_text(
-                        system_message(session_id, f"Tool {tool_id} approved", "info").to_json()
-                    )
-                    # Fire session.approve hook
-                    try:
-                        hm = app.state.hook_manager
-                        if hm:
-                            await hm.fire(
-                                "session.approve", session_id=session_id, tool_name=tool_id
-                            )
-                    except Exception:
-                        log.exception("Hook session.approve failed")
-                except KeyError:
+                from tektos.runtime.approval_registry import get_approval_registry
+
+                registry = get_approval_registry()
+                resolved = registry.approve(session_id, tool_id) if tool_id else False
+                if not resolved:
                     await websocket.send_text(
                         _json.dumps(
                             {
@@ -5260,24 +5266,26 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                             }
                         )
                     )
+                    continue
+                await websocket.send_text(
+                    system_message(session_id, f"Tool {tool_id} approved", "info").to_json()
+                )
+                # Fire session.approve hook
+                try:
+                    hm = app.state.hook_manager
+                    if hm:
+                        await hm.fire("session.approve", session_id=session_id, tool_name=tool_id)
+                except Exception:
+                    log.exception("Hook session.approve failed")
 
             elif msg_type == "reject":
                 # Reject a tool call
                 tool_id = data.get("tool_id")
-                try:
-                    await websocket.send_text(
-                        system_message(session_id, f"Tool {tool_id} rejected", "warning").to_json()
-                    )
-                    # Fire session.reject hook
-                    try:
-                        hm = app.state.hook_manager
-                        if hm:
-                            await hm.fire(
-                                "session.reject", session_id=session_id, tool_name=tool_id
-                            )
-                    except Exception:
-                        log.exception("Hook session.reject failed")
-                except KeyError:
+                from tektos.runtime.approval_registry import get_approval_registry
+
+                registry = get_approval_registry()
+                resolved = registry.reject(session_id, tool_id) if tool_id else False
+                if not resolved:
                     await websocket.send_text(
                         _json.dumps(
                             {
@@ -5287,6 +5295,17 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                             }
                         )
                     )
+                    continue
+                await websocket.send_text(
+                    system_message(session_id, f"Tool {tool_id} rejected", "warning").to_json()
+                )
+                # Fire session.reject hook
+                try:
+                    hm = app.state.hook_manager
+                    if hm:
+                        await hm.fire("session.reject", session_id=session_id, tool_name=tool_id)
+                except Exception:
+                    log.exception("Hook session.reject failed")
 
             elif msg_type == "interrupt":
                 await session_manager.interrupt_session(session_id)

@@ -2,19 +2,17 @@
 
 import asyncio
 import json
-import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tektos.runtime.evaluation_framework import (
     EvaluationHarness,
     EvaluationResult,
+    EvaluationStatus,
     EvaluationTask,
     EvaluationType,
-    EvaluationStatus,
 )
 
 
@@ -43,7 +41,6 @@ class TestEvaluationResult:
         assert result.error is None
 
     def test_duration_property(self):
-        import time
         result = EvaluationResult(
             evaluation_id="eval-1",
             evaluation_type=EvaluationType.CUSTOM,
@@ -54,7 +51,6 @@ class TestEvaluationResult:
         assert result.duration == 10.0
 
     def test_duration_uncompleted(self):
-        import time
         result = EvaluationResult(
             evaluation_id="eval-1",
             evaluation_type=EvaluationType.CUSTOM,
@@ -228,41 +224,73 @@ class TestEvaluationHarness:
             # Performance evaluation returns benchmarks list
             assert "benchmarks" in result.details
 
-    def test_run_swe_bench_evaluation(self, harness, tmp_path):
-        """Test SWE-bench evaluation — may fail if pytest not available."""
-        # Create a simple test file
-        test_file = tmp_path / "test_swe.py"
-        test_file.write_text("def test_one():\n    assert True\n")
+    def test_run_swe_bench_without_runner_fails_clearly(self, tmp_path):
+        """SWE-bench with no registered runner must FAIL explicitly.
 
+        Previously the harness silently returned score=0.0 with a fake
+        pass_rate; we now surface FAILED + a NotImplementedError message
+        so telemetry cannot mistake missing infrastructure for a real
+        zero-solve run.
+        """
         harness2 = EvaluationHarness(
             project_root=str(tmp_path),
             output_dir=str(tmp_path / "evals"),
         )
         result = EvaluationResult(
-            evaluation_id="eval-8",
+            evaluation_id="eval-swe-none",
             evaluation_type=EvaluationType.SWE_BENCH,
             status=EvaluationStatus.PENDING,
         )
         result = asyncio.run(harness2.run_evaluation(result))
-        assert result.status == EvaluationStatus.COMPLETED
-        assert "pass_rate" in result.details
+        assert result.status == EvaluationStatus.FAILED
+        assert result.error is not None
+        assert "SWE-bench" in result.error
+        assert "set_swe_bench_runner" in result.error
 
-    def test_run_evaluation_with_error(self, tmp_path):
-        """Test that evaluation errors are captured."""
-        # SWE-bench eval with nonexistent project root completes with 0 tests
+    def test_run_swe_bench_delegates_to_runner(self, tmp_path):
+        """When a runner is registered, the harness delegates to it."""
+
+        class _FakeRunner:
+            async def run(self, evaluation):
+                evaluation.score = 0.42
+                evaluation.details = {
+                    "swe_bench_version": "test",
+                    "tasks_solved": 42,
+                    "total_tasks": 100,
+                    "pass_rate": 0.42,
+                }
+
         harness2 = EvaluationHarness(
-            project_root="/nonexistent/path/that/does/not/exist",
+            project_root=str(tmp_path),
             output_dir=str(tmp_path / "evals"),
         )
+        harness2.set_swe_bench_runner(_FakeRunner())
         result = EvaluationResult(
-            evaluation_id="eval-9",
+            evaluation_id="eval-swe-run",
             evaluation_type=EvaluationType.SWE_BENCH,
             status=EvaluationStatus.PENDING,
         )
         result = asyncio.run(harness2.run_evaluation(result))
         assert result.status == EvaluationStatus.COMPLETED
-        assert result.score == 0.0
-        assert result.details["pass_rate"] == 0.0
+        assert result.score == 0.42
+        assert result.details["tasks_solved"] == 42
+
+    def test_run_swe_bench_invalid_runner_fails(self, tmp_path):
+        """A registered object without an async run() must fail loudly."""
+        harness2 = EvaluationHarness(
+            project_root=str(tmp_path),
+            output_dir=str(tmp_path / "evals"),
+        )
+        harness2.set_swe_bench_runner(object())
+        result = EvaluationResult(
+            evaluation_id="eval-swe-bad",
+            evaluation_type=EvaluationType.SWE_BENCH,
+            status=EvaluationStatus.PENDING,
+        )
+        result = asyncio.run(harness2.run_evaluation(result))
+        assert result.status == EvaluationStatus.FAILED
+        assert result.error is not None
+        assert "async 'run(evaluation)'" in result.error
 
     def test_get_status(self, harness):
         task = EvaluationTask(task_id="t1", description="test")

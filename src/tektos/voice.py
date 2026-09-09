@@ -15,15 +15,59 @@ import io
 import logging
 import os
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-import edge_tts
-import numpy as np
-from faster_whisper import WhisperModel
-from pydub import AudioSegment
+# Every third-party dep in this module is imported lazily inside the
+# functions that need them so `import tektos.voice` succeeds even when the
+# optional `voice` extra (edge-tts, faster-whisper, pydub, numpy) is not
+# installed. Numpy is pulled in transitively by faster-whisper.
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    pass
 
 log = logging.getLogger("tektos.voice")
+
+
+def _missing_extra(pkg: str, extra: str = "voice") -> ImportError:
+    return ImportError(
+        f"tektos.voice requires the optional dependency '{pkg}'. "
+        f"Install it with:  pip install '.[{extra}]'"
+    )
+
+
+def _import_edge_tts() -> Any:
+    try:
+        import edge_tts  # type: ignore[import-not-found]
+    except ImportError as e:  # pragma: no cover - environment-specific
+        raise _missing_extra("edge-tts") from e
+    return edge_tts
+
+
+def _import_faster_whisper() -> Any:
+    try:
+        from faster_whisper import WhisperModel  # type: ignore[import-not-found]
+    except ImportError as e:  # pragma: no cover - environment-specific
+        raise _missing_extra("faster-whisper") from e
+    return WhisperModel
+
+
+def _import_pydub() -> Any:
+    try:
+        from pydub import AudioSegment  # type: ignore[import-not-found]
+    except ImportError as e:  # pragma: no cover - environment-specific
+        raise _missing_extra("pydub") from e
+    return AudioSegment
+
+
+def _import_numpy() -> Any:
+    try:
+        import numpy as np  # type: ignore[import-not-found]
+    except ImportError as e:  # pragma: no cover - environment-specific
+        raise _missing_extra("numpy") from e
+    return np
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -58,15 +102,16 @@ _SAMPLE_WIDTH = 2  # 16-bit
 class STTEngine:
     """Wraps faster-whisper for CPU transcription."""
 
-    _model: WhisperModel | None = field(default=None)
-
     def __init__(self) -> None:
-        self._model = None
+        # `Any` here because the concrete `WhisperModel` type is only
+        # available when the `voice` extra is installed.
+        self._model: Any = None
 
     async def initialize(self) -> None:
         """Load the Whisper model (lazy, on first use)."""
         if self._model is not None:
             return
+        WhisperModel = _import_faster_whisper()
         log.info(
             "Loading Whisper %s on %s (%s) — this may take a moment…",
             _WHISPER_MODEL_NAME,
@@ -86,6 +131,7 @@ class STTEngine:
         """Transcribe audio bytes (WAV/MP3) to text."""
         await self.initialize()
         assert self._model is not None
+        AudioSegment = _import_pydub()
 
         # Convert to temp file for faster-whisper
         tmp = Path("/tmp/tektos_stt_input.wav")
@@ -114,6 +160,7 @@ class TTSVoice:
     async def synthesize(self, text: str) -> bytes:
         """Synthesize text to MP3 bytes."""
         log.debug("TTS: synthesizing %d chars", len(text))
+        edge_tts = _import_edge_tts()
         communicate = edge_tts.Communicate(text, _TTS_VOICE, rate=_TTS_RATE)
         audio_data = b""
         async for chunk in communicate.stream():
@@ -124,6 +171,7 @@ class TTSVoice:
 
     async def synthesize_stream(self, text: str) -> AsyncGenerator[bytes, None]:
         """Stream TTS audio chunks (for real-time playback)."""
+        edge_tts = _import_edge_tts()
         communicate = edge_tts.Communicate(text, _TTS_VOICE, rate=_TTS_RATE)
         async for chunk in communicate.stream():
             if chunk.get("type") == "audio":
@@ -145,6 +193,7 @@ class VoiceActivityDetector:
     def detect(self, audio_data: bytes) -> bool:
         """Return True if speech is detected in the audio chunk."""
         # Convert to numpy array (16-bit PCM)
+        np = _import_numpy()
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float64)
         # Normalize to [-1, 1]
         samples = samples / 32768.0

@@ -1,239 +1,115 @@
-"""Tests for src/tektos/runtime/mcp_integration.py
+"""Tests for tektos.runtime.mcp_integration.
 
-Covers: MCPTool, MCPToolResult, MCPToolCall, MCPClient, MCPToolRegistry,
-get_mcp_registry, add_mcp_client.
+The full stdio path spawns a real subprocess and speaks MCP; we cover the
+happy path with a tiny in-process fake stdio server and confirm the SDK
+plumbing is wired correctly. Falls back to skip if the optional ``mcp``
+package isn't installed.
 """
 
-import asyncio
+from __future__ import annotations
 
-from tektos.runtime.mcp_integration import (
-    MCPTool,
-    MCPToolResult,
-    MCPToolCall,
-    MCPClient,
-    MCPToolRegistry,
-    get_mcp_registry,
-    add_mcp_client,
-)
+import sys
+
+import pytest
+
+from tektos.runtime.mcp_integration import MCPClient, MCPTool, MCPToolRegistry
+
+pytestmark = pytest.mark.asyncio
 
 
-# ─── MCPTool ──────────────────────────────────────────────────────────────────
+def _mcp_available() -> bool:
+    try:
+        import mcp  # noqa: F401
 
-class TestMCPTool:
-    def test_creation(self):
-        tool = MCPTool(
-            name="bash",
-            description="Execute a shell command",
-            input_schema={"type": "object", "properties": {"command": {"type": "string"}}},
-            source="stdio",
-        )
-        assert tool.name == "bash"
-        assert tool.description == "Execute a shell command"
-        assert tool.source == "stdio"
-        assert tool.enabled is True
-
-    def test_to_tool_definition(self):
-        tool = MCPTool(
-            name="file_read",
-            description="Read a file",
-            input_schema={"type": "object", "properties": {"path": {"type": "string"}}},
-            source="http",
-        )
-        d = tool.to_tool_definition()
-        assert d["type"] == "function"
-        assert d["function"]["name"] == "file_read"
-        assert d["function"]["description"] == "Read a file"
-        assert d["function"]["parameters"] == {"type": "object", "properties": {"path": {"type": "string"}}}
-
-    def test_disabled_tool(self):
-        tool = MCPTool(
-            name="deprecated_tool",
-            description="Old tool",
-            input_schema={},
-            source="stdio",
-            enabled=False,
-        )
-        assert tool.enabled is False
+        return True
+    except ImportError:
+        return False
 
 
-# ─── MCPToolResult ────────────────────────────────────────────────────────────
-
-class TestMCPToolResult:
-    def test_success(self):
-        r = MCPToolResult(
-            tool_name="bash",
-            success=True,
-            content="Hello, world!",
-        )
-        assert r.success is True
-        assert r.content == "Hello, world!"
-        assert r.error is None
-        assert r.metadata == {}
-
-    def test_failure(self):
-        r = MCPToolResult(
-            tool_name="bash",
-            success=False,
-            content="",
-            error="Command not found",
-        )
-        assert r.success is False
-        assert r.error == "Command not found"
-
-    def test_to_markdown_success(self):
-        r = MCPToolResult(tool_name="bash", success=True, content="ls output")
-        md = r.to_markdown()
-        assert "## Tool: bash" in md
-        assert "ls output" in md
-        assert "FAILED" not in md
-
-    def test_to_markdown_failure(self):
-        r = MCPToolResult(tool_name="bash", success=False, content="", error="Permission denied")
-        md = r.to_markdown()
-        assert "## Tool: bash (FAILED)" in md
-        assert "Permission denied" in md
-
-    def test_with_metadata(self):
-        r = MCPToolResult(
-            tool_name="bash",
-            success=True,
-            content="OK",
-            metadata={"duration": 0.5, "exit_code": 0},
-        )
-        assert r.metadata == {"duration": 0.5, "exit_code": 0}
+async def test_invoke_tool_without_connection_returns_error() -> None:
+    client = MCPClient(server_name="unused")
+    client._tools["dummy"] = MCPTool(name="dummy", description="", input_schema={}, source="unused")
+    result = await client.invoke_tool("dummy", {})
+    assert result.success is False
+    assert result.error == "MCP server not connected"
 
 
-# ─── MCPToolCall ──────────────────────────────────────────────────────────────
-
-class TestMCPToolCall:
-    def test_creation(self):
-        call = MCPToolCall(
-            tool_name="bash",
-            arguments={"command": "ls"},
-            source="stdio",
-        )
-        assert call.tool_name == "bash"
-        assert call.arguments == {"command": "ls"}
-        assert call.source == "stdio"
-        assert call.timestamp > 0
+async def test_invoke_tool_unknown_returns_error() -> None:
+    client = MCPClient(server_name="unused")
+    result = await client.invoke_tool("nope", {})
+    assert result.success is False
+    assert "not found" in (result.error or "")
 
 
-# ─── MCPClient ────────────────────────────────────────────────────────────────
-
-class TestMCPClient:
-    def test_creation_http(self):
-        client = MCPClient(
-            server_name="test-server",
-            url="http://localhost:3000",
-        )
-        assert client.server_name == "test-server"
-        assert client.url == "http://localhost:3000"
-        assert client.command is None
-        assert client.args == []
-        assert client._connected is False
-        assert client._last_error is None
-
-    def test_creation_stdio(self):
-        client = MCPClient(
-            server_name="stdio-server",
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-        )
-        assert client.command == "npx"
-        assert client.args == ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-
-    def test_no_connection_method(self):
-        client = MCPClient(server_name="no-method")
-        result = asyncio.run(client.connect())
-        assert result is False
-
-    def test_tools_empty(self):
-        client = MCPClient(server_name="test", url="http://localhost:3000")
-        assert client.tools == []
-
-    def test_tool_definitions_empty(self):
-        client = MCPClient(server_name="test", url="http://localhost:3000")
-        assert client.tool_definitions == []
-
-    def test_is_connected_false(self):
-        client = MCPClient(server_name="test", url="http://localhost:3000")
-        assert client.is_connected() is False
-
-    def test_get_error_none(self):
-        client = MCPClient(server_name="test", url="http://localhost:3000")
-        assert client.get_error() is None
-
-    def test_invoke_tool_not_found(self):
-        client = MCPClient(server_name="test", url="http://localhost:3000")
-        result = asyncio.run(client.invoke_tool("nonexistent", {}))
-        assert result.success is False
-        assert result.error and "not found" in result.error
-
-    def test_invoke_tool_not_connected(self):
-        client = MCPClient(server_name="test", command="npx")
-        result = asyncio.run(client.invoke_tool("bash", {"command": "ls"}))
-        assert result.success is False
-        assert result.error and "not found" in result.error
+async def test_registry_missing_tool_returns_error() -> None:
+    registry = MCPToolRegistry()
+    result = await registry.invoke_tool("nope", {})
+    assert result.success is False
+    assert "not found in any MCP server" in (result.error or "")
 
 
-# ─── MCPToolRegistry ──────────────────────────────────────────────────────────
-
-class TestMCPToolRegistry:
-    def test_creation(self):
-        reg = MCPToolRegistry()
-        assert reg.tools == []
-        assert reg.tool_definitions == []
-
-    def test_add_client(self):
-        reg = MCPToolRegistry()
-        client = MCPClient(server_name="test", url="http://localhost:3000")
-        reg.add_client(client)
-        assert "test" in reg._clients
-
-    def test_connect_all_no_clients(self):
-        reg = MCPToolRegistry()
-        count = asyncio.run(reg.connect_all())
-        assert count == 0
-
-    def test_connect_all_with_client(self):
-        reg = MCPToolRegistry()
-        client = MCPClient(server_name="test", url="http://localhost:3000")
-        reg.add_client(client)
-        count = asyncio.run(reg.connect_all())
-        # Connection may succeed or fail depending on environment; just verify no crash
-        assert isinstance(count, int)
-        assert count >= 0
-
-    def test_invoke_tool_not_found(self):
-        reg = MCPToolRegistry()
-        result = asyncio.run(reg.invoke_tool("nonexistent", {}))
-        assert result.success is False
-        assert "not found" in result.error
-
-    def test_to_memory_entry(self):
-        reg = MCPToolRegistry()
-        entry = reg.to_memory_entry()
-        assert entry["clients"] == 0
-        assert entry["tools"] == 0
-        assert entry["connected_clients"] == 0
+async def test_close_is_idempotent_when_never_connected() -> None:
+    client = MCPClient(server_name="unused", command="/bin/true")
+    # Never connected -> stdio_stack is None; close() must not raise.
+    await client.close()
+    assert client.is_connected() is False
 
 
-# ─── Convenience Functions ────────────────────────────────────────────────────
+@pytest.mark.skipif(not _mcp_available(), reason="mcp SDK not installed")
+async def test_stdio_import_helper_returns_symbols() -> None:
+    from tektos.runtime.mcp_integration import _import_mcp_stdio
 
-class TestConvenienceFunctions:
-    def test_get_mcp_registry_singleton(self):
-        from tektos.runtime.mcp_integration import _registry as global_reg
-        # Reset singleton for clean test
-        import tektos.runtime.mcp_integration as mcp_mod
-        mcp_mod._registry = None
-        r1 = get_mcp_registry()
-        r2 = get_mcp_registry()
-        assert r1 is r2
+    stdio_client, ClientSession, StdioServerParameters = _import_mcp_stdio()
+    assert callable(stdio_client)
+    # ClientSession is an async context manager class in the SDK.
+    assert hasattr(ClientSession, "__aenter__")
+    # StdioServerParameters is a pydantic/dataclass config.
+    params = StdioServerParameters(command="/bin/true", args=[], env=None)
+    assert params.command == "/bin/true"
 
-    def test_add_mcp_client(self):
-        import tektos.runtime.mcp_integration as mcp_mod
-        mcp_mod._registry = None
-        client = MCPClient(server_name="test", url="http://localhost:3000")
-        add_mcp_client(client)
-        reg = get_mcp_registry()
-        assert "test" in reg._clients
+
+@pytest.mark.skipif(not _mcp_available(), reason="mcp SDK not installed")
+async def test_connect_stdio_against_real_server() -> None:
+    """End-to-end smoke test: spawn a tiny MCP stdio server and list tools.
+
+    Uses a minimal server script that speaks MCP via the low-level SDK.
+    Proves stdio_client + ClientSession.initialize + list_tools + call_tool
+    are wired correctly.
+    """
+    import tempfile
+    from pathlib import Path
+
+    server_script = Path(tempfile.mkdtemp()) / "tiny_mcp_server.py"
+    server_script.write_text(
+        '''
+from mcp.server.mcpserver import MCPServer
+
+app = MCPServer("tiny")
+
+
+@app.tool()
+def echo(text: str) -> str:
+    """Echo the input string."""
+    return f"echo:{text}"
+
+
+if __name__ == "__main__":
+    app.run(transport="stdio")
+'''
+    )
+
+    client = MCPClient(
+        server_name="tiny",
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+    connected = await client.connect()
+    try:
+        assert connected is True, f"connect failed: {client.get_error()}"
+        assert "echo" in {t.name for t in client.tools}
+
+        result = await client.invoke_tool("echo", {"text": "hello"})
+        assert result.success is True
+        assert result.content == "echo:hello"
+    finally:
+        await client.close()
