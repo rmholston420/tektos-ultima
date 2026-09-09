@@ -207,10 +207,18 @@ class FailoverLLMClient:
         # Fast path: failover disabled — behave like a plain AsyncClient
         # pointed at the primary.
         if not self._enabled or self._fallback is None:
+            log.info(
+                "LLM %s %s -> primary (failover disabled): %s",
+                method, path, self._primary_url,
+            )
             return await self._primary.request(method, path, **kwargs)
 
         # If the primary is in cooldown, go straight to the fallback.
         if self._primary_is_cooling():
+            log.info(
+                "LLM %s %s -> fallback (primary cooling): %s",
+                method, path, self._fallback_url,
+            )
             try:
                 resp = await self._try(self._fallback, self._fallback_model or "", method, path, kwargs)
                 self._active_is_fallback = True
@@ -219,9 +227,17 @@ class FailoverLLMClient:
                 raise
 
         # Normal path: try primary first.
+        log.info(
+            "LLM %s %s -> primary attempt: %s",
+            method, path, self._primary_url,
+        )
         primary_exc: BaseException | None = None
         try:
             resp = await self._try(self._primary, self._primary_model, method, path, kwargs)
+            log.info(
+                "LLM %s %s -> primary OK: status=%d",
+                method, path, resp.status_code,
+            )
             self._mark_primary_recovered()
             return resp
         except _TRANSIENT_EXCEPTIONS as exc:
@@ -235,6 +251,10 @@ class FailoverLLMClient:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code < 500:
                 # Client error — do NOT fail over.
+                log.info(
+                    "LLM primary returned %d (client error) — passthrough, no failover",
+                    exc.response.status_code,
+                )
                 raise
             primary_exc = exc
             log.warning(
@@ -245,11 +265,25 @@ class FailoverLLMClient:
 
         # Primary failed — mark down and try fallback.
         self._mark_primary_down()
+        log.info(
+            "LLM %s %s -> fallback attempt: %s (model=%s)",
+            method, path, self._fallback_url, self._fallback_model,
+        )
         try:
             resp = await self._try(self._fallback, self._fallback_model or "", method, path, kwargs)
+            log.info(
+                "LLM %s %s -> fallback OK: status=%d",
+                method, path, resp.status_code,
+            )
             self._active_is_fallback = True
             return resp
         except Exception as fallback_exc:
+            log.error(
+                "LLM fallback %s also failed with %s: %s",
+                self._fallback_url,
+                type(fallback_exc).__name__,
+                fallback_exc,
+            )
             # Chain the primary exception so callers see both.
             raise fallback_exc from primary_exc
 
