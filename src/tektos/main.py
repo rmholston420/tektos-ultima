@@ -298,6 +298,59 @@ async def lifespan(app: _FastAPI):
         log.warning("MCP client connection failed (non-fatal): %s", exc)
     _mcp_client = _mcp_client  # keep reference
 
+    # ── Wire runtime MCP registry (stdio + HTTP) ─────────────────────────
+    # The runtime SDK's _execute_tool() consults the runtime MCP registry
+    # first (runtime/mcp_integration.py) — but until this block, nothing
+    # ever populated it, so the MCP-priority branch was inert. Load MCP
+    # server configs from TEKTOS_MCP_SERVERS (JSON) or a single
+    # TEKTOS_MCP_SERVER_URL, register them, and connect.
+    try:
+        import json as _json
+
+        from tektos.runtime.mcp_integration import MCPClient as _RTMCPClient
+        from tektos.runtime.mcp_integration import add_mcp_client, get_mcp_registry
+
+        _rt_registry = get_mcp_registry()
+        _mcp_servers_json = _os.getenv("TEKTOS_MCP_SERVERS", "").strip()
+        _mcp_configs: list[dict[str, Any]] = []
+        if _mcp_servers_json:
+            try:
+                parsed = _json.loads(_mcp_servers_json)
+                if isinstance(parsed, list):
+                    _mcp_configs = [c for c in parsed if isinstance(c, dict)]
+            except Exception as _exc:
+                log.warning("TEKTOS_MCP_SERVERS is not valid JSON: %s", _exc)
+        # Backwards-compat: if the legacy single-server env var is set and
+        # no JSON list was provided, register that single HTTP server.
+        if not _mcp_configs:
+            _legacy_url = _os.getenv("TEKTOS_MCP_SERVER_URL", "").strip()
+            if _legacy_url:
+                _mcp_configs = [{"name": "default", "url": _legacy_url}]
+
+        for _cfg in _mcp_configs:
+            _name = _cfg.get("name") or _cfg.get("url") or _cfg.get("command") or "unnamed"
+            add_mcp_client(
+                _RTMCPClient(
+                    server_name=_name,
+                    command=_cfg.get("command"),
+                    url=_cfg.get("url"),
+                    args=_cfg.get("args") or [],
+                    env=_cfg.get("env"),
+                )
+            )
+        _connected = await _rt_registry.connect_all() if _mcp_configs else 0
+        if _mcp_configs:
+            log.info(
+                "Runtime MCP registry: %d/%d servers connected (%d tools)",
+                _connected,
+                len(_mcp_configs),
+                len(_rt_registry.tools),
+            )
+        else:
+            log.info("Runtime MCP registry: no MCP servers configured")
+    except Exception as _exc:
+        log.warning("Runtime MCP registry init failed (non-fatal): %s", _exc)
+
     # Register database management tools (need db_manager instance)
     _db_tools_registered = False
 
@@ -1451,6 +1504,13 @@ async def lifespan(app: _FastAPI):
     yield
 
     # Cleanup
+    try:
+        from tektos.runtime.mcp_integration import get_mcp_registry as _get_mcp_registry
+
+        await _get_mcp_registry().close_all()
+        log.info("Runtime MCP registry closed")
+    except Exception as exc:
+        log.warning("Error closing runtime MCP registry: %s", exc)
     if telegram_gateway:
         try:
             await telegram_gateway.stop()
