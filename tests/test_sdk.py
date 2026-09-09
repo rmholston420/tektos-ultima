@@ -152,11 +152,23 @@ class TestRuntimeSDKLifecycle:
             MockClient.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_start_fails_without_llm(self):
+    async def test_start_survives_missing_llm_and_marks_unavailable(self):
+        """start() must degrade gracefully when the LLM endpoint is down.
+
+        Previously the server refused to boot if the LLM backend was not
+        reachable. That took down every endpoint — status, hindsight,
+        telegram, config — even the ones that don't need the LLM. Now
+        start() records ``_llm_available = False`` and lets the app run;
+        LLM-consuming call sites raise via ``require_llm()``.
+        """
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
-        # Don't patch — should fail to connect
-        with pytest.raises(Exception):
-            await sdk.start()
+        # Don't patch httpx — the connect really will fail.
+        await sdk.start()
+        assert sdk._client is not None
+        assert sdk._llm_available is False
+        with pytest.raises(RuntimeError, match="LLM unavailable"):
+            sdk.require_llm()
+        await sdk.stop()
 
     @pytest.mark.asyncio
     async def test_stop_closes_client(self):

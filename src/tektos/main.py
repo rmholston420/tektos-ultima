@@ -4192,11 +4192,29 @@ async def evaluation_status():
 @app.get("/api/inference/status")
 async def inference_status():
     """Inference engine status."""
+    available = getattr(runtime_sdk, "_llm_available", False)
     return {
-        "status": "active",
+        "status": "active" if available else "unavailable",
         "model": runtime_sdk._llm_model,
         "base_url": runtime_sdk._llm_base_url,
-        "health": "ok",
+        "health": "ok" if available else "llm_backend_unreachable",
+        "llm_available": available,
+    }
+
+
+@app.post("/api/llm/probe")
+async def llm_probe():
+    """Re-probe the LLM endpoint and return current availability.
+
+    Lets the frontend recover from a transient LLM outage without
+    restarting the server. Runs a real ``GET /models`` against the
+    configured backend.
+    """
+    available = await runtime_sdk.probe_llm()
+    return {
+        "llm_available": available,
+        "base_url": runtime_sdk._llm_base_url,
+        "model": runtime_sdk._llm_model,
     }
 
 
@@ -5353,16 +5371,86 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
 # ---------------------------------------------------------------------------
 
 
-def main():
-    """Run the server."""
+def main() -> None:
+    """Tektos-Ultima CLI entry point.
+
+    Subcommands:
+        serve   Run the FastAPI server (default).
+        check   Validate configuration and imports without opening a socket.
+        version Print the installed package version.
+    """
+    import argparse
+    import importlib.metadata as _md
+
+    parser = argparse.ArgumentParser(
+        prog="tektos",
+        description="Tektos-Ultima autonomous coding agent.",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    serve = sub.add_parser("serve", help="Run the FastAPI server (default).")
+    serve.add_argument("--host", default=_os.getenv("TEKTOS_HOST", "127.0.0.1"))
+    serve.add_argument(
+        "--port",
+        type=int,
+        default=int(_os.getenv("TEKTOS_PORT", "8020")),
+    )
+    serve.add_argument("--log-level", default=_os.getenv("TEKTOS_LOG_LEVEL", "info"))
+    serve.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable uvicorn autoreload (development only).",
+    )
+
+    sub.add_parser(
+        "check",
+        help="Import every module and print a config summary, then exit.",
+    )
+    sub.add_parser("version", help="Print the installed package version.")
+
+    args = parser.parse_args()
+    command = args.command or "serve"
+
+    if command == "version":
+        try:
+            print(_md.version("tektos-ultima"))
+        except _md.PackageNotFoundError:
+            print("unknown (editable install without dist-info)")
+        return
+
+    if command == "check":
+        import importlib
+        import pkgutil
+
+        import tektos
+
+        failures: list[tuple[str, str]] = []
+        modules = 0
+        for mod_info in pkgutil.walk_packages(tektos.__path__, prefix="tektos."):
+            modules += 1
+            try:
+                importlib.import_module(mod_info.name)
+            except Exception as exc:  # noqa: BLE001
+                failures.append((mod_info.name, f"{type(exc).__name__}: {exc}"))
+
+        print(f"Modules attempted: {modules}")
+        print(f"Import failures:   {len(failures)}")
+        for name, err in failures:
+            print(f"  FAIL {name}: {err}")
+
+        print(f"LLM base URL:      {_os.getenv('TEKTOS_LLM_BASE_URL', 'http://127.0.0.1:8090/v1')}")
+        print(f"Log level:         {_os.getenv('TEKTOS_LOG_LEVEL', 'info')}")
+        raise SystemExit(1 if failures else 0)
+
+    # serve (default)
     import uvicorn
 
     uvicorn.run(
         "tektos.main:app",
-        host="127.0.0.1",
-        port=8020,
-        reload=False,
-        log_level="info",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level=args.log_level,
     )
 
 

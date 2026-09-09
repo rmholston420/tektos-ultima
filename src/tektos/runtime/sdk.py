@@ -388,6 +388,10 @@ class RuntimeSDK:
         self._llm_base_url = llm_base_url
         self._llm_model = llm_model
         self._client: httpx.AsyncClient | None = None
+        # Whether the LLM endpoint answered /models during start().
+        # LLM-consuming call sites must check this and raise a clear
+        # error rather than blowing up with a random ConnectError.
+        self._llm_available: bool = False
         self._lock = _asyncio.Lock()
         self._sandbox = SandboxProvider()
         self._loop_monitor = LoopSafetyMonitor(loop_safety_config or LoopSafetyConfig())
@@ -414,19 +418,65 @@ class RuntimeSDK:
             timeout=httpx.Timeout(30.0, read=300.0),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
-        # Validate connection
+        # Validate connection — degrade gracefully instead of aborting
+        # startup. LLM-consuming endpoints will raise a 503 later; every
+        # other endpoint (status, hindsight, telegram, config, metabolism)
+        # keeps working.
         try:
             resp = await self._client.get("/models")
             resp.raise_for_status()
+            self._llm_available = True
             log.info(f"LLM endpoint connected: {self._llm_base_url}")
         except Exception as exc:
-            log.warning(f"LLM endpoint not available at {self._llm_base_url}: {exc}")
-            raise
+            self._llm_available = False
+            log.warning(
+                "LLM endpoint not available at %s: %s — LLM-consuming "
+                "endpoints will return 503 until it comes back up.",
+                self._llm_base_url,
+                exc,
+            )
 
         # Start the immune system
         self._immune_system = get_immune_system()
         await self._immune_system.start()
         log.info("[RuntimeSDK] Immune system started")
+
+    def require_llm(self) -> None:
+        """Raise ``RuntimeError("LLM unavailable")`` if the LLM endpoint
+        was not reachable at start().
+
+        Call this at the top of any method that will issue a request to
+        ``self._client``. HTTP layers should translate the ``RuntimeError``
+        into a 503; other callers get a clear failure mode instead of a
+        random ``httpx.ConnectError`` thrown mid-loop.
+        """
+        if not self._llm_available:
+            raise RuntimeError(
+                f"LLM unavailable: no endpoint responding at {self._llm_base_url}. "
+                "Start your LLM backend (llama.cpp/vLLM/Ollama with an OpenAI-"
+                "compatible /v1 API) or set TEKTOS_LLM_BASE_URL, then retry."
+            )
+
+    async def probe_llm(self) -> bool:
+        """Re-probe the LLM endpoint and update ``_llm_available``.
+
+        Returns the new availability flag. Safe to call anytime; used by
+        the ``/api/llm/probe`` endpoint so the frontend can retry without
+        restarting the whole server.
+        """
+        if self._client is None:
+            return False
+        try:
+            resp = await self._client.get("/models")
+            resp.raise_for_status()
+            if not self._llm_available:
+                log.info(f"LLM endpoint recovered: {self._llm_base_url}")
+            self._llm_available = True
+        except Exception as exc:
+            if self._llm_available:
+                log.warning(f"LLM endpoint lost at {self._llm_base_url}: {exc}")
+            self._llm_available = False
+        return self._llm_available
 
     async def stop(self) -> None:
         if self._client:
@@ -527,6 +577,11 @@ class RuntimeSDK:
         - Full agent loop: LLM → tools → LLM → ... until no tool_calls
         - Immune system checks before each tool execution
         """
+        # Fail fast with a clear error if the LLM backend is down. The
+        # caller (WebSocket / SSE endpoint) is responsible for turning
+        # this into a user-visible 503 or error event.
+        self.require_llm()
+
         _completed_tools: set[str] = set()  # guard against double-emit (bug #3)
         self._loop_monitor.reset()  # Reset timer for each new prompt
         log.info(f"[SDK] Starting _stream_llm for session {session.id[:8]}")
