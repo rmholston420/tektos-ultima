@@ -6,6 +6,7 @@ import { $connectionError, $connectionState } from "@/lib/stores/connection";
 import { $sessionId, $sessionModel } from "@/lib/stores/session";
 import { useProtocol } from "@/lib/hooks/useProtocol";
 import { ChatRegion } from "@/components/chat/ChatRegion";
+import { RightRail } from "@/components/panes/RightRail";
 import { registerBuiltinVisualizers } from "@/components/assistant-ui/tool-visualizers";
 
 registerBuiltinVisualizers();
@@ -66,13 +67,8 @@ export function AppShell() {
         <ChatRegion />
       </main>
 
-      <aside
-        aria-label="Contextual pane"
-        className="hairline min-h-0 bg-surface-2"
-      >
-        <div className="p-3 text-11 text-text-faint">
-          Right-rail panes land in Phase 5.
-        </div>
+      <aside aria-label="Contextual pane" className="hairline min-h-0">
+        <RightRail />
       </aside>
     </div>
   );
