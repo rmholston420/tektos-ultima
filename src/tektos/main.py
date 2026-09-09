@@ -1966,6 +1966,44 @@ async def prompt_sse(body: _PromptSSEBody):
             except _asyncio.QueueEmpty:
                 break
 
+        # Surface any exception the submit_prompt task raised — otherwise the
+        # SSE stream would silently close with only a role frame, which makes
+        # LLM failures indistinguishable from an empty response client-side.
+        if task.done():
+            task_exc = task.exception()
+            if task_exc is not None:
+                log.error(
+                    "submit_prompt task failed for session %s: %s",
+                    session.id[:8],
+                    task_exc,
+                    exc_info=task_exc,
+                )
+                error_chunk = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "error",
+                        }
+                    ],
+                    "error": {
+                        "message": str(task_exc),
+                        "type": type(task_exc).__name__,
+                    },
+                    "hermes": {
+                        "completed": False,
+                        "partial": True,
+                        "failed": True,
+                        "error": str(task_exc),
+                        "error_code": type(task_exc).__name__,
+                    },
+                }
+                yield _sse_frame(error_chunk)
+
         # Final [DONE] marker
         yield "data: [DONE]\n\n"
 

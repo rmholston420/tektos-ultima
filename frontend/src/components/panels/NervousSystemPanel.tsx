@@ -95,43 +95,20 @@ export function NervousSystemPanel() {
   const [sessions, setSessions] = useState<SessionState[]>([]);
   const [recentEvents, setRecentEvents] = useState<StateChangeEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
   const eventBufferRef = useRef<StateChangeEvent[]>([]);
   const MAX_EVENTS = 50;
 
-  // Connect WebSocket for state_change events
-  useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-    wsRef.current = ws;
+  // Note: state_change events used to arrive over a global WebSocket at `/ws`,
+  // but the backend only exposes per-session (`/ws/{session_id}`) and PTY
+  // (`/ws/pty`) WebSockets. Rather than opening a WS that always 403s, we rely
+  // on the /api/sessions polling below — state transitions are surfaced through
+  // the sessions list. If we later want live state deltas, add a global WS
+  // broadcaster in the backend and wire this back up.
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.event_type === "session.state_change" || data.to_state) {
-          const evt: StateChangeEvent = {
-            session_id: data.session_id || "unknown",
-            from_state: data.from_state || "?",
-            to_state: data.to_state || "?",
-            reason: data.reason || "",
-            timestamp: new Date().toISOString(),
-          };
-          eventBufferRef.current = [evt, ...eventBufferRef.current].slice(0, MAX_EVENTS);
-          setRecentEvents([...eventBufferRef.current]);
-        }
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    ws.onerror = () => {
-      // WebSocket errors are expected if backend isn't running
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, []);
+  // Suppress unused-variable warning while the WS-driven event log is stubbed.
+  void MAX_EVENTS;
+  void eventBufferRef;
+  void setRecentEvents;
 
   // Fetch health stats
   const fetchHealth = useCallback(async () => {

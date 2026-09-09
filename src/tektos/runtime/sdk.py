@@ -480,6 +480,11 @@ class RuntimeSDK:
         # LLM-consuming call sites must check this and raise a clear
         # error rather than blowing up with a random ConnectError.
         self._llm_available: bool = False
+        # Background task that periodically re-probes _llm_available so a
+        # primary that comes back after start() doesn't stay flagged unavailable
+        # (and vice-versa).
+        self._llm_probe_task: _asyncio.Task[None] | None = None
+        self._llm_probe_interval_seconds: float = 30.0
         self._lock = _asyncio.Lock()
         self._sandbox = SandboxProvider()
         self._loop_monitor = LoopSafetyMonitor(loop_safety_config or LoopSafetyConfig())
@@ -546,6 +551,31 @@ class RuntimeSDK:
         await self._immune_system.start()
         log.info("[RuntimeSDK] Immune system started")
 
+        # Start the periodic LLM probe so _llm_available reflects current state
+        # — not just the state at startup. Handles primary going down/up mid-run.
+        self._llm_probe_task = _asyncio.create_task(self._probe_llm_loop())
+        log.info(
+            "[RuntimeSDK] LLM availability re-probe running every %.1fs",
+            self._llm_probe_interval_seconds,
+        )
+
+    async def _probe_llm_loop(self) -> None:
+        """Background loop that calls probe_llm() every interval.
+
+        Runs until cancelled by stop(). Errors are logged but do not stop the
+        loop — the probe itself is designed to handle failures.
+        """
+        try:
+            while True:
+                await _asyncio.sleep(self._llm_probe_interval_seconds)
+                try:
+                    await self.probe_llm()
+                except Exception:
+                    log.exception("LLM probe loop iteration failed")
+        except _asyncio.CancelledError:
+            log.info("[RuntimeSDK] LLM probe loop cancelled")
+            raise
+
     def require_llm(self) -> None:
         """Raise ``RuntimeError("LLM unavailable")`` if the LLM endpoint
         was not reachable at start().
@@ -584,6 +614,15 @@ class RuntimeSDK:
         return self._llm_available
 
     async def stop(self) -> None:
+        # Cancel the probe loop before closing the client so it can't race a probe
+        # against an already-closed client.
+        if self._llm_probe_task is not None:
+            self._llm_probe_task.cancel()
+            try:
+                await self._llm_probe_task
+            except (_asyncio.CancelledError, Exception):
+                pass
+            self._llm_probe_task = None
         if self._client:
             await self._client.aclose()
             self._client = None
