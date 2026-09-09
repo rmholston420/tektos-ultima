@@ -2086,6 +2086,55 @@ async def get_logs(level: str | None = None, count: int = 200):
     ]
 
 
+@app.get("/api/directory_list")
+async def directory_list(path: str = ".", depth: int = 1):
+    """List the contents of a directory as a flat array of entries.
+
+    Safe read-only endpoint used by the frontend Files pane. ``depth`` controls
+    recursion (max 3). ``path`` is resolved on the server; symlinks are not
+    followed to break out of the resolved root.
+    """
+    from pathlib import Path
+
+    depth = max(1, min(3, depth))
+    try:
+        root = Path(path).expanduser().resolve()
+        if not root.exists():
+            return {"error": "path not found", "path": str(root), "entries": []}
+        if not root.is_dir():
+            return {"error": "path is not a directory", "path": str(root), "entries": []}
+    except Exception as exc:
+        return {"error": str(exc), "path": path, "entries": []}
+
+    entries: list[dict[str, Any]] = []
+
+    def _walk(dir_path, current_depth: int) -> None:
+        try:
+            children = sorted(dir_path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+        except PermissionError:
+            return
+        for child in children:
+            try:
+                is_dir = child.is_dir()
+                stat = child.stat() if not child.is_symlink() else None
+                entries.append({
+                    "name": child.name,
+                    "path": str(child),
+                    "parent": str(child.parent),
+                    "type": "dir" if is_dir else "file",
+                    "size": stat.st_size if stat and not is_dir else None,
+                    "mtime": stat.st_mtime if stat else None,
+                    "depth": current_depth,
+                })
+                if is_dir and current_depth < depth:
+                    _walk(child, current_depth + 1)
+            except (OSError, PermissionError):
+                continue
+
+    _walk(root, 1)
+    return {"path": str(root), "depth": depth, "count": len(entries), "entries": entries}
+
+
 @app.get("/api/voice/state")
 async def get_voice_state():
     """Get current voice system state."""
@@ -5599,6 +5648,117 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
     finally:
         await session_manager.remove_ws_connection(session_id, websocket)
         await ws_manager.remove(session_id, websocket)
+
+
+# ---------------------------------------------------------------------------
+# PTY WebSocket — interactive terminal back-channel for the frontend
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/pty")
+async def pty_endpoint(websocket: _WebSocket):
+    """Interactive PTY over WebSocket.
+
+    Client protocol (JSON text frames):
+      { "type": "input",  "data": "..." }        — keystrokes toward the shell
+      { "type": "resize", "cols": N, "rows": N } — window size updates
+
+    Server protocol (JSON text frames):
+      { "type": "output", "data": "..." } — shell output bytes as utf-8 text
+      { "type": "exit",   "code":  N   }
+    """
+    import asyncio
+    import fcntl
+    import json as _json
+    import os as _os_mod
+    import pty as _pty
+    import struct
+    import termios
+
+    await websocket.accept()
+    shell = _os_mod.environ.get("SHELL", "/bin/bash")
+    pid, fd = _pty.fork()
+    if pid == 0:
+        # Child process — exec the shell.
+        try:
+            _os_mod.execvp(shell, [shell, "-l"])
+        except Exception as exc:
+            _os_mod.write(2, f"execvp failed: {exc}\n".encode())
+            _os_mod._exit(127)
+
+    loop = asyncio.get_event_loop()
+    _os_mod.set_blocking(fd, False)
+
+    def _set_winsize(rows: int, cols: int) -> None:
+        try:
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        except Exception:
+            pass
+
+    _set_winsize(24, 80)
+
+    stop = asyncio.Event()
+
+    async def _pump_output() -> None:
+        """Read from the PTY master fd and forward to the WebSocket."""
+        while not stop.is_set():
+            try:
+                data = await loop.run_in_executor(None, lambda: _os_mod.read(fd, 4096))
+            except OSError:
+                break
+            if not data:
+                break
+            try:
+                await websocket.send_text(_json.dumps({
+                    "type": "output",
+                    "data": data.decode("utf-8", errors="replace"),
+                }))
+            except Exception:
+                break
+
+    output_task = asyncio.create_task(_pump_output())
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = _json.loads(raw)
+            except Exception:
+                continue
+            mtype = msg.get("type")
+            if mtype == "input":
+                data = msg.get("data", "")
+                if isinstance(data, str) and data:
+                    try:
+                        _os_mod.write(fd, data.encode("utf-8"))
+                    except OSError:
+                        break
+            elif mtype == "resize":
+                rows = int(msg.get("rows", 24))
+                cols = int(msg.get("cols", 80))
+                _set_winsize(rows, cols)
+    except Exception:
+        pass
+    finally:
+        stop.set()
+        output_task.cancel()
+        try:
+            _os_mod.close(fd)
+        except OSError:
+            pass
+        try:
+            _os_mod.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            _, status = _os_mod.waitpid(pid, _os_mod.WNOHANG)
+            code = _os_mod.WEXITSTATUS(status) if status else 0
+            with contextlib.suppress(Exception):
+                await websocket.send_text(_json.dumps({"type": "exit", "code": code}))
+        except Exception:
+            pass
+        with contextlib.suppress(Exception):
+            await websocket.close()
 
 
 # ---------------------------------------------------------------------------
