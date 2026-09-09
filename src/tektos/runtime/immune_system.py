@@ -570,7 +570,15 @@ class SecretExposureDetector:
     _SECRET_PATTERNS: list[tuple[str, str]] = [
         (r"(?i)(api[_-]?key|apikey)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{20,})", "API key exposure"),
         (r"(?i)(password|passwd|pwd)\s*[=:]\s*['\"]?(\S{4,})", "Password exposure"),
-        (r"(?i)-p(\S{4,})", "Password exposure (mysql -p format)"),
+        # Password on the mysql CLI: `mysql -pMYPASS` (no space between -p
+        # and value). Scope to actual mysql/mysqldump/mariadb invocations —
+        # the previous pattern `-p\S{4,}` matched ANY `-p` flag with an
+        # attached value (grep -perl, find -path abc, tar -pcvf, etc.),
+        # which produced constant false positives on read-only exploration.
+        (
+            r"(?i)\b(mysql|mysqldump|mariadb)\b[^\n]*\s-p(\S{4,})",
+            "Password exposure (mysql -p format)",
+        ),
         (
             r"(?i)(secret[_-]?key|secret)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{16,})",
             "Secret key exposure",
