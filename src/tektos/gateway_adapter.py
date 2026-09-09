@@ -19,12 +19,13 @@ Streaming:
 """
 
 import asyncio
+import contextlib
 import json
+import logging
 import os
 import sys
-import uuid
 import time
-import logging
+
 import httpx  # type: ignore[import-untyped]
 import websockets  # type: ignore[import-untyped]
 
@@ -111,10 +112,12 @@ def _tektos_session_to_messages(tektos_session: dict) -> list[dict]:
         role = evt.get("role", "assistant")
         text = evt.get("text", "")
         if text:
-            messages.append({
-                "role": role,
-                "text": text,
-            })
+            messages.append(
+                {
+                    "role": role,
+                    "text": text,
+                }
+            )
     return messages
 
 
@@ -155,14 +158,16 @@ async def _list_sessions(params: dict) -> dict:
 
     result = []
     for s in sessions:
-        result.append({
-            "id": s["id"],
-            "title": s.get("title", ""),
-            "preview": s.get("preview", ""),
-            "started_at": s.get("created_at", 0),
-            "message_count": s.get("message_count", 0),
-            "source": "tektos",
-        })
+        result.append(
+            {
+                "id": s["id"],
+                "title": s.get("title", ""),
+                "preview": s.get("preview", ""),
+                "started_at": s.get("created_at", 0),
+                "message_count": s.get("message_count", 0),
+                "source": "tektos",
+            }
+        )
 
     return {"sessions": result}
 
@@ -199,20 +204,16 @@ async def _close_session(params: dict) -> dict:
     # Close WebSocket connection if active
     ws = _tektos_ws.get(target)
     if ws:
-        try:
+        with contextlib.suppress(Exception):
             await ws.close()
-        except Exception:
-            pass
         del _tektos_ws[target]
 
     # Cancel reader task
     reader = _ws_readers.get(target)
     if reader and not reader.done():
         reader.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await reader
-        except asyncio.CancelledError:
-            pass
         del _ws_readers[target]
 
     client = await _get_http_client()
@@ -246,11 +247,13 @@ async def _submit_prompt(params: dict) -> dict:
             return _err(None, 5000, f"WebSocket connection failed: {e}")
 
     # Send the prompt
-    prompt_msg = json.dumps({
-        "type": "prompt",
-        "session_id": sid,
-        "prompt": text,
-    })
+    prompt_msg = json.dumps(
+        {
+            "type": "prompt",
+            "session_id": sid,
+            "prompt": text,
+        }
+    )
     await ws.send(prompt_msg)
     log.info(f"Sent prompt to session {sid[:8]}: {text[:100]}")
 
@@ -280,96 +283,146 @@ async def _ws_reader_loop(sid: str, ws: websockets.WebSocketClientProtocol) -> N
 
             # Map Tektos WS events to gateway events
             if event_type == "session.ready":
-                _write(_notification("event", {
-                    "type": "gateway.ready",
-                    "payload": {"skin": {}},
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": "gateway.ready",
+                            "payload": {"skin": {}},
+                        },
+                    )
+                )
 
             elif event_type == "assistant.delta":
                 # Streaming text chunk — payload.text or payload.delta
                 text = payload.get("text", "") or payload.get("delta", "") or ""
                 if text:
-                    _write(_notification("event", {
-                        "type": "assistant.delta",
-                        "payload": {
-                            "session_id": sid,
-                            "text": text,
-                        },
-                    }))
+                    _write(
+                        _notification(
+                            "event",
+                            {
+                                "type": "assistant.delta",
+                                "payload": {
+                                    "session_id": sid,
+                                    "text": text,
+                                },
+                            },
+                        )
+                    )
 
             elif event_type == "assistant.completed":
-                _write(_notification("event", {
-                    "type": "assistant.completed",
-                    "payload": {
-                        "session_id": sid,
-                        "stop_reason": payload.get("stop_reason", "end_turn"),
-                    },
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": "assistant.completed",
+                            "payload": {
+                                "session_id": sid,
+                                "stop_reason": payload.get("stop_reason", "end_turn"),
+                            },
+                        },
+                    )
+                )
                 # Turn complete — close the WS reader for this session
                 break
 
             elif event_type == "tool.started":
                 tool_name = payload.get("tool_name", "") or data.get("name", "")
-                _write(_notification("event", {
-                    "type": "tool.started",
-                    "payload": {
-                        "session_id": sid,
-                        "tool_name": tool_name,
-                        "tool_input": payload.get("tool_input", {}),
-                    },
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": "tool.started",
+                            "payload": {
+                                "session_id": sid,
+                                "tool_name": tool_name,
+                                "tool_input": payload.get("tool_input", {}),
+                            },
+                        },
+                    )
+                )
 
             elif event_type == "tool.completed":
-                _write(_notification("event", {
-                    "type": "tool.completed",
-                    "payload": {
-                        "session_id": sid,
-                        "tool_name": payload.get("tool_name", ""),
-                        "result": payload.get("output", ""),
-                    },
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": "tool.completed",
+                            "payload": {
+                                "session_id": sid,
+                                "tool_name": payload.get("tool_name", ""),
+                                "result": payload.get("output", ""),
+                            },
+                        },
+                    )
+                )
 
             elif event_type == "system.message":
-                _write(_notification("event", {
-                    "type": "system.message",
-                    "payload": {
-                        "session_id": sid,
-                        "text": payload.get("message", ""),
-                        "level": payload.get("level", "info"),
-                    },
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": "system.message",
+                            "payload": {
+                                "session_id": sid,
+                                "text": payload.get("message", ""),
+                                "level": payload.get("level", "info"),
+                            },
+                        },
+                    )
+                )
 
             elif event_type == "session.interrupted":
-                _write(_notification("event", {
-                    "type": "session.interrupted",
-                    "payload": {"session_id": sid},
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": "session.interrupted",
+                            "payload": {"session_id": sid},
+                        },
+                    )
+                )
 
             elif event_type == "session.failed":
-                _write(_notification("event", {
-                    "type": "session.failed",
-                    "payload": {
-                        "session_id": sid,
-                        "error": payload.get("error", "Unknown error"),
-                    },
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": "session.failed",
+                            "payload": {
+                                "session_id": sid,
+                                "error": payload.get("error", "Unknown error"),
+                            },
+                        },
+                    )
+                )
 
             elif event_type == "tool.permission_required":
-                _write(_notification("event", {
-                    "type": "tool.permission.required",
-                    "payload": {
-                        "session_id": sid,
-                        "tool_name": payload.get("tool_name", ""),
-                        "tool_input": payload.get("tool_input", {}),
-                    },
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": "tool.permission.required",
+                            "payload": {
+                                "session_id": sid,
+                                "tool_name": payload.get("tool_name", ""),
+                                "tool_input": payload.get("tool_input", {}),
+                            },
+                        },
+                    )
+                )
 
             else:
                 # Forward unknown events as generic events
-                _write(_notification("event", {
-                    "type": event_type,
-                    "payload": data,
-                }))
+                _write(
+                    _notification(
+                        "event",
+                        {
+                            "type": event_type,
+                            "payload": data,
+                        },
+                    )
+                )
 
     except websockets.ConnectionClosed:
         log.info(f"WebSocket closed for session {sid[:8]}")
@@ -389,10 +442,14 @@ async def _interrupt_session(params: dict) -> dict:
 
     ws = _tektos_ws.get(sid)
     if ws and not ws.closed:
-        await ws.send(json.dumps({
-            "type": "interrupt",
-            "session_id": sid,
-        }))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "interrupt",
+                    "session_id": sid,
+                }
+            )
+        )
 
     return {"ok": True}
 
@@ -431,12 +488,14 @@ async def _model_options(params: dict) -> dict:
 
     return {
         "model": models[0] if models else "",
-        "providers": [{
-            "name": "tektos",
-            "slug": "tektos",
-            "models": models,
-            "authenticated": False,
-        }],
+        "providers": [
+            {
+                "name": "tektos",
+                "slug": "tektos",
+                "models": models,
+                "authenticated": False,
+            }
+        ],
     }
 
 
@@ -508,14 +567,19 @@ async def main() -> None:
     )
 
     # Send gateway.ready notification
-    _write(_notification("event", {
-        "type": "gateway.ready",
-        "payload": {
-            "skin": {},
-            "change_events": True,
-            "replay_epoch": int(time.time()),
-        },
-    }))
+    _write(
+        _notification(
+            "event",
+            {
+                "type": "gateway.ready",
+                "payload": {
+                    "skin": {},
+                    "change_events": True,
+                    "replay_epoch": int(time.time()),
+                },
+            },
+        )
+    )
 
     # Read from stdin line by line
     try:
@@ -544,10 +608,8 @@ async def main() -> None:
     finally:
         # Clean up WebSocket connections
         for sid, ws in _tektos_ws.items():
-            try:
+            with contextlib.suppress(Exception):
                 await ws.close()
-            except Exception:
-                pass
 
         # Cancel reader tasks
         for task in _ws_readers.values():

@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class Reflection:
     """A reflection on past actions."""
+
     action_id: str
     description: str
     insight: str
@@ -30,7 +31,7 @@ class ReflectionEngine:
         """Generate a reflection on a past action."""
         insight = self._generate_insight(action)
         category = self._categorize_insight(action)
-        
+
         reflection = Reflection(
             action_id=action.get("id", "unknown"),
             description=action.get("description", ""),
@@ -39,7 +40,7 @@ class ReflectionEngine:
             confidence=action.get("success", False) and 0.8 or 0.5,
             metadata=action.get("metadata", {}),
         )
-        
+
         self._reflections.append(reflection)
         log.info(f"ReflectionEngine: Generated reflection on {action.get('id', 'unknown')}")
         return reflection
@@ -48,7 +49,7 @@ class ReflectionEngine:
         """Generate an insight from an action."""
         success = action.get("success", False)
         description = action.get("description", "")
-        
+
         if success:
             return f"Successfully completed: {description}. Pattern can be reused."
         else:
@@ -59,7 +60,7 @@ class ReflectionEngine:
         """Categorize an insight."""
         success = action.get("success", False)
         description = action.get("description", "").lower()
-        
+
         if success and "test" in description:
             return "success_pattern"
         elif not success and "permission" in description.lower():

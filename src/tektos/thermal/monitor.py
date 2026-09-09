@@ -13,6 +13,7 @@ Fan control is skipped (unavailable).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .config import REGULATION_INTERVAL, TARGET_TEMP
-from .metrics import MetricsCollector, ThermalSnapshot
+from .metrics import MetricsCollector
 from .regulator import ThermalRegulator
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ThermalStatus:
     """Current thermal regulation status."""
+
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     gpu_temp: float = 0.0
     cpu_temp: float = 0.0
@@ -79,7 +81,8 @@ class ThermalMonitor:
         self._task = asyncio.create_task(self._loop())
         logger.info(
             "ThermalMonitor: started (interval=%ds, target=%.1f°C)",
-            self.interval, self.target_temp,
+            self.interval,
+            self.target_temp,
         )
 
     async def stop(self) -> None:
@@ -87,10 +90,8 @@ class ThermalMonitor:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("ThermalMonitor: stopped")
 
     async def _loop(self) -> None:
@@ -131,14 +132,16 @@ class ThermalMonitor:
         )
 
         # Keep last 100 history entries
-        self._status.history.append({
-            "timestamp": decision.timestamp,
-            "gpu_temp": snapshot.gpu.temperature_gpu,
-            "cpu_temp": snapshot.cpu.temperature_cpu,
-            "power": decision.gpu_power_limit,
-            "clock": decision.gpu_clock_mhz,
-            "action": decision.gpu_action,
-        })
+        self._status.history.append(
+            {
+                "timestamp": decision.timestamp,
+                "gpu_temp": snapshot.gpu.temperature_gpu,
+                "cpu_temp": snapshot.cpu.temperature_cpu,
+                "power": decision.gpu_power_limit,
+                "clock": decision.gpu_clock_mhz,
+                "action": decision.gpu_action,
+            }
+        )
         if len(self._status.history) > 100:
             self._status.history = self._status.history[-100:]
 

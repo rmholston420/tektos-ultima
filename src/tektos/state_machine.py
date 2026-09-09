@@ -27,10 +27,10 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 from tektos.event_bus import get_event_bus
 
@@ -40,6 +40,7 @@ log = logging.getLogger("tektos.state_machine")
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
+
 
 class State(str, Enum):
     CREATED = "created"
@@ -52,6 +53,7 @@ class State(str, Enum):
 
 class InvalidTransitionError(Exception):
     """Raised when an invalid state transition is attempted."""
+
     pass
 
 
@@ -59,9 +61,11 @@ class InvalidTransitionError(Exception):
 # Transition definition
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Transition:
     """Defines an allowed state transition."""
+
     from_state: State
     to_state: State
     description: str = ""
@@ -144,10 +148,7 @@ class StateMachine:
         self._history[session_id].append(change)
         self._transitions_completed += 1
 
-        log.info(
-            f"Session {session_id[:8]}: {old_state.value} → {new_state.value} "
-            f"({reason})"
-        )
+        log.info(f"Session {session_id[:8]}: {old_state.value} → {new_state.value} ({reason})")
 
         # Emit state_change event to event bus
         try:
@@ -181,10 +182,7 @@ class StateMachine:
         if isinstance(to_state, str):
             to_state = State(to_state)
 
-        return any(
-            t.from_state == from_state and t.to_state == to_state
-            for t in VALID_TRANSITIONS
-        )
+        return any(t.from_state == from_state and t.to_state == to_state for t in VALID_TRANSITIONS)
 
     def get_stats(self) -> dict[str, Any]:
         """Return state machine statistics."""
@@ -204,16 +202,13 @@ class StateMachine:
         if isinstance(current_state, str):
             current_state = State(current_state)
 
-        return [
-            t.to_state.value
-            for t in VALID_TRANSITIONS
-            if t.from_state == current_state
-        ]
+        return [t.to_state.value for t in VALID_TRANSITIONS if t.from_state == current_state]
 
 
 @dataclass
 class StateChange:
     """Record of a state transition."""
+
     session_id: str
     from_state: str
     to_state: str

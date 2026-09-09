@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ContextSnapshot:
     """A point-in-time snapshot of context state."""
+
     timestamp: str = ""
     total_tokens: int = 0
     used_tokens: int = 0
@@ -98,8 +99,11 @@ class ContextCurator:
 
     async def start(self) -> None:
         """Initialize the context curator."""
-        logger.info("Context curator initialized (max=%d, threshold=%.0f%%)",
-                     self.max_tokens, self.compaction_threshold * 100)
+        logger.info(
+            "Context curator initialized (max=%d, threshold=%.0f%%)",
+            self.max_tokens,
+            self.compaction_threshold * 100,
+        )
 
     async def stop(self) -> None:
         """Clean up the context curator."""

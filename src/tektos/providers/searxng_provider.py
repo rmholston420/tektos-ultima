@@ -21,10 +21,10 @@ import os
 import random
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class SearXNGConfig(BaseModel):
     # Search settings
     max_results: int = 10
     language: str = "en"
-    time_range: Optional[str] = None  # None, day, week, month, year
+    time_range: str | None = None  # None, day, week, month, year
     categories: str = RESEARCH_CATEGORIES
 
     # Hardening settings
@@ -81,9 +81,9 @@ class SearchResult(BaseModel):
     url: str
     content: str = ""
     engine: str = "searxng"
-    published_date: Optional[str] = None
-    score: Optional[float] = None
-    category: Optional[str] = None
+    published_date: str | None = None
+    score: float | None = None
+    category: str | None = None
 
 
 class SearXNGSearchResponse(BaseModel):
@@ -94,7 +94,7 @@ class SearXNGSearchResponse(BaseModel):
     total_results: int = 0
     search_time: float = 0.0
     engines: list[str] = []
-    error: Optional[str] = None
+    error: str | None = None
     timestamp: str = ""
 
 
@@ -110,10 +110,10 @@ class SearXNGClient:
     - Timeout protection
     """
 
-    def __init__(self, config: Optional[SearXNGConfig] = None) -> None:
+    def __init__(self, config: SearXNGConfig | None = None) -> None:
         self.config = config or SearXNGConfig()
         self._last_request_time: float = 0.0
-        self._session: Optional[httpx.AsyncClient] = None
+        self._session: httpx.AsyncClient | None = None
         self._user_agent_index: int = 0
 
     async def get_session(self) -> httpx.AsyncClient:
@@ -141,9 +141,9 @@ class SearXNGClient:
     async def search(
         self,
         query: str,
-        max_results: Optional[int] = None,
-        categories: Optional[str] = None,
-        language: Optional[str] = None,
+        max_results: int | None = None,
+        categories: str | None = None,
+        language: str | None = None,
     ) -> SearXNGSearchResponse:
         """Execute a search query with hardening.
 
@@ -168,11 +168,9 @@ class SearXNGClient:
         language = language or self.config.language
 
         # Try JSON API first with retries
-        json_error_msg: Optional[str] = None
+        json_error_msg: str | None = None
         try:
-            return await self._search_json_api(
-                query, max_results, categories, language
-            )
+            return await self._search_json_api(query, max_results, categories, language)
         except Exception as e:
             json_error_msg = str(e)
             logger.warning(
@@ -189,13 +187,9 @@ class SearXNGClient:
 
         # HTML fallback
         try:
-            return await self._search_html_fallback(
-                query, max_results, categories, language
-            )
+            return await self._search_html_fallback(query, max_results, categories, language)
         except Exception as html_error:
-            logger.error(
-                "Both JSON API and HTML fallback failed: %s", html_error
-            )
+            logger.error("Both JSON API and HTML fallback failed: %s", html_error)
             return SearXNGSearchResponse(
                 query=query,
                 error=f"Search failed: {json_error_msg} (JSON) and {str(html_error)} (HTML)",
@@ -242,10 +236,7 @@ class SearXNGClient:
                 elapsed = time.time() - start_time
 
                 if response.status_code != 200:
-                    last_error = (
-                        f"HTTP {response.status_code}: "
-                        f"{response.text[:200]}"
-                    )
+                    last_error = f"HTTP {response.status_code}: {response.text[:200]}"
                     logger.warning(
                         "SearXNG JSON API returned %d (attempt %d/%d)",
                         response.status_code,
@@ -256,9 +247,7 @@ class SearXNGClient:
                     continue
 
                 data = response.json()
-                results = self._parse_json_response(
-                    data, max_results, categories
-                )
+                results = self._parse_json_response(data, max_results, categories)
                 search_time = elapsed
 
                 return SearXNGSearchResponse(
@@ -266,9 +255,7 @@ class SearXNGClient:
                     results=results,
                     total_results=len(results),
                     search_time=search_time,
-                    engines=list(
-                        {r.engine for r in results} if results else []
-                    ),
+                    engines=list({r.engine for r in results} if results else []),
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 )
 
@@ -322,14 +309,11 @@ class SearXNGClient:
 
         Uses BeautifulSoup if available, otherwise basic regex.
         """
+        import importlib.util
+
         import httpx as _httpx
 
-        try:
-            from bs4 import BeautifulSoup
-
-            has_bs4 = True
-        except ImportError:
-            has_bs4 = False
+        has_bs4 = importlib.util.find_spec("bs4") is not None
 
         session = await self.get_session()
         params = {
@@ -356,18 +340,12 @@ class SearXNGClient:
             )
 
             if response.status_code != 200:
-                raise ValueError(
-                    f"HTML fallback returned HTTP {response.status_code}"
-                )
+                raise ValueError(f"HTML fallback returned HTTP {response.status_code}")
 
             if has_bs4:
-                results = self._parse_html_bs4(
-                    response.text, max_results, categories
-                )
+                results = self._parse_html_bs4(response.text, max_results, categories)
             else:
-                results = self._parse_html_regex(
-                    response.text, max_results, categories
-                )
+                results = self._parse_html_regex(response.text, max_results, categories)
 
             return SearXNGSearchResponse(
                 query=query,
@@ -444,12 +422,8 @@ class SearXNGClient:
         )
 
         for elem in result_elements[:max_results]:
-            title_elem = elem.select_one(
-                "a[href], h2 a, h3 a, .title a"
-            )
-            content_elem = elem.select_one(
-                ".content, .snippet, p, .abstract"
-            )
+            title_elem = elem.select_one("a[href], h2 a, h3 a, .title a")
+            content_elem = elem.select_one(".content, .snippet, p, .abstract")
 
             if not title_elem or not title_elem.get("href"):
                 continue
@@ -488,9 +462,9 @@ class SearXNGClient:
         # Match result blocks with title and URL
         result_pattern = re.compile(
             r'<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>'
-            r'[^<]*'
+            r"[^<]*"
             r'(?:(?:<div[^>]*class="[^"]*content[^"]*"[^>]*>)'
-            r'([^<]*))?',
+            r"([^<]*))?",
             re.DOTALL,
         )
 
@@ -546,9 +520,7 @@ class SearXNGClient:
         if not text:
             return ""
         # Remove control characters except newlines
-        text = "".join(
-            c for c in text if ord(c) > 31 or c in "\n\r\t"
-        )
+        text = "".join(c for c in text if ord(c) > 31 or c in "\n\r\t")
         # Collapse whitespace
         text = " ".join(text.split())
         return text.strip()
@@ -564,9 +536,7 @@ class SearXNGClient:
             # Keep only essential params
             clean_params = []
             for param in params.split("&"):
-                if param.startswith(
-                    ("utm_", "ref", "fbclid", "gclid")
-                ):
+                if param.startswith(("utm_", "ref", "fbclid", "gclid")):
                     continue
                 clean_params.append(param)
             url = base + ("?" + "&".join(clean_params) if clean_params else "")
@@ -577,7 +547,7 @@ class SearXNGClient:
         if self._session and not self._session.is_closed:
             await self._session.aclose()
 
-    async def __aenter__(self) -> "SearXNGClient":
+    async def __aenter__(self) -> SearXNGClient:
         return self
 
     async def __aexit__(self, *args: Any) -> None:

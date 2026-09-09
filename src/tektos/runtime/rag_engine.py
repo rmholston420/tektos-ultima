@@ -10,8 +10,7 @@ Provides:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -20,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RAGConfig:
     """Configuration for the RAG engine."""
+
     top_k: int = 5
     similarity_threshold: float = 0.3
     chunk_size: int = 512
@@ -94,8 +94,11 @@ class RAGEngine:
 
     async def start(self) -> None:
         """Initialize the RAG engine."""
-        logger.info("RAG engine initialized (top_k=%d, threshold=%.2f)",
-                     self._config.top_k, self._config.similarity_threshold)
+        logger.info(
+            "RAG engine initialized (top_k=%d, threshold=%.2f)",
+            self._config.top_k,
+            self._config.similarity_threshold,
+        )
 
     async def stop(self) -> None:
         """Clean up the RAG engine."""

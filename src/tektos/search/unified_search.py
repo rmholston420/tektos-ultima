@@ -11,11 +11,8 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 import re
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,6 +23,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class SearchResult:
     """A single search result."""
+
     file_path: str
     score: float
     snippet: str
@@ -55,9 +53,22 @@ class UnifiedSearch:
         self.embedding_url = embedding_url
         self.max_results = max_results
         self.file_extensions = file_extensions or [
-            ".py", ".md", ".txt", ".json", ".yaml", ".yml",
-            ".toml", ".cfg", ".ini", ".sh", ".bash",
-            ".html", ".css", ".js", ".ts", ".sql",
+            ".py",
+            ".md",
+            ".txt",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".cfg",
+            ".ini",
+            ".sh",
+            ".bash",
+            ".html",
+            ".css",
+            ".js",
+            ".ts",
+            ".sql",
         ]
         self._index: dict[str, list[tuple[int, str]]] = {}  # file -> [(line_no, text)]
         self._indexed = False
@@ -145,7 +156,7 @@ class UnifiedSearch:
         """Fast keyword search using grep-style matching."""
         results: list[SearchResult] = []
         query_lower = query.lower()
-        query_words = [w for w in re.split(r'\s+', query_lower) if len(w) > 1]
+        query_words = [w for w in re.split(r"\s+", query_lower) if len(w) > 1]
 
         for filepath, lines in self._index.items():
             # Apply file pattern filter
@@ -183,17 +194,21 @@ class UnifiedSearch:
 
             if file_score > 0:
                 # Calculate file-level score
-                word_matches = sum(1 for w in query_words if any(w in lt.lower() for _, lt in lines))
+                word_matches = sum(
+                    1 for w in query_words if any(w in lt.lower() for _, lt in lines)
+                )
                 file_score += word_matches * 0.5
 
-                results.append(SearchResult(
-                    file_path=filepath,
-                    score=file_score,
-                    snippet=best_snippet[:200],
-                    line_number=best_line,
-                    title=Path(filepath).name,
-                    metadata={"lines_indexed": len(lines)},
-                ))
+                results.append(
+                    SearchResult(
+                        file_path=filepath,
+                        score=file_score,
+                        snippet=best_snippet[:200],
+                        line_number=best_line,
+                        title=Path(filepath).name,
+                        metadata={"lines_indexed": len(lines)},
+                    )
+                )
 
         return results
 
@@ -212,7 +227,7 @@ class UnifiedSearch:
                 json={"input": query, "model": "all-MiniLM-L6-v2"},
             )
             resp.raise_for_status()
-            query_embedding = resp.json()["data"][0]["embedding"]
+            resp.json()["data"][0]["embedding"]
 
         # Simple cosine similarity search (in-memory for now)
         # In production, this would use a vector DB
@@ -229,18 +244,20 @@ class UnifiedSearch:
 
             # For now, use keyword overlap as a proxy for semantic similarity
             # In production, this would compare actual embeddings
-            query_words = set(re.split(r'\s+', query.lower()))
-            text_words = set(re.split(r'\s+', text.lower()))
+            query_words = set(re.split(r"\s+", query.lower()))
+            text_words = set(re.split(r"\s+", text.lower()))
             overlap = len(query_words & text_words)
             score = overlap / max(len(query_words), 1) * 5.0
 
             if score > 0:
-                results.append(SearchResult(
-                    file_path=filepath,
-                    score=score,
-                    snippet=text[:200],
-                    metadata={"method": "semantic"},
-                ))
+                results.append(
+                    SearchResult(
+                        file_path=filepath,
+                        score=score,
+                        snippet=text[:200],
+                        metadata={"method": "semantic"},
+                    )
+                )
 
         return results
 

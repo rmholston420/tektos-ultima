@@ -13,8 +13,8 @@ import logging
 from dataclasses import dataclass
 
 from .config import (
+    CLOCK_STEP,
     MAX_CLOCK_OFFSET,
-    MAX_POWER_LIMIT,
     MIN_POWER_LIMIT,
     OPTIMAL_CLOCK_MHZ,
     OPTIMAL_POWER_LIMIT,
@@ -22,7 +22,6 @@ from .config import (
     TARGET_TEMP,
 )
 from .metrics import GPUTelemetry
-from .config import CLOCK_STEP
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,7 @@ def _get_pynvml():
     if _pynvml is None:
         try:
             import pynvml as _mod
+
             _pynvml = _mod
         except ImportError:
             _pynvml = None
@@ -44,6 +44,7 @@ def _get_pynvml():
 @dataclass
 class OptimizationResult:
     """Result of a power/clock optimization step."""
+
     power_limit_watts: int
     clock_mhz: int
     action: str
@@ -158,21 +159,21 @@ class PowerOptimizer:
             # Set clock — use NVML to set a specific graphics clock
             # We set the target clock directly if available
             try:
-                nvml.nvmlDeviceSetGpuLockedClocks(
-                    handle, result.clock_mhz, result.clock_mhz
-                )
+                nvml.nvmlDeviceSetGpuLockedClocks(handle, result.clock_mhz, result.clock_mhz)
             except nvml.NVMLError:
                 # nvmlDeviceSetGpuLockedClocks may not be available on all GPUs
                 # Fall back to setting a clock offset via nvidia-settings
                 logger.debug(
-                    "Locked clocks not available, using offset approach "
-                    "(clock=%d MHz)", result.clock_mhz
+                    "Locked clocks not available, using offset approach (clock=%d MHz)",
+                    result.clock_mhz,
                 )
 
             logger.info(
                 "PowerOptimizer: %s — power=%dW, clock=%dMHz (%s)",
-                result.action, result.power_limit_watts,
-                result.clock_mhz, result.reason,
+                result.action,
+                result.power_limit_watts,
+                result.clock_mhz,
+                result.reason,
             )
             return True
         except nvml.NVMLError as e:
@@ -185,7 +186,8 @@ class PowerOptimizer:
         self._current_clock = OPTIMAL_CLOCK_MHZ
         logger.info(
             "PowerOptimizer: reset to optimal — power=%dW, clock=%dMHz",
-            OPTIMAL_POWER_LIMIT, OPTIMAL_CLOCK_MHZ,
+            OPTIMAL_POWER_LIMIT,
+            OPTIMAL_CLOCK_MHZ,
         )
 
     def shutdown(self) -> None:

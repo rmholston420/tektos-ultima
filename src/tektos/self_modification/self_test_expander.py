@@ -13,15 +13,11 @@ Integration: Called from SelfImprovementAdapter after a code-modification task c
 from __future__ import annotations
 
 import ast
-import importlib
-import json
 import logging
-import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("tektos.self_modification")
 
@@ -29,6 +25,7 @@ logger = logging.getLogger("tektos.self_modification")
 @dataclass
 class DiffScope:
     """A scope of code changes (additions/deletions/modifications)."""
+
     module_path: str  # e.g. "tektos.runtime.embedder"
     file_path: str  # absolute path
     changed_functions: list[str] = field(default_factory=list)
@@ -41,6 +38,7 @@ class DiffScope:
 @dataclass
 class TestPlanData:
     """Plan for test generation/extension (renamed from TestGenerationPlan to avoid pytest collection)."""
+
     module_path: str
     file_path: str
     tests_to_create: list[str] = field(default_factory=list)  # new test class/function names
@@ -52,7 +50,9 @@ class SelfTestExpander:
     """Analyzes code changes and generates/extends test suites."""
 
     def __init__(self, project_root: str | None = None) -> None:
-        self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parent.parent.parent
+        self.project_root = (
+            Path(project_root) if project_root else Path(__file__).resolve().parent.parent.parent
+        )
         self.src_dir = self.project_root / "src" / "tektos"
         self.tests_dir = self.project_root / "tests"
         self.tests_dir.mkdir(parents=True, exist_ok=True)
@@ -69,7 +69,9 @@ class SelfTestExpander:
 
         scopes: list[DiffScope] = []
         for file_path in changed_files:
-            abs_path = Path(file_path) if Path(file_path).is_absolute() else self.project_root / file_path
+            abs_path = (
+                Path(file_path) if Path(file_path).is_absolute() else self.project_root / file_path
+            )
             if not abs_path.exists():
                 continue
 
@@ -82,18 +84,21 @@ class SelfTestExpander:
             tree = ast.parse(source)
 
             changed_funcs, changed_classes, new_apis = self._extract_public_apis(
-                tree, added_lines.get(str(abs_path), []),
+                tree,
+                added_lines.get(str(abs_path), []),
             )
 
-            scopes.append(DiffScope(
-                module_path=module_path,
-                file_path=str(abs_path),
-                changed_functions=changed_funcs,
-                changed_classes=changed_classes,
-                new_lines=added_lines.get(str(abs_path), []),
-                deleted_lines=deleted_lines.get(str(abs_path), []),
-                new_public_apis=new_apis,
-            ))
+            scopes.append(
+                DiffScope(
+                    module_path=module_path,
+                    file_path=str(abs_path),
+                    changed_functions=changed_funcs,
+                    changed_classes=changed_classes,
+                    new_lines=added_lines.get(str(abs_path), []),
+                    deleted_lines=deleted_lines.get(str(abs_path), []),
+                    new_public_apis=new_apis,
+                )
+            )
 
         return scopes
 
@@ -120,9 +125,7 @@ class SelfTestExpander:
 
         if not test_file.exists():
             # New test file needed
-            plan.tests_to_create = [
-                f"Test{c}" for c in scope.changed_classes
-            ] + [
+            plan.tests_to_create = [f"Test{c}" for c in scope.changed_classes] + [
                 f"test_{c.replace('_', '-')}"
                 for c in scope.new_public_apis
                 if c not in scope.changed_classes
@@ -206,13 +209,13 @@ class SelfTestExpander:
             class_methods = [
                 f"    def test_{module_name.lower()}_initialization(self):",
                 f'        """Test {class_name} default initialization."""',
-                f"        # TODO: implement",
-                f"        pass",
+                "        # TODO: implement",
+                "        pass",
                 "",
                 f"    def test_{module_name.lower()}_basic_usage(self):",
                 f'        """Test {class_name} basic functionality."""',
-                f"        # TODO: implement",
-                f"        pass",
+                "        # TODO: implement",
+                "        pass",
                 "",
             ]
 
@@ -236,7 +239,8 @@ class SelfTestExpander:
             source = Path(test_file_path).read_text()
             tree = ast.parse(source)
             return [
-                node.name for node in ast.walk(tree)
+                node.name
+                for node in ast.walk(tree)
                 if isinstance(node, ast.ClassDef) and node.name.startswith("Test")
             ]
         except Exception:
@@ -249,11 +253,14 @@ class SelfTestExpander:
         try:
             result = subprocess.run(
                 [
-                    sys.executable, "-m", "pytest",
+                    sys.executable,
+                    "-m",
+                    "pytest",
                     test_file_path,
                     "-v",
                     "--tb=short",
-                    "-p", "no:cacheprovider",
+                    "-p",
+                    "no:cacheprovider",
                 ],
                 capture_output=True,
                 text=True,

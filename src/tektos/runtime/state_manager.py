@@ -337,8 +337,11 @@ class StateManager:
                 HindsightClient,
                 HindsightConfig,
             )
+
             client = HindsightClient(
-                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"))
+                config=HindsightConfig(
+                    base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000")
+                )
             )
             results = client.recall(
                 query=f"LAST_KNOWN_STATE project:{self.project} progress",
@@ -358,7 +361,7 @@ class StateManager:
 
     def _save_to_hindsight(self, state: LastKnownState) -> None:
         """Save state to Hindsight memory via retain API.
-        
+
         Saves both a concise summary and full markdown as a single fact
         with tags for searchability.
         """
@@ -367,6 +370,7 @@ class StateManager:
                 HindsightClient,
                 HindsightConfig,
             )
+
             md = state.to_markdown()
             # Create a concise summary for the retain payload
             summary_lines = [
@@ -380,11 +384,13 @@ class StateManager:
                 summary_lines.append(f"Next Steps: {'; '.join(state.next_steps[:3])}")
             if state.blockers:
                 summary_lines.append(f"Blockers: {'; '.join(state.blockers[:3])}")
-            
-            summary = "\n".join(summary_lines)
-            
+
+            "\n".join(summary_lines)
+
             client = HindsightClient(
-                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"))
+                config=HindsightConfig(
+                    base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000")
+                )
             )
             client.retain(
                 content=md,

@@ -16,12 +16,9 @@ from __future__ import annotations
 
 import ast
 import logging
-import re
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("tektos.self_modification")
 
@@ -29,6 +26,7 @@ logger = logging.getLogger("tektos.self_modification")
 @dataclass
 class GUIChange:
     """A GUI change needed due to backend modifications."""
+
     component_name: str  # e.g. "SessionEmbedderPanel"
     component_type: str  # "panel" | "sidebar" | "dialog" | "table" | "form" | "button"
     purpose: str  # what this component does
@@ -40,6 +38,7 @@ class GUIChange:
 @dataclass
 class GUIExpansionPlan:
     """Plan for GUI expansion."""
+
     module_path: str
     changes: list[GUIChange] = field(default_factory=list)
     store_updates: list[str] = field(default_factory=list)  # stores to update
@@ -50,7 +49,9 @@ class SelfGUIExpander:
     """Analyzes backend changes and generates/updates GUI components."""
 
     def __init__(self, project_root: str | None = None) -> None:
-        self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parent.parent.parent
+        self.project_root = (
+            Path(project_root) if project_root else Path(__file__).resolve().parent.parent.parent
+        )
         self.src_dir = self.project_root / "src" / "tektos"
         self.frontend_dir = self.project_root / "frontend"
         self.components_dir = self.frontend_dir / "src" / "lib" / "components"
@@ -76,7 +77,9 @@ class SelfGUIExpander:
         plans: list[GUIExpansionPlan] = []
 
         for file_path in changed_files:
-            abs_path = Path(file_path) if Path(file_path).is_absolute() else self.project_root / file_path
+            abs_path = (
+                Path(file_path) if Path(file_path).is_absolute() else self.project_root / file_path
+            )
             if not abs_path.exists():
                 continue
 
@@ -127,24 +130,30 @@ class SelfGUIExpander:
         # Check for state fields
         state_fields = self._extract_state_fields(node)
         if state_fields:
-            changes.append(GUIChange(
-                component_name=component_name,
-                component_type="panel",
-                purpose=f"Display and manage {class_name} state",
-                props=[{"name": f"field_{i}", "type": "string"} for i in range(len(state_fields))],
-                depends_on=[f"{class_name.lower()}_store"],
-            ))
+            changes.append(
+                GUIChange(
+                    component_name=component_name,
+                    component_type="panel",
+                    purpose=f"Display and manage {class_name} state",
+                    props=[
+                        {"name": f"field_{i}", "type": "string"} for i in range(len(state_fields))
+                    ],
+                    depends_on=[f"{class_name.lower()}_store"],
+                )
+            )
 
         # Check for public methods that might be actions
         public_methods = self._extract_public_methods(node)
         if public_methods:
-            changes.append(GUIChange(
-                component_name=component_name + "Actions",
-                component_type="form",
-                purpose=f"Provide controls for {class_name} operations",
-                depends_on=[f"{class_name.lower()}_store"],
-                props=[{"name": method, "type": "function"} for method in public_methods],
-            ))
+            changes.append(
+                GUIChange(
+                    component_name=component_name + "Actions",
+                    component_type="form",
+                    purpose=f"Provide controls for {class_name} operations",
+                    depends_on=[f"{class_name.lower()}_store"],
+                    props=[{"name": method, "type": "function"} for method in public_methods],
+                )
+            )
 
         return changes
 
@@ -155,12 +164,14 @@ class SelfGUIExpander:
         # Check for endpoint-like patterns
         if any(pattern in node.name.lower() for pattern in ["api", "endpoint", "route", "handler"]):
             component_name = self._camel_to_pascal(node.name) + "Handler"
-            changes.append(GUIChange(
-                component_name=component_name,
-                component_type="button",
-                purpose=f"Trigger {node.name} API endpoint",
-                props=[{"name": "callback", "type": "function"}],
-            ))
+            changes.append(
+                GUIChange(
+                    component_name=component_name,
+                    component_type="button",
+                    purpose=f"Trigger {node.name} API endpoint",
+                    props=[{"name": "callback", "type": "function"}],
+                )
+            )
 
         return changes
 
@@ -198,19 +209,21 @@ class SelfGUIExpander:
         for fld in fields:
             field_name = fld["name"]
             default_value = self._infer_default(fld["type"])
-            lines.append(f'  {field_name}: {default_value},')
+            lines.append(f"  {field_name}: {default_value},")
 
         lines.append("});")
         lines.append("")
 
         # Add helper functions
         for fld in fields:
-            lines.extend([
-                f"export function set{self._camel_to_pascal(fld['name'])}(value: {fld['type']}): void {{",
-                f'  {store_name}.update(state => ({{ ...state, {fld["name"]}: value }}));',
-                "}",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"export function set{self._camel_to_pascal(fld['name'])}(value: {fld['type']}): void {{",
+                    f"  {store_name}.update(state => ({{ ...state, {fld['name']}: value }}));",
+                    "}",
+                    "",
+                ]
+            )
 
         return "\n".join(lines) + "\n"
 
@@ -231,17 +244,20 @@ class SelfGUIExpander:
         """Generate a panel component."""
         props_section = ""
         if change.props:
-            props_section = "\n".join([
-                f'  {name}: {type_};' for name, type_ in [(p["name"], p["type"]) for p in change.props]
-            ])
+            props_section = "\n".join(
+                [
+                    f"  {name}: {type_};"
+                    for name, type_ in [(p["name"], p["type"]) for p in change.props]
+                ]
+            )
 
         store_import = ""
         if change.depends_on:
-            store_base = change.depends_on[0].split('.')[-1]
-            store_path = change.depends_on[0].replace('.', '/')
+            store_base = change.depends_on[0].split(".")[-1]
+            store_path = change.depends_on[0].replace(".", "/")
             store_import = f'  import {{ {store_base} }} from "$lib/{store_path}"'
 
-        panel_label = change.component_name.replace('View', 'Panel').lower()
+        change.component_name.replace("View", "Panel").lower()
 
         lines = [
             '<script lang="ts">',
@@ -256,9 +272,9 @@ class SelfGUIExpander:
             "  }",
             "</script>",
             "",
-            f'<div class="panel">',
+            '<div class="panel">',
             '  <div class="panel-header">',
-            '    <h3>' + change.purpose + '</h3>',
+            "    <h3>" + change.purpose + "</h3>",
             "    <button on:click={toggle}>{ isOpen ? 'Collapse' : 'Expand' }</button>",
             "  </div>",
             "",
@@ -268,7 +284,7 @@ class SelfGUIExpander:
             "</div>",
         ]
 
-        return "\n".join([l for l in lines if l]) + "\n"
+        return "\n".join([line for line in lines if line]) + "\n"
 
     def _generate_panel_content(self, change: GUIChange) -> str:
         """Generate content for a panel."""
@@ -277,17 +293,19 @@ class SelfGUIExpander:
             name = prop["name"]
             content.append('<div class="panel-field">')
             content.append('  <label>{"' + name + ':"} </label>')
-            content.append('  <span>{state.' + name + '}</span>')
-            content.append('</div>')
+            content.append("  <span>{state." + name + "}</span>")
+            content.append("</div>")
         return "\n".join(content)
 
     def _generate_form(self, change: GUIChange) -> str:
         """Generate a form component."""
         lines = [
             '<script lang="ts">',
-            "  " + ", ".join(
-                f'let {p["name"]} = {self._infer_default(p["type"])}'
-                for p in change.props if p["type"] != "function"
+            "  "
+            + ", ".join(
+                f"let {p['name']} = {self._infer_default(p['type'])}"
+                for p in change.props
+                if p["type"] != "function"
             ),
             "",
             "  function onSubmit(): void {",
@@ -302,17 +320,21 @@ class SelfGUIExpander:
             if prop["type"] == "function":
                 continue
             name = prop["name"]
-            lines.extend([
-                '  <div class="form-group">',
-                '    <label for="' + name + '">' + name + '</label>',
-                '    <input type="text" id="' + name + '" bind:value=' + name + ' />',
-                '  </div>',
-            ])
+            lines.extend(
+                [
+                    '  <div class="form-group">',
+                    '    <label for="' + name + '">' + name + "</label>",
+                    '    <input type="text" id="' + name + '" bind:value=' + name + " />",
+                    "  </div>",
+                ]
+            )
 
-        lines.extend([
-            '  <button type="submit">Submit</button>',
-            "</form>",
-        ])
+        lines.extend(
+            [
+                '  <button type="submit">Submit</button>',
+                "</form>",
+            ]
+        )
 
         return "\n".join(lines) + "\n"
 
@@ -321,14 +343,14 @@ class SelfGUIExpander:
         prop_name = change.props[0]["name"] if change.props else "callback"
         lines = [
             '<script lang="ts">',
-            '  let ' + prop_name + ' = () => {};',
+            "  let " + prop_name + " = () => {};",
             "",
             "  function handleClick(): void {",
             "    " + prop_name + "();",
             "  }",
             "</script>",
             "",
-            '<button on:click={handleClick}>',
+            "<button on:click={handleClick}>",
             "  " + change.purpose,
             "</button>",
         ]
@@ -400,10 +422,7 @@ class SelfGUIExpander:
     def _update_index_exports(self) -> None:
         """Update the components index to export new components."""
         index_path = self.components_dir / "index.ts"
-        components = [
-            p.stem for p in self.components_dir.glob("*.svelte")
-            if p.name != "index.ts"
-        ]
+        components = [p.stem for p in self.components_dir.glob("*.svelte") if p.name != "index.ts"]
 
         content = "\n".join([f'export * from "./{c}";' for c in components]) + "\n"
         index_path.write_text(content, encoding="utf-8")

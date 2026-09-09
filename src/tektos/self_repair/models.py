@@ -13,25 +13,27 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum
+from enum import Enum
 from typing import Any
 
 
 class RepairStatus(str, Enum):
     """Lifecycle states of a repair attempt."""
-    PENDING = "pending"           # Repair queued, not yet started
-    DIAGNOSING = "diagnosing"     # Analyzing root cause
-    REPAIRING = "repairing"       # Executing repair strategy
-    VERIFYING = "verifying"       # Checking if repair worked
-    COMPLETED = "completed"       # Repair succeeded
-    FAILED = "failed"             # Repair attempt failed
-    ROLLED_BACK = "rolled_back"   # Repair failed, rolled back
-    DEGRADED = "degraded"         # Full repair failed, degraded gracefully
-    SKIPPED = "skipped"           # Repair not attempted (e.g., already resolved)
+
+    PENDING = "pending"  # Repair queued, not yet started
+    DIAGNOSING = "diagnosing"  # Analyzing root cause
+    REPAIRING = "repairing"  # Executing repair strategy
+    VERIFYING = "verifying"  # Checking if repair worked
+    COMPLETED = "completed"  # Repair succeeded
+    FAILED = "failed"  # Repair attempt failed
+    ROLLED_BACK = "rolled_back"  # Repair failed, rolled back
+    DEGRADED = "degraded"  # Full repair failed, degraded gracefully
+    SKIPPED = "skipped"  # Repair not attempted (e.g., already resolved)
 
 
 class RepairStrategy(str, Enum):
     """Types of repair strategies available."""
+
     # Infrastructure repairs
     RESTART_SERVICE = "restart_service"
     RELOAD_CONFIG = "reload_config"
@@ -66,10 +68,11 @@ class RepairStrategy(str, Enum):
 
 class DegradationLevel(str, Enum):
     """Levels of graceful degradation."""
-    NONE = "none"               # Full functionality
-    REDUCED = "reduced"         # Some features disabled
-    MINIMAL = "minimal"         # Core only
-    EMERGENCY = "emergency"     # Bare minimum, notify admin
+
+    NONE = "none"  # Full functionality
+    REDUCED = "reduced"  # Some features disabled
+    MINIMAL = "minimal"  # Core only
+    EMERGENCY = "emergency"  # Bare minimum, notify admin
 
 
 @dataclass
@@ -78,6 +81,7 @@ class RepairRecord:
 
     Tracks the full lifecycle: detection → diagnosis → repair → verification → learning.
     """
+
     record_id: str
     threat_category: str
     threat_severity: str
@@ -131,7 +135,9 @@ class RepairRecord:
             threat_severity=data["threat_severity"],
             description=data["description"],
             status=RepairStatus(data.get("status", "pending")),
-            strategy_used=RepairStrategy(data["strategy_used"]) if data.get("strategy_used") else None,
+            strategy_used=RepairStrategy(data["strategy_used"])
+            if data.get("strategy_used")
+            else None,
             diagnosis=data.get("diagnosis", ""),
             repair_actions=data.get("repair_actions", []),
             verification_passed=data.get("verification_passed", False),
@@ -152,6 +158,7 @@ class RepairRecord:
 @dataclass
 class RepairResult:
     """Outcome of a single repair attempt."""
+
     success: bool
     strategy: RepairStrategy
     actions_taken: list[str]
@@ -177,6 +184,7 @@ class RepairResult:
 @dataclass
 class HealthSnapshot:
     """Point-in-time system health snapshot."""
+
     timestamp: float = field(default_factory=time.time)
     overall_score: float = 0.0
     status: str = "unknown"
@@ -218,6 +226,7 @@ class HealthSnapshot:
 @dataclass
 class DegradationPlan:
     """Plan for graceful degradation when full repair fails."""
+
     level: DegradationLevel
     disabled_features: list[str] = field(default_factory=list)
     fallback_services: list[str] = field(default_factory=list)

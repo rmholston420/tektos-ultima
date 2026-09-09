@@ -41,12 +41,8 @@ class ExperienceRecord(BaseModel):
     insight_type: str = Field(
         ..., description="error_pattern | bias_detected | direct_experience | novelty"
     )
-    what_happened: str = Field(
-        ..., description="What actually occurred during execution"
-    )
-    what_was_expected: str = Field(
-        default="", description="What the spec predicted"
-    )
+    what_happened: str = Field(..., description="What actually occurred during execution")
+    what_was_expected: str = Field(default="", description="What the spec predicted")
     guidance: str = Field(
         ..., description="What to do differently next time (the actionable insight)"
     )
@@ -55,9 +51,7 @@ class ExperienceRecord(BaseModel):
     )
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     priority: str = Field(default="normal", description="urgent/high/normal/low")
-    timestamp: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     tags: list[str] = Field(default_factory=list)
 
     @property
@@ -168,7 +162,7 @@ class ExperienceReplay:
                 HindsightClient,
                 HindsightConfig,
             )
-            
+
             insight_label = f"[{record.insight_type}] {record.guidance[:200]}"
             if record.what_happened:
                 insight_label += f"\nContext: {record.what_happened[:300]}"
@@ -176,9 +170,11 @@ class ExperienceReplay:
                 insight_label += f"\nTags: {', '.join(record.tags)}"
             if record.cycle_id:
                 insight_label += f"\nCycle: {record.cycle_id}"
-            
+
             client = HindsightClient(
-                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"))
+                config=HindsightConfig(
+                    base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000")
+                )
             )
             client.retain(
                 content=insight_label,
@@ -240,7 +236,8 @@ class ExperienceReplay:
         """
         # Filter by language game
         matching = [
-            r for r in self._records
+            r
+            for r in self._records
             if (
                 isinstance(r.context, str)
                 and (r.context == language_game or r.context == "general")
@@ -293,9 +290,9 @@ class ExperienceReplay:
         - All direct_experience → what did reality teach us?
         """
         return [
-            r for r in self._records
-            if r.insight_type == insight_type
-            and r.confidence >= min_confidence
+            r
+            for r in self._records
+            if r.insight_type == insight_type and r.confidence >= min_confidence
         ]
 
     def get_health_report(self) -> dict[str, Any]:
@@ -313,10 +310,9 @@ class ExperienceReplay:
 
         return {
             "total_records": len(self._records),
-            "active_records": len([
-                r for r in self._records
-                if r.confidence >= self._min_confidence
-            ]),
+            "active_records": len(
+                [r for r in self._records if r.confidence >= self._min_confidence]
+            ),
             "by_type": {
                 t: sum(1 for r in self._records if r.insight_type == t)
                 for t in set(r.insight_type for r in self._records)

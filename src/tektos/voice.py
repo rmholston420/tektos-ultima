@@ -11,20 +11,17 @@ Architecture:
 
 from __future__ import annotations
 
-import asyncio
 import io
 import logging
 import os
-import wave
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncGenerator
 
 import edge_tts
 import numpy as np
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
-from pydub.silence import split_on_silence
 
 log = logging.getLogger("tektos.voice")
 
@@ -50,12 +47,13 @@ _WAKE_WORD_SENSITIVITY = float(os.getenv("TEKTOS_WAKE_SENSITIVITY", "0.6"))
 # Audio settings
 _SAMPLE_RATE = 16000  # Hz for Whisper
 _CHANNELS = 1
-_SAMPLE_WIDTH = 2   # 16-bit
+_SAMPLE_WIDTH = 2  # 16-bit
 
 
 # ---------------------------------------------------------------------------
 # STT — Speech-to-Text
 # ---------------------------------------------------------------------------
+
 
 class STTEngine:
     """Wraps faster-whisper for CPU transcription."""
@@ -92,7 +90,11 @@ class STTEngine:
         # Convert to temp file for faster-whisper
         tmp = Path("/tmp/tektos_stt_input.wav")
         audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
-        audio = audio.set_frame_rate(_SAMPLE_RATE).set_channels(_CHANNELS).set_sample_width(_SAMPLE_WIDTH)
+        audio = (
+            audio.set_frame_rate(_SAMPLE_RATE)
+            .set_channels(_CHANNELS)
+            .set_sample_width(_SAMPLE_WIDTH)
+        )
         audio.export(str(tmp), format="wav")
 
         segments, info = self._model.transcribe(str(tmp), beam_size=5)
@@ -104,6 +106,7 @@ class STTEngine:
 # ---------------------------------------------------------------------------
 # TTS — Text-to-Speech
 # ---------------------------------------------------------------------------
+
 
 class TTSVoice:
     """Wraps edge-tts for neural voice synthesis."""
@@ -131,6 +134,7 @@ class TTSVoice:
 # VAD — Voice Activity Detection (simple energy-based)
 # ---------------------------------------------------------------------------
 
+
 class VoiceActivityDetector:
     """Simple energy-based VAD for wake-word detection."""
 
@@ -145,13 +149,14 @@ class VoiceActivityDetector:
         # Normalize to [-1, 1]
         samples = samples / 32768.0
         # Compute RMS energy
-        rms = np.sqrt(np.mean(samples ** 2))
+        rms = np.sqrt(np.mean(samples**2))
         return rms > self._threshold
 
 
 # ---------------------------------------------------------------------------
 # Wake-Word Detection
 # ---------------------------------------------------------------------------
+
 
 class WakeWordDetector:
     """Simple keyword spotting for 'Tektos' in transcribed text."""
@@ -164,7 +169,8 @@ class WakeWordDetector:
         lower = text.lower().strip()
         # Check for "tektos" as a word boundary match
         import re
-        pattern = r'\b' + _WAKE_WORD + r'\b'
+
+        pattern = r"\b" + _WAKE_WORD + r"\b"
         return bool(re.search(pattern, lower))
 
 
@@ -172,9 +178,11 @@ class WakeWordDetector:
 # VoiceManager — orchestrates STT, TTS, and wake-word
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class VoiceState:
     """Current voice interaction state."""
+
     is_listening: bool = False
     is_speaking: bool = False
     is_wake_word_detected: bool = False

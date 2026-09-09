@@ -25,9 +25,8 @@ import json
 import logging
 import sqlite3
 import threading
-import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -143,9 +142,9 @@ class MemoryPersistence:
     def _get_conn(self) -> sqlite3.Connection:
         """Get thread-local SQLite connection for thread safety."""
         # Use threading.local() to ensure each thread has its own connection
-        if not hasattr(self, '_thread_local'):
+        if not hasattr(self, "_thread_local"):
             self._thread_local = threading.local()
-        conn = getattr(self._thread_local, 'conn', None)
+        conn = getattr(self._thread_local, "conn", None)
         if conn is None:
             conn = sqlite3.connect(str(self.db_path))
             conn.row_factory = sqlite3.Row
@@ -178,283 +177,262 @@ class MemoryPersistence:
 
     def save_working(self, entry: dict[str, Any]) -> str:
         """Save a memory entry to the working tier."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    """INSERT OR REPLACE INTO working
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                """INSERT OR REPLACE INTO working
                        (id, content, hemisphere, is_novel, novelty_score,
                         timestamp, expires_at, source_tier, destination_tier,
                         who, what, location, when_ts, why, how, metadata, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        entry["id"],
-                        entry["content"],
-                        entry.get("hemisphere", "left"),
-                        1 if entry.get("is_novel") else 0,
-                        entry.get("novelty_score", 0.0),
-                        entry["timestamp"],
-                        entry.get("expires_at"),
-                        entry.get("source_tier"),
-                        entry.get("destination_tier"),
-                        entry.get("who", ""),
-                        entry.get("what", ""),
-                        entry.get("where", ""),
-                        entry.get("when", ""),
-                        entry.get("why", ""),
-                        entry.get("how", ""),
-                        json.dumps(entry.get("metadata", {})),
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
-                )
+                (
+                    entry["id"],
+                    entry["content"],
+                    entry.get("hemisphere", "left"),
+                    1 if entry.get("is_novel") else 0,
+                    entry.get("novelty_score", 0.0),
+                    entry["timestamp"],
+                    entry.get("expires_at"),
+                    entry.get("source_tier"),
+                    entry.get("destination_tier"),
+                    entry.get("who", ""),
+                    entry.get("what", ""),
+                    entry.get("where", ""),
+                    entry.get("when", ""),
+                    entry.get("why", ""),
+                    entry.get("how", ""),
+                    json.dumps(entry.get("metadata", {})),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
         return entry["id"]
 
     def load_working(self, limit: int = 7) -> list[dict[str, Any]]:
         """Load working memory entries."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    "SELECT * FROM working ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
-                )
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM working ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def load_all_working(self) -> list[dict[str, Any]]:
         """Load all working memory entries."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute("SELECT * FROM working ORDER BY timestamp DESC")
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+        with self._lock, self._cursor() as cursor:
+            cursor.execute("SELECT * FROM working ORDER BY timestamp DESC")
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def delete_working(self, entry_id: str) -> bool:
         """Delete a working memory entry. Returns True if deleted."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute("DELETE FROM working WHERE id = ?", (entry_id,))
-                return cursor.rowcount > 0
+        with self._lock, self._cursor() as cursor:
+            cursor.execute("DELETE FROM working WHERE id = ?", (entry_id,))
+            return cursor.rowcount > 0
 
     # ── Long-Term Memory ─────────────────────────────────────────────────
 
     def save_long_term(self, entry: dict[str, Any]) -> str:
         """Save a memory entry to the long-term tier."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    """INSERT OR REPLACE INTO long_term
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                """INSERT OR REPLACE INTO long_term
                        (id, content, hemisphere, is_novel, novelty_score,
                         timestamp, expires_at, source_tier, destination_tier,
                         who, what, location, when_ts, why, how, metadata, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        entry["id"],
-                        entry["content"],
-                        entry.get("hemisphere", "left"),
-                        1 if entry.get("is_novel") else 0,
-                        entry.get("novelty_score", 0.0),
-                        entry["timestamp"],
-                        entry.get("expires_at"),
-                        entry.get("source_tier"),
-                        entry.get("destination_tier"),
-                        entry.get("who", ""),
-                        entry.get("what", ""),
-                        entry.get("where", ""),
-                        entry.get("when", ""),
-                        entry.get("why", ""),
-                        entry.get("how", ""),
-                        json.dumps(entry.get("metadata", {})),
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
-                )
+                (
+                    entry["id"],
+                    entry["content"],
+                    entry.get("hemisphere", "left"),
+                    1 if entry.get("is_novel") else 0,
+                    entry.get("novelty_score", 0.0),
+                    entry["timestamp"],
+                    entry.get("expires_at"),
+                    entry.get("source_tier"),
+                    entry.get("destination_tier"),
+                    entry.get("who", ""),
+                    entry.get("what", ""),
+                    entry.get("where", ""),
+                    entry.get("when", ""),
+                    entry.get("why", ""),
+                    entry.get("how", ""),
+                    json.dumps(entry.get("metadata", {})),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
         return entry["id"]
 
     def load_long_term(self, limit: int = 20) -> list[dict[str, Any]]:
         """Load long-term memory entries."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    "SELECT * FROM long_term ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
-                )
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM long_term ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def load_all_long_term(self) -> list[dict[str, Any]]:
         """Load all long-term memory entries."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute("SELECT * FROM long_term ORDER BY timestamp DESC")
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+        with self._lock, self._cursor() as cursor:
+            cursor.execute("SELECT * FROM long_term ORDER BY timestamp DESC")
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def search_long_term(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Search long-term memory by content/what/why using LIKE."""
         pattern = f"%{query}%"
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    """SELECT * FROM long_term
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                """SELECT * FROM long_term
                        WHERE content LIKE ? OR what LIKE ? OR why LIKE ?
                        ORDER BY timestamp DESC LIMIT ?""",
-                    (pattern, pattern, pattern, limit),
-                )
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+                (pattern, pattern, pattern, limit),
+            )
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def delete_long_term(self, entry_id: str) -> bool:
         """Delete a long-term memory entry."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute("DELETE FROM long_term WHERE id = ?", (entry_id,))
-                return cursor.rowcount > 0
+        with self._lock, self._cursor() as cursor:
+            cursor.execute("DELETE FROM long_term WHERE id = ?", (entry_id,))
+            return cursor.rowcount > 0
 
     # ── Procedural Memory ────────────────────────────────────────────────
 
     def save_procedural(self, entry: dict[str, Any]) -> str:
         """Save a memory entry to the procedural tier."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    """INSERT OR REPLACE INTO procedural
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                """INSERT OR REPLACE INTO procedural
                        (id, content, hemisphere, is_novel, novelty_score,
                         timestamp, expires_at, source_tier, destination_tier,
                         who, what, location, when_ts, why, how, metadata, created_at,
                         skill_id)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        entry["id"],
-                        entry["content"],
-                        entry.get("hemisphere", "left"),
-                        1 if entry.get("is_novel") else 0,
-                        entry.get("novelty_score", 0.0),
-                        entry["timestamp"],
-                        entry.get("expires_at"),
-                        entry.get("source_tier"),
-                        entry.get("destination_tier"),
-                        entry.get("who", ""),
-                        entry.get("what", ""),
-                        entry.get("where", ""),
-                        entry.get("when", ""),
-                        entry.get("why", ""),
-                        entry.get("how", ""),
-                        json.dumps(entry.get("metadata", {})),
-                        datetime.now(timezone.utc).isoformat(),
-                        entry.get("metadata", {}).get("skill_id"),
-                    ),
-                )
+                (
+                    entry["id"],
+                    entry["content"],
+                    entry.get("hemisphere", "left"),
+                    1 if entry.get("is_novel") else 0,
+                    entry.get("novelty_score", 0.0),
+                    entry["timestamp"],
+                    entry.get("expires_at"),
+                    entry.get("source_tier"),
+                    entry.get("destination_tier"),
+                    entry.get("who", ""),
+                    entry.get("what", ""),
+                    entry.get("where", ""),
+                    entry.get("when", ""),
+                    entry.get("why", ""),
+                    entry.get("how", ""),
+                    json.dumps(entry.get("metadata", {})),
+                    datetime.now(timezone.utc).isoformat(),
+                    entry.get("metadata", {}).get("skill_id"),
+                ),
+            )
         return entry["id"]
 
     def load_procedural(self, limit: int = 1000) -> list[dict[str, Any]]:
         """Load procedural memory entries."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    "SELECT * FROM procedural ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
-                )
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM procedural ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def load_all_procedural(self) -> list[dict[str, Any]]:
         """Load all procedural memory entries."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute("SELECT * FROM procedural ORDER BY timestamp DESC")
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+        with self._lock, self._cursor() as cursor:
+            cursor.execute("SELECT * FROM procedural ORDER BY timestamp DESC")
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def search_procedural(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Search procedural memory by content/what/why using LIKE."""
         pattern = f"%{query}%"
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    """SELECT * FROM procedural
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                """SELECT * FROM procedural
                        WHERE content LIKE ? OR what LIKE ? OR why LIKE ?
                        ORDER BY timestamp DESC LIMIT ?""",
-                    (pattern, pattern, pattern, limit),
-                )
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+                (pattern, pattern, pattern, limit),
+            )
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def delete_procedural(self, entry_id: str) -> bool:
         """Delete a procedural memory entry."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute("DELETE FROM procedural WHERE id = ?", (entry_id,))
-                return cursor.rowcount > 0
+        with self._lock, self._cursor() as cursor:
+            cursor.execute("DELETE FROM procedural WHERE id = ?", (entry_id,))
+            return cursor.rowcount > 0
 
     # ── Transfer Logging ─────────────────────────────────────────────────
 
     def log_transfer(self, from_tier: str, to_tier: str, entry_id: str) -> None:
         """Log a memory transfer between tiers."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    """INSERT INTO transfer_log (id, from_tier, to_tier, entry_id, timestamp)
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO transfer_log (id, from_tier, to_tier, entry_id, timestamp)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (
-                        f"tfr-{entry_id}",
-                        from_tier,
-                        to_tier,
-                        entry_id,
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
-                )
+                (
+                    f"tfr-{entry_id}",
+                    from_tier,
+                    to_tier,
+                    entry_id,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
 
     def get_transfer_history(self, limit: int = 50) -> list[dict[str, Any]]:
         """Get recent transfer log entries."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    "SELECT * FROM transfer_log ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
-                )
-                return [self._row_to_dict(row) for row in cursor.fetchall()]
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM transfer_log ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     # ── Decay ────────────────────────────────────────────────────────────
 
     def decay_working(self) -> int:
         """Remove expired working memory entries. Returns count removed."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    "DELETE FROM working WHERE expires_at IS NOT NULL AND expires_at <= ?",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-                return cursor.rowcount
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM working WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+            return cursor.rowcount
 
     def decay_all(self) -> dict[str, int]:
         """Run decay on all tiers. Returns count removed per tier."""
-        with self._lock:
-            with self._cursor() as cursor:
-                cursor.execute(
-                    "DELETE FROM working WHERE expires_at IS NOT NULL AND expires_at <= ?",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-                working = cursor.rowcount
+        with self._lock, self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM working WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+            working = cursor.rowcount
 
-                # Long-term and procedural have no decay
-                return {
-                    "working": working,
-                    "long_term": 0,
-                    "procedural": 0,
-                }
+            # Long-term and procedural have no decay
+            return {
+                "working": working,
+                "long_term": 0,
+                "procedural": 0,
+            }
 
     # ── Stats ────────────────────────────────────────────────────────────
 
     def get_stats(self) -> dict[str, Any]:
         """Get memory system statistics."""
-        with self._lock:
-            with self._cursor() as cursor:
-                stats: dict[str, Any] = {}
-                for tier in ("working", "long_term", "procedural"):
-                    cursor.execute(f"SELECT COUNT(*) as cnt FROM {tier}")
-                    stats[f"{tier}_count"] = cursor.fetchone()["cnt"]
+        with self._lock, self._cursor() as cursor:
+            stats: dict[str, Any] = {}
+            for tier in ("working", "long_term", "procedural"):
+                cursor.execute(f"SELECT COUNT(*) as cnt FROM {tier}")
+                stats[f"{tier}_count"] = cursor.fetchone()["cnt"]
 
-                    # Count novel entries
-                    cursor.execute(
-                        f"SELECT COUNT(*) as cnt FROM {tier} WHERE is_novel = 1"
-                    )
-                    stats[f"{tier}_novel"] = cursor.fetchone()["cnt"]
+                # Count novel entries
+                cursor.execute(f"SELECT COUNT(*) as cnt FROM {tier} WHERE is_novel = 1")
+                stats[f"{tier}_novel"] = cursor.fetchone()["cnt"]
 
-                # Transfer log count
-                cursor.execute("SELECT COUNT(*) as cnt FROM transfer_log")
-                stats["transfers"] = cursor.fetchone()["cnt"]
+            # Transfer log count
+            cursor.execute("SELECT COUNT(*) as cnt FROM transfer_log")
+            stats["transfers"] = cursor.fetchone()["cnt"]
 
-                return stats
+            return stats
 
     # ── Import/Export ────────────────────────────────────────────────────
 
@@ -504,9 +482,7 @@ class MemoryPersistence:
                 except Exception as e:
                     log.error(f"Decay scheduler error: {e}")
 
-        self.decay_thread = threading.Thread(
-            target=_decay_loop, daemon=True, name="memory-decay"
-        )
+        self.decay_thread = threading.Thread(target=_decay_loop, daemon=True, name="memory-decay")
         self.decay_thread.start()
         log.info(f"Decay scheduler started (interval={interval}s)")
 

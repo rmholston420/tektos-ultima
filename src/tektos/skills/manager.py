@@ -17,7 +17,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .registry import Skill, SkillRegistry
 
@@ -194,13 +194,17 @@ class SkillManager:
 
         # Convert "what worked" patterns to skills
         for worked in what_worked:
-            skill = self._pattern_to_skill(worked, "success_pattern", category, source="self_improvement")
+            skill = self._pattern_to_skill(
+                worked, "success_pattern", category, source="self_improvement"
+            )
             if skill:
                 created.append(skill)
 
         # Convert "what to avoid" to warning skills
         for avoid in what_to_avoid:
-            skill = self._pattern_to_skill(avoid, "anti_pattern", category, source="self_improvement")
+            skill = self._pattern_to_skill(
+                avoid, "anti_pattern", category, source="self_improvement"
+            )
             if skill:
                 created.append(skill)
 
@@ -212,7 +216,7 @@ class SkillManager:
         lesson: str,
         category: str,
         source: str = "agent_discovered",
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """Convert a lesson into a skill and persist it."""
         # Extract a concise name from the lesson
         name = self._extract_skill_name(lesson)
@@ -229,10 +233,12 @@ class SkillManager:
             name=name,
             description=lesson,
             trigger_conditions=[f"lesson: {name}"],
-            steps=[{
-                "action": "apply_lesson",
-                "description": lesson,
-            }],
+            steps=[
+                {
+                    "action": "apply_lesson",
+                    "description": lesson,
+                }
+            ],
             category=category,
             source=source,
         )
@@ -243,7 +249,7 @@ class SkillManager:
         rec: str,
         category: str,
         source: str = "agent_discovered",
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """Convert a recommendation into a skill and persist it."""
         name = self._extract_skill_name(rec)
         if not name:
@@ -258,10 +264,12 @@ class SkillManager:
             name=name,
             description=rec,
             trigger_conditions=[f"recommendation: {name}"],
-            steps=[{
-                "action": "apply_recommendation",
-                "description": rec,
-            }],
+            steps=[
+                {
+                    "action": "apply_recommendation",
+                    "description": rec,
+                }
+            ],
             category=category,
             source=source,
         )
@@ -273,7 +281,7 @@ class SkillManager:
         pattern_type: str,
         category: str,
         source: str = "agent_discovered",
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """Convert a pattern (success or anti-pattern) into a skill and persist it."""
         name = self._extract_skill_name(pattern)
         if not name:
@@ -288,19 +296,22 @@ class SkillManager:
             name=f"{pattern_type}_{name}",
             description=f"{pattern_type}: {pattern}",
             trigger_conditions=[f"{pattern_type}: {name}"],
-            steps=[{
-                "action": f"apply_{pattern_type}",
-                "description": pattern,
-            }],
+            steps=[
+                {
+                    "action": f"apply_{pattern_type}",
+                    "description": pattern,
+                }
+            ],
             category=category,
             source=source,
         )
         return self.registry.create(skill)
 
-    def _extract_skill_name(self, text: str) -> Optional[str]:
+    def _extract_skill_name(self, text: str) -> str | None:
         """Extract a concise skill name from a lesson/recommendation text."""
         # Take first 50 chars, remove special chars, make slug
         import re
+
         name = text[:50].strip()
         name = re.sub(r"[^a-zA-Z0-9\s]", "", name)
         name = re.sub(r"\s+", "_", name).lower()
@@ -342,7 +353,9 @@ class SkillManager:
         # Take top N
         result.matches = result.matches[:max_skills]
 
-        log.info("Selected %d skills for context (from %d total)", len(result.matches), len(all_skills))
+        log.info(
+            "Selected %d skills for context (from %d total)", len(result.matches), len(all_skills)
+        )
         return result
 
     def _score_skill_against_context(
@@ -455,9 +468,9 @@ class SkillManager:
     def _store_in_procedural_memory(self, content: str, skill: Skill) -> None:
         """Store content in procedural memory via the memory system."""
         try:
-            from tektos.memory.memory_system import MemorySystem
             # Import is lazy — memory_system is set in main.py
             import tektos.main as main_module
+
             ms = getattr(main_module, "memory_system", None)
             if ms:
                 ms.add_procedural_memory(
@@ -471,6 +484,7 @@ class SkillManager:
         """Store content in working memory via the memory system."""
         try:
             import tektos.main as main_module
+
             ms = getattr(main_module, "memory_system", None)
             if ms:
                 ms.add_working_memory(
@@ -498,15 +512,19 @@ class SkillManager:
                 skill.is_active = False
                 self.registry.update(skill)
                 archived += 1
-                log.info("Archived low-performing skill: %s (success_rate=%.1f, runs=%d)",
-                         skill.name, skill.success_rate, skill.total_runs)
+                log.info(
+                    "Archived low-performing skill: %s (success_rate=%.1f, runs=%d)",
+                    skill.name,
+                    skill.success_rate,
+                    skill.total_runs,
+                )
 
         # Enforce max active skills
         active = self.registry.list_skills(active_only=True)
         if len(active) > self.max_active_skills:
             # Sort by success_rate then usage_count, deactivate the worst
             active.sort(key=lambda s: (s.success_rate, s.usage_count))
-            to_deactivate = active[:len(active) - self.max_active_skills]
+            to_deactivate = active[: len(active) - self.max_active_skills]
             for skill in to_deactivate:
                 skill.is_active = False
                 self.registry.update(skill)
@@ -579,7 +597,9 @@ class SkillManager:
         stats = self.registry.merge_duplicates(groups)
         log.info(
             "Deduplicated: merged=%d, deleted=%d, kept=%d",
-            stats["merged"], stats["deleted"], stats["kept"],
+            stats["merged"],
+            stats["deleted"],
+            stats["kept"],
         )
         return stats
 
@@ -593,7 +613,7 @@ class SkillManager:
         new_triggers: list[str] | None = None,
         improvement_note: str = "",
         metadata_updates: dict[str, Any] | None = None,
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """Improve a skill by updating its description, steps, or triggers.
 
         Args:
@@ -620,7 +640,7 @@ class SkillManager:
         self,
         skill_id: str,
         execution_result: dict[str, Any],
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """Improve a skill based on its execution result.
 
         Analyzes execution output to:
@@ -644,7 +664,7 @@ class SkillManager:
         what_worked: list[str],
         what_failed: list[str],
         what_to_avoid: list[str],
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """Improve an existing skill based on reflection output.
 
         Uses reflection insights to:
@@ -679,24 +699,27 @@ class SkillManager:
             for worked in what_worked:
                 # Check if this pattern already exists in steps
                 existing = [
-                    s for s in skill.steps
-                    if worked.lower() in s.get("description", "").lower()
+                    s for s in skill.steps if worked.lower() in s.get("description", "").lower()
                 ]
                 if not existing:
-                    skill.steps.append({
-                        "action": "apply_success_pattern",
-                        "description": worked,
-                    })
+                    skill.steps.append(
+                        {
+                            "action": "apply_success_pattern",
+                            "description": worked,
+                        }
+                    )
                     improvements.append(f"Added success pattern: {worked[:50]}")
 
         # Flag failed patterns for review
         if what_failed:
             skill.metadata.setdefault("lessons_learned", [])
             for failed in what_failed:
-                skill.metadata["lessons_learned"].append({
-                    "lesson": failed,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                skill.metadata["lessons_learned"].append(
+                    {
+                        "lesson": failed,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
             improvements.append(f"Recorded {len(what_failed)} failure lesson(s)")
 
         # Update trigger conditions based on what worked
@@ -711,12 +734,14 @@ class SkillManager:
         # Update improvement history
         if "improvement_history" not in skill.metadata:
             skill.metadata["improvement_history"] = []
-        skill.metadata["improvement_history"].append({
-            "improved_at": datetime.now(timezone.utc).isoformat(),
-            "note": f"Improved from reflection: {len(improvements)} changes",
-            "version_before": skill.version,
-            "changes": improvements,
-        })
+        skill.metadata["improvement_history"].append(
+            {
+                "improved_at": datetime.now(timezone.utc).isoformat(),
+                "note": f"Improved from reflection: {len(improvements)} changes",
+                "version_before": skill.version,
+                "changes": improvements,
+            }
+        )
 
         skill.version = self.registry._bump_version(skill.version)
         skill.updated_at = datetime.now(timezone.utc).isoformat()
@@ -762,6 +787,8 @@ class SkillManager:
 
         log.info(
             "Skill maintenance complete: dedup=%s, prune=%s, improvements=%d",
-            results["dedup"], results["prune"], results["improvements"],
+            results["dedup"],
+            results["prune"],
+            results["improvements"],
         )
         return results

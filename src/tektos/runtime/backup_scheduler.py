@@ -25,10 +25,10 @@ class BackupScheduler:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_name = f"tektos_backup_{timestamp}.db"
         backup_path = os.path.join(self.backup_dir, backup_name)
-        
+
         try:
             shutil.copy2(db_path, backup_path)
-            
+
             backup_info = {
                 "name": backup_name,
                 "path": backup_path,
@@ -36,13 +36,13 @@ class BackupScheduler:
                 "size_bytes": os.path.getsize(backup_path),
                 "success": True,
             }
-            
+
             self._backups.append(backup_info)
             self._cleanup_old_backups()
-            
+
             log.info(f"BackupScheduler: Created backup {backup_name}")
             return backup_info
-            
+
         except Exception as e:
             log.error(f"BackupScheduler: Failed to create backup: {e}")
             return {"success": False, "error": str(e)}
@@ -52,8 +52,8 @@ class BackupScheduler:
         if len(self._backups) > self.max_backups:
             # Sort by timestamp and remove oldest
             sorted_backups = sorted(self._backups, key=lambda b: b.get("timestamp", ""))
-            to_remove = sorted_backups[:len(self._backups) - self.max_backups]
-            
+            to_remove = sorted_backups[: len(self._backups) - self.max_backups]
+
             for backup in to_remove:
                 try:
                     if os.path.exists(backup["path"]):
@@ -70,7 +70,7 @@ class BackupScheduler:
         """Restore from a backup."""
         if not os.path.exists(backup_path):
             return {"success": False, "error": f"Backup not found: {backup_path}"}
-        
+
         try:
             # In production, this would restore to the actual database
             log.info(f"BackupScheduler: Restore from {backup_path}")
@@ -85,8 +85,7 @@ class BackupScheduler:
             "max_backups": self.max_backups,
             "backup_dir": self.backup_dir,
             "recent_backups": [
-                {"name": b["name"], "timestamp": b["timestamp"]}
-                for b in self._backups[-5:]
+                {"name": b["name"], "timestamp": b["timestamp"]} for b in self._backups[-5:]
             ],
         }
 

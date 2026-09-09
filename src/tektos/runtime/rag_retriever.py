@@ -16,12 +16,10 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
 import math
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -36,25 +34,58 @@ log = logging.getLogger("tektos.rag")
 # Constants
 # ---------------------------------------------------------------------------
 
-CHUNK_SIZE = 512       # tokens per chunk (approx chars)
-CHUNK_OVERLAP = 64     # overlapping tokens between chunks
+CHUNK_SIZE = 512  # tokens per chunk (approx chars)
+CHUNK_OVERLAP = 64  # overlapping tokens between chunks
 MAX_CHUNK_CHARS = 2048  # hard cap on chunk size in characters
 DEFAULT_TOP_K = 5
 SIMILARITY_THRESHOLD = 0.3  # minimum cosine similarity to return a result
 
 # File extensions to index
 CODE_EXTENSIONS = {
-    ".py", ".ts", ".tsx", ".js", ".jsx", ".html", ".css", ".scss",
-    ".json", ".yaml", ".yml", ".toml", ".md", ".txt", ".sh", ".bash",
-    ".sql", ".proto", ".graphql", ".env", ".dockerfile",
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".html",
+    ".css",
+    ".scss",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".md",
+    ".txt",
+    ".sh",
+    ".bash",
+    ".sql",
+    ".proto",
+    ".graphql",
+    ".env",
+    ".dockerfile",
 }
 
 # Directories to skip during indexing
 SKIP_DIRS = {
-    "__pycache__", ".git", ".venv", "venv", "node_modules", ".tox",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
-    ".eggs", "*.egg-info", "data", "checkpoints", "evaluations",
-    "observability", "sandbox", "tmp",
+    "__pycache__",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".eggs",
+    "*.egg-info",
+    "data",
+    "checkpoints",
+    "evaluations",
+    "observability",
+    "sandbox",
+    "tmp",
 }
 
 
@@ -62,22 +93,25 @@ SKIP_DIRS = {
 # Data classes
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RetrievalResult:
     """A single result from a RAG retrieval."""
-    source: str          # "code", "memory", "event", "file"
-    source_id: str       # file path, memory entry id, event id
-    content: str         # the chunk text
-    score: float         # cosine similarity [0, 1]
+
+    source: str  # "code", "memory", "event", "file"
+    source_id: str  # file path, memory entry id, event id
+    content: str  # the chunk text
+    score: float  # cosine similarity [0, 1]
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Chunk:
     """A chunked piece of text with its embedding."""
-    id: str              # SHA256 of (source, content)
-    source: str          # "code", "memory", "event", "file"
-    source_id: str       # file path, memory id, event id
+
+    id: str  # SHA256 of (source, content)
+    source: str  # "code", "memory", "event", "file"
+    source_id: str  # file path, memory id, event id
     content: str
     embedding: list[float] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -86,6 +120,7 @@ class Chunk:
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
+
 
 def estimate_tokens(text: str) -> int:
     """Estimate token count for a text string."""
@@ -101,9 +136,13 @@ def estimate_tokens(text: str) -> int:
     return max(1, int(tokens))
 
 
-def chunk_text(text: str, source: str, source_id: str,
-               chunk_size: int = CHUNK_SIZE,
-               chunk_overlap: int = CHUNK_OVERLAP) -> list[Chunk]:
+def chunk_text(
+    text: str,
+    source: str,
+    source_id: str,
+    chunk_size: int = CHUNK_SIZE,
+    chunk_overlap: int = CHUNK_OVERLAP,
+) -> list[Chunk]:
     """Split text into overlapping chunks with embeddings-ready IDs."""
     if not text.strip():
         return []
@@ -124,7 +163,7 @@ def chunk_text(text: str, source: str, source_id: str,
         # to avoid O(n²) on long strings
         if end < len(text):
             # Look for a boundary in the last 200 chars of the chunk
-            search_window = text[max(start, end - 200):end]
+            search_window = text[max(start, end - 200) : end]
             for pattern in [r"\n\n", r"\n", r"\.\s+", r",\s+", r"\s"]:
                 match = re.search(pattern, search_window)
                 if match:
@@ -139,13 +178,17 @@ def chunk_text(text: str, source: str, source_id: str,
             start = end + 1
             continue
 
-        chunk_id = hashlib.sha256(f"{source}:{source_id}:{chunk_idx}:{chunk_text}".encode()).hexdigest()[:16]
-        chunks.append(Chunk(
-            id=chunk_id,
-            source=source,
-            source_id=source_id,
-            content=chunk_text,
-        ))
+        chunk_id = hashlib.sha256(
+            f"{source}:{source_id}:{chunk_idx}:{chunk_text}".encode()
+        ).hexdigest()[:16]
+        chunks.append(
+            Chunk(
+                id=chunk_id,
+                source=source,
+                source_id=source_id,
+                content=chunk_text,
+            )
+        )
         chunk_idx += 1
         start = end - chunk_overlap if end < len(text) else end
 
@@ -172,8 +215,10 @@ def chunk_python_file(content: str, file_path: str) -> list[Chunk]:
         line_tokens = estimate_tokens(line)
 
         # Start a new chunk at function/class definitions if current chunk is getting large
-        if (line.strip().startswith(("def ", "class ", "async def "))
-                and current_chunk_tokens > CHUNK_SIZE // 2):
+        if (
+            line.strip().startswith(("def ", "class ", "async def "))
+            and current_chunk_tokens > CHUNK_SIZE // 2
+        ):
             flush_chunk()
 
         current_chunk_lines.append(line)
@@ -206,6 +251,7 @@ def chunk_file_content(content: str, file_path: str) -> list[Chunk]:
 # Vector math
 # ---------------------------------------------------------------------------
 
+
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     if len(a) != len(b):
@@ -229,6 +275,7 @@ def l2_normalize(vec: list[float]) -> list[float]:
 # ---------------------------------------------------------------------------
 # RAGRetriever
 # ---------------------------------------------------------------------------
+
 
 class RAGRetriever:
     """RAG retrieval service — chunks, embeds, indexes, and retrieves.
@@ -359,8 +406,12 @@ class RAGRetriever:
 
         if self._db:
             await self._db.commit()
-        log.info("Codebase indexing complete: %d files, %d chunks, %d skipped",
-                 indexed, total_chunks, skipped)
+        log.info(
+            "Codebase indexing complete: %d files, %d chunks, %d skipped",
+            indexed,
+            total_chunks,
+            skipped,
+        )
         return total_chunks
 
     async def index_memory_entries(self, entries: list[dict[str, Any]]) -> int:
@@ -428,18 +479,21 @@ class RAGRetriever:
         if chunk.embedding:
             embedding_blob = json.dumps(chunk.embedding).encode("utf-8")
 
-        await self._db.execute("""
+        await self._db.execute(
+            """
             INSERT OR REPLACE INTO chunks (id, source, source_id, content, embedding, metadata, indexed_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            chunk.id,
-            chunk.source,
-            chunk.source_id,
-            chunk.content,
-            embedding_blob,
-            json.dumps(chunk.metadata),
-            time.time(),
-        ))
+        """,
+            (
+                chunk.id,
+                chunk.source,
+                chunk.source_id,
+                chunk.content,
+                embedding_blob,
+                json.dumps(chunk.metadata),
+                time.time(),
+            ),
+        )
 
     @staticmethod
     def _extract_event_text(event: dict[str, Any]) -> str:
@@ -447,8 +501,15 @@ class RAGRetriever:
         parts = []
         payload = event.get("payload", event)
 
-        for key in ["assistant_text", "content", "message", "tool_output",
-                     "task_description", "error", "result"]:
+        for key in [
+            "assistant_text",
+            "content",
+            "message",
+            "tool_output",
+            "task_description",
+            "error",
+            "result",
+        ]:
             val = payload.get(key)
             if val and isinstance(val, str) and val.strip():
                 parts.append(val)
@@ -542,7 +603,9 @@ class RAGRetriever:
         query_vec = query_result.embeddings[0]
 
         # Fetch all chunks (or filter by source)
-        query_str = "SELECT id, source, source_id, content, metadata, indexed_at, embedding FROM chunks"
+        query_str = (
+            "SELECT id, source, source_id, content, metadata, indexed_at, embedding FROM chunks"
+        )
         params: list[Any] = []
         where_clauses = []
 
@@ -565,12 +628,12 @@ class RAGRetriever:
         # Compute similarity for each chunk
         scored: list[tuple[float, dict[str, Any]]] = []
         for row in rows:
-            chunk_id = row[0]
+            row[0]
             source = row[1]
             source_id = row[2]
             content = row[3]
             metadata_json = row[4]
-            indexed_at = row[5]
+            row[5]
             embedding_blob = row[6]
             metadata = json.loads(metadata_json) if metadata_json else {}
 
@@ -581,24 +644,31 @@ class RAGRetriever:
             sim = cosine_similarity(query_vec, chunk_vec)
 
             if sim >= min_score:
-                scored.append((sim, {
-                    "source": source,
-                    "source_id": source_id,
-                    "content": content,
-                    "metadata": metadata,
-                }))
+                scored.append(
+                    (
+                        sim,
+                        {
+                            "source": source,
+                            "source_id": source_id,
+                            "content": content,
+                            "metadata": metadata,
+                        },
+                    )
+                )
 
         # Sort by similarity and return top_k
         scored.sort(key=lambda x: x[0], reverse=True)
         results = []
         for sim, data in scored[:top_k]:
-            results.append(RetrievalResult(
-                source=data["source"],
-                source_id=data["source_id"],
-                content=data["content"],
-                score=sim,
-                metadata=data["metadata"],
-            ))
+            results.append(
+                RetrievalResult(
+                    source=data["source"],
+                    source_id=data["source_id"],
+                    content=data["content"],
+                    score=sim,
+                    metadata=data["metadata"],
+                )
+            )
 
         return results
 
@@ -643,23 +713,30 @@ class RAGRetriever:
             score = score / len(query_terms)
 
             if score >= min_score:
-                scored.append((score, {
-                    "source": source,
-                    "source_id": source_id,
-                    "content": content,
-                    "metadata": metadata,
-                }))
+                scored.append(
+                    (
+                        score,
+                        {
+                            "source": source,
+                            "source_id": source_id,
+                            "content": content,
+                            "metadata": metadata,
+                        },
+                    )
+                )
 
         scored.sort(key=lambda x: x[0], reverse=True)
         results = []
         for score, data in scored[:top_k]:
-            results.append(RetrievalResult(
-                source=data["source"],
-                source_id=data["source_id"],
-                content=data["content"],
-                score=score,
-                metadata=data["metadata"],
-            ))
+            results.append(
+                RetrievalResult(
+                    source=data["source"],
+                    source_id=data["source_id"],
+                    content=data["content"],
+                    score=score,
+                    metadata=data["metadata"],
+                )
+            )
 
         return results
 

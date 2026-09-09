@@ -26,14 +26,12 @@ from __future__ import annotations
 from typing import Any
 
 from .archetype_tracker import ArchetypeTracker
-from .guardrails import Guardrail, GUARDRAIL_RULES
 from .metrics import PrimeMoverMetrics
 from .models import (
     FeedbackSeverity,
     FeedbackType,
     ManagerFeedback,
     ManagerState,
-    SpiralDirection,
 )
 
 
@@ -69,7 +67,15 @@ class Manager:
     ) -> None:
         """Called when a task starts. Updates state and metrics."""
         self.state = ManagerState.ACTIVE
-        self.metrics.record("latency", 0.0, who="S3 Manager", what="task_started", where=f"task:{task_id}", why="task lifecycle", how="automatic")
+        self.metrics.record(
+            "latency",
+            0.0,
+            who="S3 Manager",
+            what="task_started",
+            where=f"task:{task_id}",
+            why="task lifecycle",
+            how="automatic",
+        )
         # Reset latency tracking
         self._task_start_time = kwargs.get("timestamp")
 
@@ -83,14 +89,54 @@ class Manager:
     ) -> None:
         """Called when a task completes. Updates metrics and checks guardrails."""
         self._task_start_time = None
-        self.metrics.record("latency", kwargs.get("elapsed", 0.0), who="S3 Manager", what="task_complete", where=f"task:{task_id}", why="task lifecycle", how="automatic")
+        self.metrics.record(
+            "latency",
+            kwargs.get("elapsed", 0.0),
+            who="S3 Manager",
+            what="task_complete",
+            where=f"task:{task_id}",
+            why="task lifecycle",
+            how="automatic",
+        )
 
         if success:
-            self.metrics.record("error_rate", 0.0, who="S3 Manager", what="task_success", where=f"task:{task_id}", why="task lifecycle", how="automatic")
-            self.metrics.record("token_efficiency", tokens_used / max(1, tools_used), who="S3 Manager", what="token_efficiency", where=f"task:{task_id}", why="performance tracking", how="automatic")
-            self.metrics.record("tool_success_ratio", 1.0, who="S3 Manager", what="tool_success", where=f"task:{task_id}", why="performance tracking", how="automatic")
+            self.metrics.record(
+                "error_rate",
+                0.0,
+                who="S3 Manager",
+                what="task_success",
+                where=f"task:{task_id}",
+                why="task lifecycle",
+                how="automatic",
+            )
+            self.metrics.record(
+                "token_efficiency",
+                tokens_used / max(1, tools_used),
+                who="S3 Manager",
+                what="token_efficiency",
+                where=f"task:{task_id}",
+                why="performance tracking",
+                how="automatic",
+            )
+            self.metrics.record(
+                "tool_success_ratio",
+                1.0,
+                who="S3 Manager",
+                what="tool_success",
+                where=f"task:{task_id}",
+                why="performance tracking",
+                how="automatic",
+            )
         else:
-            self.metrics.record("error_rate", 1.0, who="S3 Manager", what="task_failure", where=f"task:{task_id}", why="error tracking", how="automatic")
+            self.metrics.record(
+                "error_rate",
+                1.0,
+                who="S3 Manager",
+                what="task_failure",
+                where=f"task:{task_id}",
+                why="error tracking",
+                how="automatic",
+            )
 
         self.state = ManagerState.IDLE
 
@@ -268,4 +314,5 @@ class Manager:
 
     def _now(self) -> str:
         from datetime import datetime, timezone
+
         return datetime.now(timezone.utc).isoformat()

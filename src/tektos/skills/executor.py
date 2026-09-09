@@ -13,13 +13,10 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .registry import Skill
 
@@ -114,10 +111,14 @@ class SkillExecutor:
         log.info("[EXECUTOR] Starting skill: %s (%d steps)", skill.name, len(skill.steps))
 
         # Emit start event
-        await self._emit_event(skill.id, "execution.started", {
-            "skill_name": skill.name,
-            "steps_count": len(skill.steps),
-        })
+        await self._emit_event(
+            skill.id,
+            "execution.started",
+            {
+                "skill_name": skill.name,
+                "steps_count": len(skill.steps),
+            },
+        )
 
         # Execute steps in order
         for i, step in enumerate(skill.steps[:max_steps]):
@@ -127,8 +128,8 @@ class SkillExecutor:
             try:
                 step_result = await self._execute_step(step, context, i)
                 step_result.duration_ms = (
-                    (datetime.now(timezone.utc) - step_start).total_seconds() * 1000
-                )
+                    datetime.now(timezone.utc) - step_start
+                ).total_seconds() * 1000
                 result.step_results.append(step_result)
                 result.steps_executed += 1
 
@@ -141,18 +142,22 @@ class SkillExecutor:
                     result.steps_failed += 1
                     log.warning(
                         "[EXECUTOR] Step %d failed in skill %s: %s",
-                        i, skill.name, step_result.error,
+                        i,
+                        skill.name,
+                        step_result.error,
                     )
                     # On failure, stop execution (fail-fast)
                     break
 
             except Exception as e:
-                result.step_results.append(StepResult(
-                    step_index=i,
-                    action=action,
-                    success=False,
-                    error=str(e),
-                ))
+                result.step_results.append(
+                    StepResult(
+                        step_index=i,
+                        action=action,
+                        success=False,
+                        error=str(e),
+                    )
+                )
                 result.steps_executed += 1
                 result.steps_failed += 1
                 log.exception("[EXECUTOR] Exception in step %d of skill %s", i, skill.name)
@@ -160,23 +165,25 @@ class SkillExecutor:
 
         # Determine overall success
         result.success = result.steps_failed == 0 and result.steps_executed > 0
-        result.output = "\n".join(
-            sr.output for sr in result.step_results if sr.output
+        result.output = "\n".join(sr.output for sr in result.step_results if sr.output)
+        result.error = (
+            result.step_results[-1].error if result.step_results and not result.success else ""
         )
-        result.error = result.step_results[-1].error if result.step_results and not result.success else ""
-        result.duration_ms = (
-            (datetime.now(timezone.utc) - start).total_seconds() * 1000
-        )
+        result.duration_ms = (datetime.now(timezone.utc) - start).total_seconds() * 1000
 
         # Emit completion event
-        await self._emit_event(skill.id, "execution.complete", {
-            "skill_name": skill.name,
-            "success": result.success,
-            "steps_executed": result.steps_executed,
-            "steps_succeeded": result.steps_succeeded,
-            "steps_failed": result.steps_failed,
-            "duration_ms": result.duration_ms,
-        })
+        await self._emit_event(
+            skill.id,
+            "execution.complete",
+            {
+                "skill_name": skill.name,
+                "success": result.success,
+                "steps_executed": result.steps_executed,
+                "steps_succeeded": result.steps_succeeded,
+                "steps_failed": result.steps_failed,
+                "duration_ms": result.duration_ms,
+            },
+        )
 
         log.info(
             "[EXECUTOR] Skill %s: %s (%d/%d steps succeeded, %.0fms)",
@@ -330,9 +337,7 @@ class SkillExecutor:
         """Send a prompt to the LLM."""
         try:
             if self.runtime_sdk:
-                messages = args.get("messages", [
-                    {"role": "user", "content": prompt}
-                ])
+                messages = args.get("messages", [{"role": "user", "content": prompt}])
                 result = await self.runtime_sdk.chat(messages)
                 return StepResult(
                     step_index=0,
@@ -493,9 +498,12 @@ class SkillExecutor:
         """Emit an execution event."""
         if self.event_bus:
             try:
-                self.event_bus.emit(f"skill.{event_type}", {
-                    "skill_id": skill_id,
-                    **data,
-                })
+                self.event_bus.emit(
+                    f"skill.{event_type}",
+                    {
+                        "skill_id": skill_id,
+                        **data,
+                    },
+                )
             except Exception as e:
                 log.warning("Failed to emit skill event: %s", e)

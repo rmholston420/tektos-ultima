@@ -11,9 +11,7 @@ Protocol:
 
 from __future__ import annotations
 
-import json
 import logging
-import time
 from typing import Any
 
 log = logging.getLogger("tektos.mcp")
@@ -22,7 +20,9 @@ log = logging.getLogger("tektos.mcp")
 class MCPRequest:
     """JSON-RPC 2.0 request/response wrapper."""
 
-    def __init__(self, method: str, params: dict | None = None, request_id: int | str | None = None):
+    def __init__(
+        self, method: str, params: dict | None = None, request_id: int | str | None = None
+    ):
         self.method = method
         self.params = params or {}
         self.request_id = request_id
@@ -307,18 +307,20 @@ def handle_mcp_request(request: MCPRequest) -> dict:
 
 def _handle_initialize(request: MCPRequest) -> dict:
     """Handle MCP initialization handshake."""
-    return request.to_response({
-        "protocolVersion": "2024-11-05",
-        "capabilities": {
-            "tools": {
-                "listChanged": False,
+    return request.to_response(
+        {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {
+                    "listChanged": False,
+                },
             },
-        },
-        "serverInfo": {
-            "name": "tektos-mcp",
-            "version": "0.1.0",
-        },
-    })
+            "serverInfo": {
+                "name": "tektos-mcp",
+                "version": "0.1.0",
+            },
+        }
+    )
 
 
 def _handle_tools_list(request: MCPRequest) -> dict:

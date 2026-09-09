@@ -36,6 +36,8 @@ Thumbs.db
 # Last known state (session-specific, not for repo)
 LAST_KNOWN_STATE.md
 SESSION_HANDOFF.md
+SESSION_BRIEF.md
+SESSION_REFLECTION*.md
 
 # Test artifacts
 .pytest_cache/
@@ -67,13 +69,46 @@ frontend/coverage/
 ESTIMATION-CALIBRATION.md
 RESEARCH_CDP_WAYLAND.md
 
-# Scratch scripts
+# Scratch scripts / agent sandboxes
 scraper.py
 script.py
+watch_tektos*.py
+sandbox/
+sandbox_*/
+loop_workspace/
+tmp/
+checkpoints/
+agent_test.txt
+tektos_task.txt
+test_simple.md
+test_saaS.md
+sse-live-demo.html
+test-ws-prompt.py
+ws_test.py
 
-# Test scratch files
+# Test scratch files (root-level agent-generated demos)
 test_lru_cache.py
 test_task_stack.py
+/test_*.py
+/*_demo.py
+/demo_*.py
+/live_demo*.py
+
+# Frontend scratch scripts (agent-generated demos)
+frontend/check-*.js
+frontend/debug-*.js
+frontend/demo-*.js
+frontend/find-*.js
+frontend/live-*.js
+frontend/quick-*.js
+frontend/real-*.js
+frontend/test_drive.py
+frontend/demo-screenshots/
+frontend/demo-report.html
+
+# GUI test outputs
+gui-test-screenshots/
+gui-test-traces/
 
 # Archive exports
 *.zip

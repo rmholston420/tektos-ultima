@@ -11,7 +11,6 @@ inspired by OpenHands and Claude Code's delegation patterns. Key features:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import subprocess
@@ -26,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 class AgentRole(Enum):
     """Roles that agents can take in the orchestration system."""
+
     WORKER = "worker"  # Executes tasks
     COORDINATOR = "coordinator"  # Manages other agents
     REVIEWER = "reviewer"  # Reviews and validates work
@@ -34,6 +34,7 @@ class AgentRole(Enum):
 
 class TaskStatus(Enum):
     """Status of a task in the orchestration system."""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -143,8 +144,9 @@ class MultiAgentOrchestrator:
         for agent in default_agents:
             self.agents[agent.agent_id] = agent
 
-    def create_task(self, description: str, priority: int = 0,
-                   dependencies: list[str] | None = None) -> str:
+    def create_task(
+        self, description: str, priority: int = 0, dependencies: list[str] | None = None
+    ) -> str:
         """Create a new task.
 
         Args:
@@ -197,16 +199,20 @@ class MultiAgentOrchestrator:
                 has_capability = True
                 break
             # Keyword match: "read" in "read_file" matches "read" in description
-            keywords = cap_lower.split('_')
+            keywords = cap_lower.split("_")
             if any(kw in desc_lower for kw in keywords if len(kw) > 2):
                 has_capability = True
                 break
             # Agent-specific: terminal_agent handles "run", "execute", "command"
-            if agent.agent_id == "terminal_agent" and any(kw in desc_lower for kw in ['run', 'execute', 'command', 'cmd']):
+            if agent.agent_id == "terminal_agent" and any(
+                kw in desc_lower for kw in ["run", "execute", "command", "cmd"]
+            ):
                 has_capability = True
                 break
             # Reviewer handles "review", "check", "validate", "analyze"
-            if agent.agent_id == "reviewer_agent" and any(kw in desc_lower for kw in ['review', 'check', 'validate', 'analyze']):
+            if agent.agent_id == "reviewer_agent" and any(
+                kw in desc_lower for kw in ["review", "check", "validate", "analyze"]
+            ):
                 has_capability = True
                 break
 
@@ -288,25 +294,30 @@ class MultiAgentOrchestrator:
 
         # File agent — real file operations
         if agent.agent_id == "file_agent":
-            if any(kw in description_lower for kw in ['read', 'open', 'view', 'show']):
+            if any(kw in description_lower for kw in ["read", "open", "view", "show"]):
                 # Extract file path from description (handle both quoted and unquoted)
                 path_match = re.search(r'["\']([^"\']+)["\']', task.description)
                 if not path_match:
                     # Try to find a file path (starts with / or ./)
-                    path_match = re.search(r'(/[a-zA-Z0-9._/-]+)', task.description)
+                    path_match = re.search(r"(/[a-zA-Z0-9._/-]+)", task.description)
                 if path_match:
                     path = path_match.group(1)
                     try:
-                        with open(path, 'r') as f:
+                        with open(path) as f:
                             content = f.read()
-                        return {"type": "file_content", "path": path, "content": content[:4096], "size": len(content)}
+                        return {
+                            "type": "file_content",
+                            "path": path,
+                            "content": content[:4096],
+                            "size": len(content),
+                        }
                     except Exception as e:
                         return {"type": "error", "error": str(e)}
                 return {"type": "error", "error": "No file path found in description"}
-            elif any(kw in description_lower for kw in ['write', 'create', 'save', 'make']):
+            elif any(kw in description_lower for kw in ["write", "create", "save", "make"]):
                 path_match = re.search(r'["\']([^"\']+)["\']', task.description)
                 if not path_match:
-                    path_match = re.search(r'(/[a-zA-Z0-9._/-]+)', task.description)
+                    path_match = re.search(r"(/[a-zA-Z0-9._/-]+)", task.description)
                 if path_match:
                     path = path_match.group(1)
                     # Extract content from description - find the last quoted string
@@ -316,28 +327,41 @@ class MultiAgentOrchestrator:
                     content = content_match.group(1) if content_match else f"Content for {path}"
                     try:
                         import os
-                        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-                        with open(path, 'w') as f:
+
+                        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                        with open(path, "w") as f:
                             f.write(content)
                         return {"type": "file_created", "path": path, "size": len(content)}
                     except Exception as e:
                         return {"type": "error", "error": str(e)}
                 return {"type": "error", "error": "No file path found in description"}
-            elif any(kw in description_lower for kw in ['search', 'find', 'grep', 'look']):
+            elif any(kw in description_lower for kw in ["search", "find", "grep", "look"]):
                 try:
                     # Extract search pattern
-                    pattern_match = re.search(r'(?:search|find|grep)\s+["\']?([^"\']+)["\']?', task.description)
+                    pattern_match = re.search(
+                        r'(?:search|find|grep)\s+["\']?([^"\']+)["\']?', task.description
+                    )
                     pattern = pattern_match.group(1) if pattern_match else task.description
                     result = subprocess.run(
-                        ['grep', '-r', '--include=*.py', '-l', pattern, '.'],
-                        capture_output=True, text=True, timeout=30
+                        ["grep", "-r", "--include=*.py", "-l", pattern, "."],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
                     )
-                    files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
-                    return {"type": "search_results", "pattern": pattern, "matches": len(files), "files": files[:20]}
+                    files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+                    return {
+                        "type": "search_results",
+                        "pattern": pattern,
+                        "matches": len(files),
+                        "files": files[:20],
+                    }
                 except Exception as e:
                     return {"type": "error", "error": str(e)}
-            elif any(kw in description_lower for kw in ['patch', 'edit', 'modify', 'change']):
-                return {"type": "error", "error": "Patch operations require interactive tool access"}
+            elif any(kw in description_lower for kw in ["patch", "edit", "modify", "change"]):
+                return {
+                    "type": "error",
+                    "error": "Patch operations require interactive tool access",
+                }
             else:
                 return {"type": "general", "message": f"File agent: {task.description}"}
 
@@ -346,7 +370,11 @@ class MultiAgentOrchestrator:
             try:
                 # Extract command from description (case-insensitive)
                 # Try "Run command 'cmd'" or "Run 'cmd'" or "Execute 'cmd'"
-                cmd_match = re.search(r'(?:run|execute)\s+(?:command\s+)?["\']?([^"\']+)["\']?', task.description, re.IGNORECASE)
+                cmd_match = re.search(
+                    r'(?:run|execute)\s+(?:command\s+)?["\']?([^"\']+)["\']?',
+                    task.description,
+                    re.IGNORECASE,
+                )
                 if cmd_match:
                     cmd = cmd_match.group(1)
                     result = subprocess.run(
@@ -373,18 +401,21 @@ class MultiAgentOrchestrator:
         elif agent.agent_id == "reviewer_agent":
             path_match = re.search(r'["\']([^"\']+)["\']', task.description)
             if not path_match:
-                path_match = re.search(r'(\S+\.(?:toml|py|md|txt|json|yaml|yml|cfg|ini|sh|bash|html|css|js|ts|tsx|jsx|sql|db|sqlite))', task.description)
+                path_match = re.search(
+                    r"(\S+\.(?:toml|py|md|txt|json|yaml|yml|cfg|ini|sh|bash|html|css|js|ts|tsx|jsx|sql|db|sqlite))",
+                    task.description,
+                )
             if path_match:
                 path = path_match.group(1)
                 try:
-                    with open(path, 'r') as f:
+                    with open(path) as f:
                         content = f.read()
-                    lines = content.split('\n')
+                    lines = content.split("\n")
                     issues = []
                     for i, line in enumerate(lines, 1):
                         if len(line) > 120:
                             issues.append(f"Line {i}: too long ({len(line)} chars)")
-                        if '\t' in line:
+                        if "\t" in line:
                             issues.append(f"Line {i}: contains tab character")
                     return {
                         "type": "review_result",
@@ -416,9 +447,8 @@ class MultiAgentOrchestrator:
 
         # Assign tasks to available agents
         available_agents = [
-            agent for agent in self.agents.values()
-            if agent.status == TaskStatus.PENDING
-        ][:self.max_concurrent_agents]
+            agent for agent in self.agents.values() if agent.status == TaskStatus.PENDING
+        ][: self.max_concurrent_agents]
 
         for i, task_id in enumerate(task_ids):
             if i < len(available_agents):
@@ -440,8 +470,7 @@ class MultiAgentOrchestrator:
 
         # Calculate agent utilization
         active_agents = sum(
-            1 for agent in self.agents.values()
-            if agent.status == TaskStatus.RUNNING
+            1 for agent in self.agents.values() if agent.status == TaskStatus.RUNNING
         )
         utilization = active_agents / len(self.agents) if self.agents else 0.0
 
@@ -505,6 +534,8 @@ class MultiAgentOrchestrator:
                 reconciled["summary"].append(f"Task {task_id}: {result.get('result', 'Completed')}")
             else:
                 reconciled["failed"] += 1
-                reconciled["errors"].append(f"Task {task_id}: {result.get('error', 'Unknown error')}")
+                reconciled["errors"].append(
+                    f"Task {task_id}: {result.get('error', 'Unknown error')}"
+                )
 
         return reconciled

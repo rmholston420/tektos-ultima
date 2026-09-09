@@ -8,7 +8,7 @@ approach is working and suggests corrections if not.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger("tektos.evaluator")
@@ -17,6 +17,7 @@ log = logging.getLogger("tektos.evaluator")
 @dataclass
 class EvaluationResult:
     """Result of an external evaluation."""
+
     passed: bool
     message: str
     suggestion: str | None = None
@@ -47,16 +48,18 @@ class ExternalEvaluator:
         Returns:
             EvaluationResult with pass/fail status and suggestions
         """
-        self._history.append({
-            "tool_name": tool_name,
-            "tool_input": tool_input,
-            "result": result,
-            "timestamp": __import__("time").monotonic(),
-        })
+        self._history.append(
+            {
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "result": result,
+                "timestamp": __import__("time").monotonic(),
+            }
+        )
 
         # Keep history bounded
         if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history:]
+            self._history = self._history[-self._max_history :]
 
         # Check for common failure patterns
         if "Error" in result or "error" in result:

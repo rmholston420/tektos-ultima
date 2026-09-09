@@ -12,8 +12,8 @@ import json
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger("tektos.loop_guard")
 
@@ -21,6 +21,7 @@ logger = logging.getLogger("tektos.loop_guard")
 @dataclass
 class ToolCallHash:
     """Hash of a tool call for loop detection."""
+
     tool_name: str
     arg_hash: str  # SHA-256 of sorted JSON args
     timestamp: float
@@ -47,13 +48,19 @@ class ToolCallLoopGuard:
         sorted_json = json.dumps(args, sort_keys=True, default=str)
         return hashlib.sha256(sorted_json.encode()).hexdigest()[:16]
 
-    def record_call(self, tool_name: str, args: dict[str, Any], result: str = "ok") -> dict[str, Any]:
+    def record_call(
+        self, tool_name: str, args: dict[str, Any], result: str = "ok"
+    ) -> dict[str, Any]:
         """Record a tool call and check for loops."""
         arg_hash = self._hash_args(args)
-        call = ToolCallHash(tool_name=tool_name, arg_hash=arg_hash, timestamp=time.time(), result=result)
+        call = ToolCallHash(
+            tool_name=tool_name, arg_hash=arg_hash, timestamp=time.time(), result=result
+        )
         self._calls.append(call)
 
-        identical = sum(1 for c in self._calls if c.tool_name == tool_name and c.arg_hash == arg_hash)
+        identical = sum(
+            1 for c in self._calls if c.tool_name == tool_name and c.arg_hash == arg_hash
+        )
 
         if identical >= self.block_threshold:
             self._phase = "blocked"
@@ -91,7 +98,7 @@ class ToolCallLoopGuard:
         self._phase = "normal"
 
 
-_guard: Optional[ToolCallLoopGuard] = None
+_guard: ToolCallLoopGuard | None = None
 
 
 def get_guard() -> ToolCallLoopGuard:

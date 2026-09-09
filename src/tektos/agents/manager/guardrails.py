@@ -115,8 +115,7 @@ GUARDRAIL_RULES: dict[Guardrail, dict[str, str]] = {
         "isolation per task.",
     },
     Guardrail.REDACTION_POLICY: {
-        "description": "All sensitive data must be redacted from logs, outputs, "
-        "and Trail.",
+        "description": "All sensitive data must be redacted from logs, outputs, and Trail.",
         "level": GuardrailLevel.HARD,
         "enforcement": "Output filter runs on all manager and agent outputs. "
         "Patterns: API keys, tokens, passwords, connection strings.",

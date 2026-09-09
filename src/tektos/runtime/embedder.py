@@ -27,6 +27,7 @@ log = logging.getLogger("tektos.embedder")
 @dataclass
 class EmbeddingResult:
     """Result of embedding one or more texts."""
+
     model: str
     embeddings: list[list[float]]  # list of vectors
     usage: dict[str, int]  # prompt_tokens, total_tokens
@@ -36,6 +37,7 @@ class EmbeddingResult:
 @dataclass
 class SimilarityMatch:
     """A single match from similarity search."""
+
     index: int
     text: str
     score: float  # cosine similarity [0, 1]
@@ -51,7 +53,11 @@ class EmbedderClient:
         POST /v1/embeddings   — generate embeddings
     """
 
-    def __init__(self, llm_base_url: str = "http://127.0.0.1:8091/v1", model: str = "Qwen3-Embedding-0.6B-Q8_0"):
+    def __init__(
+        self,
+        llm_base_url: str = "http://127.0.0.1:8091/v1",
+        model: str = "Qwen3-Embedding-0.6B-Q8_0",
+    ):
         self._base_url = llm_base_url.rstrip("/")
         self._model = model
         self._client: httpx.AsyncClient | None = None
@@ -163,6 +169,7 @@ class EmbedderClient:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""

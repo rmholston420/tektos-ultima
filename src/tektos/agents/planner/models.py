@@ -13,10 +13,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_serializer
-
 
 # ── Language Game (Wittgenstein) ──────────────────────────────────────────
 
@@ -65,9 +64,7 @@ class ClarifyingQuestion(BaseModel):
     question: str
     options: list[str]
     default: str = Field(..., description="Optimal default if user says 'decide for me'")
-    reason: str = Field(
-        ..., description="Why this question is being asked"
-    )
+    reason: str = Field(..., description="Why this question is being asked")
 
 
 # ── Architecture Template ────────────────────────────────────────────────
@@ -109,9 +106,7 @@ class ArchitectureChoice(BaseModel):
     """User's selection of an architecture template."""
 
     selected: str = Field(..., description="Name of the chosen template")
-    reason: str = Field(
-        ..., description="Why this template was chosen"
-    )
+    reason: str = Field(..., description="Why this template was chosen")
     is_user_choice: bool = Field(
         ..., description="True if user chose, False if system decided optimally"
     )
@@ -129,9 +124,7 @@ class SpecPhase(BaseModel):
     acceptance_criteria: list[str] = Field(
         default_factory=list, description="Measurable criteria for phase completion"
     )
-    estimated_effort: str = Field(
-        default="unknown", description="Rough effort estimate (S/M/L/XL)"
-    )
+    estimated_effort: str = Field(default="unknown", description="Rough effort estimate (S/M/L/XL)")
 
 
 # ── 5W1H Definition Schema ─────────────────────────────────────────────────
@@ -171,9 +164,7 @@ class BuildSpec(BaseModel):
 
     id: str = Field(default_factory=lambda: f"spec-{uuid.uuid4().hex[:8]}")
     version: str = Field(default="1.0")
-    created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     language_game: LanguageGame = LanguageGame.GENERAL
     original_prompt: str
     translated_prompt: str  # Proper Technical English
@@ -181,9 +172,7 @@ class BuildSpec(BaseModel):
     requirements: list[str]
     constraints: list[str] = Field(default_factory=list)
     tech_stack: list[str] = Field(default_factory=list)
-    test_strategy: str = Field(
-        default="spec-driven", description="tdd or spec-driven"
-    )
+    test_strategy: str = Field(default="spec-driven", description="tdd or spec-driven")
     architecture: ArchitectureChoice
     phases: list[SpecPhase]
     context_budget_warning: str | None = None  # If spec is too large
@@ -229,9 +218,7 @@ class PlannerOutput(BaseModel):
     spec: BuildSpec
     language_game_detected: LanguageGame
     ambiguities_found: list[Ambiguity] = Field(default_factory=list)
-    ambiguities_resolved: list[tuple[Ambiguity, AmbiguityResolution]] = Field(
-        default_factory=list
-    )
+    ambiguities_resolved: list[tuple[Ambiguity, AmbiguityResolution]] = Field(default_factory=list)
     clarifying_questions_asked: list[ClarifyingQuestion] = Field(default_factory=list)
     templates_presented: list[str] = Field(default_factory=list)
     context_budget_used: int = 0

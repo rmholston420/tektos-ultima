@@ -35,9 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import subprocess
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +50,7 @@ log = logging.getLogger("tektos.gitops")
 @dataclass
 class GitStatus:
     """Current git repository status."""
+
     path: str
     branch: str
     dirty: bool
@@ -81,6 +80,7 @@ class GitStatus:
 @dataclass
 class GitDiff:
     """Git diff between current state and HEAD."""
+
     path: str
     staged: list[str] = field(default_factory=list)
     unstaged: list[str] = field(default_factory=list)
@@ -96,6 +96,7 @@ class GitDiff:
 @dataclass
 class GitSnapshot:
     """A named snapshot (branch + commit) for rollback."""
+
     name: str
     commit: str
     branch: str
@@ -200,7 +201,11 @@ class GitOpsEngine:
         ]
 
         # Check ahead/behind
-        ahead = self._git(["rev-list", "--left-right", "HEAD...origin/HEAD"]).count("<") if self._git(["remote", "get-url", "origin"], check=False) else 0
+        ahead = (
+            self._git(["rev-list", "--left-right", "HEAD...origin/HEAD"]).count("<")
+            if self._git(["remote", "get-url", "origin"], check=False)
+            else 0
+        )
 
         return GitStatus(
             path=str(self.repo_path),
@@ -273,11 +278,14 @@ class GitOpsEngine:
         if result:
             commit_hash = self._git(["rev-parse", "HEAD"])
             log.info(f"Committed: {message} ({commit_hash[:8]})")
-            self._emit("committed", {
-                "message": message,
-                "commit": commit_hash[:8],
-                "files": paths or status.staged_files,
-            })
+            self._emit(
+                "committed",
+                {
+                    "message": message,
+                    "commit": commit_hash[:8],
+                    "files": paths or status.staged_files,
+                },
+            )
             return commit_hash
         return None
 
@@ -352,11 +360,14 @@ class GitOpsEngine:
             mode = "--hard" if hard else "--soft"
             self._git(["reset", mode, target])
             log.info(f"Rolled back to commit: {target[:8]} ({'hard' if hard else 'soft'})")
-            self._emit("rollback", {
-                "target": target,
-                "hard": hard,
-                "previous_branch": status.branch,
-            })
+            self._emit(
+                "rollback",
+                {
+                    "target": target,
+                    "hard": hard,
+                    "previous_branch": status.branch,
+                },
+            )
             return True
         else:
             log.error(f"Unknown target: {target}")
@@ -395,13 +406,15 @@ class GitOpsEngine:
                 continue
             parts = line.split("|", 3)
             if len(parts) == 4:
-                commits.append({
-                    "hash": parts[0][:8],
-                    "full_hash": parts[0],
-                    "message": parts[1],
-                    "author": parts[2],
-                    "date": parts[3],
-                })
+                commits.append(
+                    {
+                        "hash": parts[0][:8],
+                        "full_hash": parts[0],
+                        "message": parts[1],
+                        "author": parts[2],
+                        "date": parts[3],
+                    }
+                )
         return commits
 
     # ─── Event Bus ──────────────────────────────────────────────────────

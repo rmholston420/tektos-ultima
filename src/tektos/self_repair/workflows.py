@@ -18,13 +18,11 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any
 
 from .models import (
-    DegradationLevel,
     RepairResult,
     RepairStrategy,
 )
@@ -38,6 +36,7 @@ class HealingWorkflow:
     Workflows handle complex scenarios that require coordinated
     multi-step repair actions.
     """
+
     name: str = "base"
     triggers: list[str] = []  # Threat categories that trigger this workflow
     min_severity: int = 1
@@ -59,6 +58,7 @@ class GPUThermalCrisisWorkflow(HealingWorkflow):
         3. Long-term: Maximize fan speed, alert admin
         4. Fallback: If still critical, halt all inference
     """
+
     name = "gpu_thermal_crisis"
     triggers = ["resource_exhaustion"]
     min_severity = 2  # HIGH and above
@@ -117,6 +117,7 @@ class ContextCollapseWorkflow(HealingWorkflow):
         3. Reset: If still full, reset session
         4. Fallback: If still failing, degrade gracefully
     """
+
     name = "context_collapse"
     triggers = ["context_collapse", "context_overflow"]
     min_severity = 1
@@ -171,6 +172,7 @@ class LoopRecoveryWorkflow(HealingWorkflow):
         3. Intervention: Force new approach
         4. Escalation: If still looping, notify user
     """
+
     name = "loop_recovery"
     triggers = ["loop_detected", "repetition"]
     min_severity = 1
@@ -216,6 +218,7 @@ class InfrastructureRecoveryWorkflow(HealingWorkflow):
         3. If restart fails, switch to fallback
         4. If no fallback, degrade gracefully
     """
+
     name = "infrastructure_recovery"
     triggers = ["infrastructure_failure", "model_unavailable", "embedder_unavailable"]
     min_severity = 1
@@ -265,6 +268,7 @@ class SelfDegradationRecoveryWorkflow(HealingWorkflow):
         3. If tests pass, log the bad modification
         4. If tests fail, escalate to user
     """
+
     name = "self_degradation_recovery"
     triggers = ["self_degradation"]
     min_severity = 2
@@ -307,6 +311,7 @@ class PromptInjectionResponseWorkflow(HealingWorkflow):
         3. Log injection pattern
         4. Alert admin
     """
+
     name = "prompt_injection_response"
     triggers = ["prompt_injection", "secret_exposure"]
     min_severity = 1
@@ -396,8 +401,12 @@ class RepairWorkflows:
                 error=f"No workflow found for category={category}, severity={severity}",
             )
 
-        log.info("[RepairWorkflows] Running workflow '%s' for %s (severity=%s)",
-                 workflow.name, category, severity)
+        log.info(
+            "[RepairWorkflows] Running workflow '%s' for %s (severity=%s)",
+            workflow.name,
+            category,
+            severity,
+        )
 
         return await workflow.run(ctx)
 

@@ -50,17 +50,15 @@ Usage:
 from __future__ import annotations
 
 import csv
-import io
 import json
 import logging
-import os
 import shutil
 import sqlite3
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 log = logging.getLogger("tektos.db_manager")
 
@@ -79,6 +77,7 @@ BACKUP_RETENTION_DAYS = 30
 @dataclass
 class ColumnInfo:
     """Information about a single column."""
+
     cid: int
     name: str
     col_type: str
@@ -92,6 +91,7 @@ class ColumnInfo:
 @dataclass
 class IndexInfo:
     """Information about a single index."""
+
     name: str
     table: str
     unique: bool
@@ -101,6 +101,7 @@ class IndexInfo:
 @dataclass
 class TableInfo:
     """Information about a single table."""
+
     name: str
     columns: list[ColumnInfo] = field(default_factory=list)
     indexes: list[IndexInfo] = field(default_factory=list)
@@ -113,6 +114,7 @@ class TableInfo:
 @dataclass
 class SchemaSnapshot:
     """Complete schema snapshot at a point in time."""
+
     version: int
     tables: dict[str, TableInfo] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -121,6 +123,7 @@ class SchemaSnapshot:
 @dataclass
 class AnalysisResult:
     """Analysis result for a single table."""
+
     table_name: str
     row_count: int
     column_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -134,6 +137,7 @@ class AnalysisResult:
 @dataclass
 class BackupInfo:
     """Information about a backup."""
+
     path: str
     timestamp: float
     size_bytes: int
@@ -172,7 +176,8 @@ class SchemaManager:
         """Escape a SQL identifier safely."""
         # Only allow alphanumeric + underscore, max 64 chars
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", name):
             raise ValueError(f"Invalid identifier: {name}")
         return f'"{name}"'
 
@@ -196,13 +201,12 @@ class SchemaManager:
             True if table was created, False if it already existed.
         """
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', table_name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", table_name):
             raise ValueError(f"Invalid table name: {table_name}")
 
         if len(columns) > MAX_COLUMNS_PER_TABLE:
-            raise ValueError(
-                f"Too many columns: {len(columns)} > {MAX_COLUMNS_PER_TABLE}"
-            )
+            raise ValueError(f"Too many columns: {len(columns)} > {MAX_COLUMNS_PER_TABLE}")
 
         with self._connect() as conn:
             # Check if table already exists
@@ -217,7 +221,7 @@ class SchemaManager:
 
             col_defs = []
             for col_name, col_type in columns.items():
-                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', col_name):
+                if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", col_name):
                     raise ValueError(f"Invalid column name: {col_name}")
                 col_defs.append(f"{self._safe_identifier(col_name)} {col_type}")
 
@@ -282,9 +286,7 @@ class SchemaManager:
             if notnull:
                 col_def += " NOT NULL"
 
-            conn.execute(
-                f"ALTER TABLE {self._safe_identifier(table_name)} ADD COLUMN {col_def}"
-            )
+            conn.execute(f"ALTER TABLE {self._safe_identifier(table_name)} ADD COLUMN {col_def}")
             log.info("Added column '%s' to table '%s'", column_name, table_name)
             return True
 
@@ -323,15 +325,14 @@ class SchemaManager:
                 f"RENAME TO {self._safe_identifier(table_name)}"
             )
 
-            log.info(
-                "Dropped column '%s' from table '%s'", column_name, table_name
-            )
+            log.info("Dropped column '%s' from table '%s'", column_name, table_name)
             return True
 
     def rename_table(self, old_name: str, new_name: str) -> bool:
         """Rename a table."""
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', new_name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", new_name):
             raise ValueError(f"Invalid table name: {new_name}")
 
         with self._connect() as conn:
@@ -404,9 +405,7 @@ class SchemaManager:
             log.info("Dropped index: %s", index_name)
             return True
 
-    def rename_column(
-        self, table_name: str, old_name: str, new_name: str
-    ) -> bool:
+    def rename_column(self, table_name: str, old_name: str, new_name: str) -> bool:
         """
         Rename a column.
 
@@ -414,7 +413,8 @@ class SchemaManager:
         Falls back to table recreation for older versions.
         """
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', new_name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", new_name):
             raise ValueError(f"Invalid column name: {new_name}")
 
         with self._connect() as conn:
@@ -454,7 +454,9 @@ class SchemaManager:
 
             log.info(
                 "Renamed column '%s' → '%s' in table '%s'",
-                old_name, new_name, table_name,
+                old_name,
+                new_name,
+                table_name,
             )
             return True
 
@@ -471,7 +473,8 @@ class DataAnalyzer:
     def _safe_identifier(self, name: str) -> str:
         """Escape a SQL identifier safely."""
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", name):
             raise ValueError(f"Invalid identifier: {name}")
         return f'"{name}"'
 
@@ -508,23 +511,21 @@ class DataAnalyzer:
 
                 # Get columns
                 columns = []
-                for col_data in conn.execute(
-                    f"PRAGMA table_info({safe_name})"
-                ).fetchall():
-                    columns.append(ColumnInfo(
-                        cid=col_data[0],
-                        name=col_data[1],
-                        col_type=col_data[2] or "",
-                        notnull=bool(col_data[3]),
-                        default_value=col_data[4],
-                        pk=bool(col_data[5]),
-                    ))
+                for col_data in conn.execute(f"PRAGMA table_info({safe_name})").fetchall():
+                    columns.append(
+                        ColumnInfo(
+                            cid=col_data[0],
+                            name=col_data[1],
+                            col_type=col_data[2] or "",
+                            notnull=bool(col_data[3]),
+                            default_value=col_data[4],
+                            pk=bool(col_data[5]),
+                        )
+                    )
 
                 # Get indexes
                 indexes = []
-                for idx_data in conn.execute(
-                    f"PRAGMA index_list({safe_name})"
-                ).fetchall():
+                for idx_data in conn.execute(f"PRAGMA index_list({safe_name})").fetchall():
                     idx_name = idx_data[1]
                     is_unique = bool(idx_data[2])
                     # Get index columns
@@ -534,17 +535,17 @@ class DataAnalyzer:
                             f"PRAGMA index_info({self._safe_identifier(idx_name)})"
                         ).fetchall()
                     ]
-                    indexes.append(IndexInfo(
-                        name=idx_name,
-                        table=table_name,
-                        unique=is_unique,
-                        columns=idx_cols,
-                    ))
+                    indexes.append(
+                        IndexInfo(
+                            name=idx_name,
+                            table=table_name,
+                            unique=is_unique,
+                            columns=idx_cols,
+                        )
+                    )
 
                 # Get row count
-                row_count = conn.execute(
-                    f"SELECT COUNT(*) FROM {safe_name}"
-                ).fetchone()[0]
+                row_count = conn.execute(f"SELECT COUNT(*) FROM {safe_name}").fetchone()[0]
 
                 # Get table size
                 page_size = conn.execute("PRAGMA page_size").fetchone()[0]
@@ -639,15 +640,17 @@ class DataAnalyzer:
                     "length_stats": {
                         "min": length_stats[0] if length_stats else None,
                         "max": length_stats[1] if length_stats else None,
-                        "avg": round(length_stats[2], 2) if length_stats and length_stats[2] else None,
-                    } if length_stats else None,
+                        "avg": round(length_stats[2], 2)
+                        if length_stats and length_stats[2]
+                        else None,
+                    }
+                    if length_stats
+                    else None,
                 }
 
             # Check for missing indexes on foreign-key-like columns
             missing_indexes = []
-            indexes = conn.execute(
-                f"PRAGMA index_list({safe_name})"
-            ).fetchall()
+            indexes = conn.execute(f"PRAGMA index_list({safe_name})").fetchall()
             indexed_cols = set()
             for idx_data in indexes:
                 idx_name = idx_data[1]
@@ -707,13 +710,15 @@ class DataAnalyzer:
             data_quality_issues = []
             for col_name, stats in column_stats.items():
                 if stats["null_pct"] > 80:
-                    data_quality_issues.append({
-                        "table": table_name,
-                        "column": col_name,
-                        "issue": "high_null_rate",
-                        "detail": f"{stats['null_pct']:.0f}% NULL values",
-                        "severity": "warning",
-                    })
+                    data_quality_issues.append(
+                        {
+                            "table": table_name,
+                            "column": col_name,
+                            "issue": "high_null_rate",
+                            "detail": f"{stats['null_pct']:.0f}% NULL values",
+                            "severity": "warning",
+                        }
+                    )
 
             return AnalysisResult(
                 table_name=table_name,
@@ -741,20 +746,14 @@ class DataAnalyzer:
         with self._connect() as conn:
             safe_name = self._safe_identifier(table_name)
             rows = conn.execute(f"SELECT * FROM {safe_name} LIMIT {limit}").fetchall()
-            columns = [
-                col[1] for col in conn.execute(
-                    f"PRAGMA table_info({safe_name})"
-                ).fetchall()
-            ]
-            return [
-                {col: val for col, val in zip(columns, row)}
-                for row in rows
-            ]
+            columns = [col[1] for col in conn.execute(f"PRAGMA table_info({safe_name})").fetchall()]
+            return [{col: val for col, val in zip(columns, row)} for row in rows]
 
     def _safe_identifier(self, name: str) -> str:
         """Escape a SQL identifier safely."""
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", name):
             raise ValueError(f"Invalid identifier: {name}")
         return f'"{name}"'
 
@@ -816,13 +815,17 @@ class BackupManager:
             table_count = conn.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
             ).fetchone()[0]
-            row_count = conn.execute(
-                "SELECT SUM(cnt) FROM (SELECT COUNT(*) as cnt FROM sqlite_master JOIN "
-                "(SELECT name FROM sqlite_master WHERE type='table') t ON 1=1)"
-            ).fetchone()[0] or 0
+            row_count = (
+                conn.execute(
+                    "SELECT SUM(cnt) FROM (SELECT COUNT(*) as cnt FROM sqlite_master JOIN "
+                    "(SELECT name FROM sqlite_master WHERE type='table') t ON 1=1)"
+                ).fetchone()[0]
+                or 0
+            )
 
         # Calculate checksum
         import hashlib
+
         with open(backup_path, "rb") as f:
             checksum = hashlib.sha256(f.read()).hexdigest()[:16]
 
@@ -844,6 +847,7 @@ class BackupManager:
         # Compress if requested
         if compress:
             import gzip
+
             compressed_path = backup_path.with_suffix(".db.gz")
             with open(backup_path, "rb") as f_in:
                 with gzip.open(compressed_path, "wb") as f_out:
@@ -876,6 +880,7 @@ class BackupManager:
         # Decompress if needed
         if backup_path.suffix == ".gz":
             import gzip
+
             decompressed = backup_path.with_suffix(".db")
             with gzip.open(backup_path, "rb") as f_in:
                 with open(decompressed, "wb") as f_out:
@@ -1022,9 +1027,7 @@ class QueryExecutor:
                 row_bytes = len(json.dumps(row_dict).encode())
                 total_bytes += row_bytes
                 if total_bytes > MAX_QUERY_BYTES:
-                    log.warning(
-                        "Query result exceeds %d bytes — truncating", MAX_QUERY_BYTES
-                    )
+                    log.warning("Query result exceeds %d bytes — truncating", MAX_QUERY_BYTES)
                     break
                 result.append(row_dict)
 
@@ -1102,9 +1105,7 @@ class QueryExecutor:
             ]
 
             # Also get row estimate
-            count_rows = conn.execute(
-                f"SELECT COUNT(*) FROM ({sql})", params or ()
-            ).fetchall()
+            count_rows = conn.execute(f"SELECT COUNT(*) FROM ({sql})", params or ()).fetchall()
             estimated_rows = count_rows[0][0] if count_rows else 0
 
             return {
@@ -1166,6 +1167,7 @@ class DatabaseManager:
         """Lazy-load SchemaEvolutionEngine."""
         if self._evolution is None:
             from tektos.schema_evolution import SchemaEvolutionEngine
+
             self._evolution = SchemaEvolutionEngine(self.db_path, backup_dir=None)
         return self._evolution
 
@@ -1195,9 +1197,7 @@ class DatabaseManager:
         if_not_exists: bool = True,
     ) -> bool:
         """Create a new table."""
-        return self.schema.create_table(
-            table_name, columns, primary_key, if_not_exists
-        )
+        return self.schema.create_table(table_name, columns, primary_key, if_not_exists)
 
     def drop_table(self, table_name: str, if_exists: bool = True) -> bool:
         """Drop a table."""
@@ -1212,9 +1212,7 @@ class DatabaseManager:
         notnull: bool = False,
     ) -> bool:
         """Add a column to an existing table."""
-        return self.schema.add_column(
-            table_name, column_name, column_type, default, notnull
-        )
+        return self.schema.add_column(table_name, column_name, column_type, default, notnull)
 
     def drop_column(self, table_name: str, column_name: str) -> bool:
         """Drop a column from a table."""
@@ -1224,9 +1222,7 @@ class DatabaseManager:
         """Rename a table."""
         return self.schema.rename_table(old_name, new_name)
 
-    def rename_column(
-        self, table_name: str, old_name: str, new_name: str
-    ) -> bool:
+    def rename_column(self, table_name: str, old_name: str, new_name: str) -> bool:
         """Rename a column."""
         return self.schema.rename_column(table_name, old_name, new_name)
 
@@ -1238,9 +1234,7 @@ class DatabaseManager:
         unique: bool = False,
     ) -> bool:
         """Create an index."""
-        return self.schema.create_index(
-            index_name, table_name, columns, unique
-        )
+        return self.schema.create_index(index_name, table_name, columns, unique)
 
     def drop_index(self, index_name: str) -> bool:
         """Drop an index."""
@@ -1264,9 +1258,7 @@ class DatabaseManager:
         """Execute a DML statement."""
         return self.query.execute_dml(sql, params, require_confirmation)
 
-    def execute_transaction(
-        self, statements: list[tuple[str, tuple]]
-    ) -> list[int]:
+    def execute_transaction(self, statements: list[tuple[str, tuple]]) -> list[int]:
         """Execute multiple statements in a transaction."""
         return self.query.execute_transaction(statements)
 
@@ -1379,7 +1371,7 @@ class DatabaseManager:
                 rows_imported += 1
 
         elif format == "csv":
-            with open(path, "r") as f:
+            with open(path) as f:
                 reader = csv.DictReader(f)
                 rows_imported = 0
                 for row in reader:
@@ -1395,9 +1387,7 @@ class DatabaseManager:
 
         elif format == "sql":
             sql_content = Path(path).read_text()
-            statements = [
-                s.strip() for s in sql_content.split(";") if s.strip()
-            ]
+            statements = [s.strip() for s in sql_content.split(";") if s.strip()]
             rows_imported = 0
             for stmt in statements:
                 if stmt.upper().startswith("INSERT"):
@@ -1548,9 +1538,7 @@ class DatabaseManager:
         analysis = self.analyze_all()
         results["tables_analyzed"] = len(analysis)
         results["total_rows"] = sum(a.row_count for a in analysis.values())
-        results["suggestions"] = [
-            s for a in analysis.values() for s in a.suggestions
-        ]
+        results["suggestions"] = [s for a in analysis.values() for s in a.suggestions]
 
         # Run evolution-based optimization
         evolution_results = self.evolution.optimize()

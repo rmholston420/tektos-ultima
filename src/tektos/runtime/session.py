@@ -19,11 +19,10 @@ import uuid as _uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from tektos.state_machine import State, get_state_machine
 from tektos.store.event_store import append_event
-from tektos.state_machine import get_state_machine, State
 
 log = _log.getLogger("tektos.session")
-
 
 
 # ---------------------------------------------------------------------------

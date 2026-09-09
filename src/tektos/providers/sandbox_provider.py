@@ -43,8 +43,12 @@ def _docker_exec(container: str, command: str, timeout: int = 600) -> subprocess
     """
     return subprocess.run(
         ["docker", "exec", "-w", "/app", container, "bash", "-c", command],
-        shell=False, capture_output=True, text=True, timeout=timeout,
+        shell=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
+
 
 # Security: max output size (bytes)
 MAX_OUTPUT_SIZE = 100_000
@@ -124,8 +128,8 @@ class SandboxProvider:
         if self.docker_container:
             try:
                 result = _docker_exec(self.docker_container, command, timeout=self.bash_timeout)
-                output = (result.stdout or "") + ((("\n" + result.stderr) if result.stderr else ""))
-                return f"Exit {result.returncode}: {'success' if result.returncode == 0 else 'failed'}\n{output[:self.max_output_size]}"
+                output = (result.stdout or "") + (("\n" + result.stderr) if result.stderr else "")
+                return f"Exit {result.returncode}: {'success' if result.returncode == 0 else 'failed'}\n{output[: self.max_output_size]}"
             except subprocess.TimeoutExpired:
                 return f"Error: Command timed out after {self.bash_timeout}s"
             except Exception as exc:
@@ -145,14 +149,11 @@ class SandboxProvider:
             # Piping to tail/head masks the exit code (pipe status = last
             # segment), so detect permission errors from the output text too.
             combined_out = (result.stdout or "") + (result.stderr or "")
-            if (
-                "sudo" not in command.split()[0:2]
-                and (
-                    (result.returncode != 0 and self._is_permission_error(result))
-                    or ("are you root?" in combined_out)
-                )
+            if "sudo" not in command.split()[0:2] and (
+                (result.returncode != 0 and self._is_permission_error(result))
+                or ("are you root?" in combined_out)
             ):
-                log.info(f"[TOOL: bash] permission error, retrying with sudo -n")
+                log.info("[TOOL: bash] permission error, retrying with sudo -n")
                 sudo_cmd = f"sudo -n {command}"
                 result = subprocess.run(
                     sudo_cmd,
@@ -162,7 +163,9 @@ class SandboxProvider:
                     timeout=self.bash_timeout,
                     cwd=str(self.fs_root),
                 )
-                if "interactive authentication is required" in (result.stdout or "") + (result.stderr or ""):
+                if "interactive authentication is required" in (result.stdout or "") + (
+                    result.stderr or ""
+                ):
                     note = (
                         "[auto-retried with sudo -n, but passwordless sudo is NOT available]\n"
                         "You do NOT have root access on this system. Do NOT attempt sudo again.\n"
@@ -193,7 +196,11 @@ class SandboxProvider:
                     "  python3 -m venv /tmp/venv && /tmp/venv/bin/pip install <pkg>\n"
                 )
 
-            return f"{note}Exit {exit_code}: {status}\n{output}" if note else f"Exit {exit_code}: {status}\n{output}"
+            return (
+                f"{note}Exit {exit_code}: {status}\n{output}"
+                if note
+                else f"Exit {exit_code}: {status}\n{output}"
+            )
 
         except subprocess.TimeoutExpired:
             return f"Error: Command timed out after {self.bash_timeout}s"
@@ -378,7 +385,9 @@ class SandboxProvider:
                         if name.startswith("."):
                             continue
                         file_path = root / name
-                        matches.extend(self._search_file(file_path, pattern, max_results - len(matches)))
+                        matches.extend(
+                            self._search_file(file_path, pattern, max_results - len(matches))
+                        )
                         if len(matches) >= max_results:
                             break
                     if len(matches) >= max_results:
@@ -423,9 +432,9 @@ class SandboxProvider:
         searxng_url = os.getenv("TEKTOS_SEARXNG_URL", "")
         if searxng_url:
             try:
-                import urllib.request
-                import urllib.parse
                 import json
+                import urllib.parse
+                import urllib.request
 
                 search_url = f"{searxng_url}?q={urllib.parse.quote(query)}&format=json"
                 req = urllib.request.Request(search_url, headers={"User-Agent": "Tektos-Agent/1.0"})
@@ -447,9 +456,13 @@ class SandboxProvider:
         # Fallback: use curl to search via a public API
         try:
             import urllib.parse as _urllib_parse
+
             result = subprocess.run(
                 f'curl -s --max-time 15 "https://html.duckduckgo.com/html/?q={_urllib_parse.quote(query)}" 2>/dev/null | grep -oP \'(?<=<a rel="nofollow" href=")[^"]+\' | head -5',
-                shell=True, capture_output=True, text=True, timeout=20,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=20,
             )
             if result.stdout.strip():
                 urls = result.stdout.strip().split("\n")
@@ -472,7 +485,10 @@ class SandboxProvider:
             try:
                 result = subprocess.run(
                     f'curl -s --max-time 15 -L -A "Mozilla/5.0" "{url}" 2>/dev/null | head -c 50000',
-                    shell=True, capture_output=True, text=True, timeout=20,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
                 )
                 content = result.stdout.strip()
                 if content:
@@ -494,7 +510,7 @@ class SandboxProvider:
         headers = params.get("headers", "")
         max_bytes = params.get("max_bytes", 100000)
 
-        curl_cmd = f'curl -s --max-time 60 -L -A "Mozilla/5.0"'
+        curl_cmd = 'curl -s --max-time 60 -L -A "Mozilla/5.0"'
         if headers:
             curl_cmd += f' -H "{headers}"'
 
@@ -503,7 +519,9 @@ class SandboxProvider:
             resolved = Path(output_path).resolve()
             resolved.parent.mkdir(parents=True, exist_ok=True)
             curl_cmd += f' -o "{resolved}"'
-            result = subprocess.run(curl_cmd + f' "{url}"', shell=True, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(
+                curl_cmd + f' "{url}"', shell=True, capture_output=True, text=True, timeout=120
+            )
             if result.returncode == 0 and resolved.exists():
                 size = resolved.stat().st_size
                 return f"Downloaded {size} bytes to {output_path}"
@@ -511,7 +529,9 @@ class SandboxProvider:
                 return f"Download failed (exit {result.returncode}): {result.stderr[:500]}"
         else:
             # Return content as text
-            result = subprocess.run(curl_cmd + f' "{url}"', shell=True, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                curl_cmd + f' "{url}"', shell=True, capture_output=True, text=True, timeout=60
+            )
             content = result.stdout[:max_bytes]
             if result.returncode != 0:
                 return f"Fetch failed (exit {result.returncode}): {result.stderr[:500]}"
@@ -531,7 +551,9 @@ class SandboxProvider:
         # Try async RAG retriever via asyncio
         try:
             import asyncio as _asyncio
+
             from tektos.runtime.rag_retriever import get_rag_retriever
+
             retriever = get_rag_retriever()
             if retriever and retriever._initialized:
                 results = _asyncio.run(retriever.retrieve(query, top_k=limit))
@@ -547,6 +569,7 @@ class SandboxProvider:
         # Fallback: search SQLite FTS5 memory database directly
         try:
             import sqlite3
+
             db_path = Path("/home/rmholston/dev/tektos-ultima-v1/data/memory.db")
             if db_path.exists():
                 conn = sqlite3.connect(str(db_path))
@@ -583,15 +606,17 @@ class SandboxProvider:
 
         # Use the Tektos API to spawn a subagent
         try:
-            import urllib.request
-            import urllib.parse
             import json
+            import urllib.parse
+            import urllib.request
 
-            data = json.dumps({
-                "goal": goal,
-                "context": context,
-                "timeout": timeout,
-            }).encode()
+            data = json.dumps(
+                {
+                    "goal": goal,
+                    "context": context,
+                    "timeout": timeout,
+                }
+            ).encode()
 
             req = urllib.request.Request(
                 "http://localhost:8020/api/delegate",

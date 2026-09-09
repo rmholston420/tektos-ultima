@@ -11,13 +11,12 @@ used in context. The Disambiguator finds the context, then determines meaning.
 
 from __future__ import annotations
 
-from .language_game import LanguageGame, classify_language_game
+from .language_game import LanguageGame
 from .models import (
     Ambiguity,
     AmbiguityResolution,
     ClarifyingQuestion,
 )
-
 
 # Domain-specific ambiguity dictionary
 _AMBIGUITY_DICTIONARY: dict[str, dict[LanguageGame, str]] = {
@@ -129,11 +128,11 @@ def find_ambiguities(text: str, language_game: LanguageGame) -> list[Ambiguity]:
 
     for term, domain_meanings in _AMBIGUITY_DICTIONARY.items():
         if term in text_lower:
-            primary_meaning = domain_meanings.get(language_game, domain_meanings[LanguageGame.GENERAL])
+            primary_meaning = domain_meanings.get(
+                language_game, domain_meanings[LanguageGame.GENERAL]
+            )
             other_meanings = [
-                meaning
-                for g, meaning in domain_meanings.items()
-                if g != language_game
+                meaning for g, meaning in domain_meanings.items() if g != language_game
             ]
             # Only create ambiguity if there are multiple different meanings
             if len(other_meanings) > 0:
@@ -141,16 +140,21 @@ def find_ambiguities(text: str, language_game: LanguageGame) -> list[Ambiguity]:
                 # Critical if the term appears in a systems architecture context
                 criticality = "moderate"
                 if language_game == LanguageGame.SYSTEMS_ARCHITECTURE and term in (
-                    "system", "control", "intelligence", "state"
+                    "system",
+                    "control",
+                    "intelligence",
+                    "state",
                 ):
                     criticality = "critical"
 
-                ambiguities.append(Ambiguity(
-                    term=term,
-                    possible_meanings=all_meanings,
-                    criticality=criticality,
-                    domain=language_game,
-                ))
+                ambiguities.append(
+                    Ambiguity(
+                        term=term,
+                        possible_meanings=all_meanings,
+                        criticality=criticality,
+                        domain=language_game,
+                    )
+                )
 
     return ambiguities
 
@@ -172,11 +176,13 @@ def find_vague_terms(text: str) -> list[Ambiguity]:
 
     for term, clarification in _VAGUE_TERMS.items():
         if term in text_lower:
-            ambiguities.append(Ambiguity(
-                term=term,
-                possible_meanings=[clarification],
-                criticality="moderate",
-            ))
+            ambiguities.append(
+                Ambiguity(
+                    term=term,
+                    possible_meanings=[clarification],
+                    criticality="moderate",
+                )
+            )
 
     return ambiguities
 

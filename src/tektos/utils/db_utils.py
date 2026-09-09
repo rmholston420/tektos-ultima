@@ -3,27 +3,26 @@
 Provides table name validation and SQL identifier escaping for SQLite/PostgreSQL.
 """
 
-import re
 import logging
-from typing import Optional
+import re
 
 logger = logging.getLogger(__name__)
 
 # Strict regex for SQL identifiers: must start with letter/underscore,
 # contain only alphanumeric + underscore, max 64 chars
-_TABLE_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$')
+_TABLE_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 
 # Allowed tables per module (defense in depth)
 ALLOWED_TABLES = {
-    'sessions': {'sessions', 'trail', 'state', 'meta', 'config'},
-    'memory': {'sensory', 'working', 'long_term', 'procedural'},
-    'migrations': {'migrations', 'sessions', 'trail', 'state', 'meta', 'config'},
-    'postgres': {'sensory', 'working', 'long_term', 'procedural'},
-    'schema_evolution': {'sessions', 'trail', 'state', 'meta', 'config'},
+    "sessions": {"sessions", "trail", "state", "meta", "config"},
+    "memory": {"sensory", "working", "long_term", "procedural"},
+    "migrations": {"migrations", "sessions", "trail", "state", "meta", "config"},
+    "postgres": {"sensory", "working", "long_term", "procedural"},
+    "schema_evolution": {"sessions", "trail", "state", "meta", "config"},
 }
 
 
-def validate_table_name(table_name: str, module: str = 'migrations') -> bool:
+def validate_table_name(table_name: str, module: str = "migrations") -> bool:
     """Validate a table name against strict format and allowed tables whitelist.
 
     Args:
@@ -46,11 +45,10 @@ def validate_table_name(table_name: str, module: str = 'migrations') -> bool:
             "max 64 characters"
         )
 
-    allowed = ALLOWED_TABLES.get(module, ALLOWED_TABLES['migrations'])
+    allowed = ALLOWED_TABLES.get(module, ALLOWED_TABLES["migrations"])
     if table_name not in allowed:
         raise ValueError(
-            f"Table '{table_name}' not in allowed tables for module '{module}': "
-            f"{sorted(allowed)}"
+            f"Table '{table_name}' not in allowed tables for module '{module}': {sorted(allowed)}"
         )
 
     return True
@@ -91,7 +89,7 @@ def sanitize_like_pattern(pattern: str) -> str:
         Sanitized pattern with wildcards escaped.
     """
     # Escape special LIKE characters: %, _, \
-    pattern = pattern.replace('\\', '\\\\')
-    pattern = pattern.replace('%', '\\%')
-    pattern = pattern.replace('_', '\\_')
+    pattern = pattern.replace("\\", "\\\\")
+    pattern = pattern.replace("%", "\\%")
+    pattern = pattern.replace("_", "\\_")
     return pattern

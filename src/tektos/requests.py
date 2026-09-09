@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel, Field
 
+
 class CreateSessionRequest(BaseModel):
     model: str = Field(default="default", description="Model to use")
     system_prompt: str | None = Field(default=None, description="System prompt")

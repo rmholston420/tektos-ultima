@@ -29,14 +29,16 @@ from enum import Enum
 
 class LoopState(str, Enum):
     """States for the loop safety monitor."""
+
     NORMAL = "normal"
-    WARNING = "warning"       # Approaching limits
-    CRITICAL = "critical"     # Exceeded threshold, will stop next turn
-    STOPPED = "stopped"       # Loop has been stopped
+    WARNING = "warning"  # Approaching limits
+    CRITICAL = "critical"  # Exceeded threshold, will stop next turn
+    STOPPED = "stopped"  # Loop has been stopped
 
 
 class StopReason(str, Enum):
     """Why the loop was stopped."""
+
     MAX_TURNS = "max_turns"
     MAX_TOKENS = "max_tokens"
     MAX_WALL_TIME = "max_wall_time"
@@ -47,10 +49,11 @@ class StopReason(str, Enum):
 @dataclass
 class TurnSnapshot:
     """Snapshot of a single LLM turn for repetition detection."""
+
     turn_num: int
     tool_calls: tuple[str, ...]  # tool names, frozen for hashability
     input_ids: tuple[str, ...] = ()  # "name:hash(args)" per call — distinguishes
-                                     # different commands that use the same tool
+    # different commands that use the same tool
     text_length: int = 0
     tokens_used: int = 0
 
@@ -58,6 +61,7 @@ class TurnSnapshot:
 @dataclass
 class LoopSafetyConfig:
     """Configuration for loop safety limits."""
+
     # Hard limits
     max_turns: int = 15
     max_tokens_per_turn: int = 8192
@@ -76,6 +80,7 @@ class LoopSafetyConfig:
 @dataclass
 class LoopSafetyReport:
     """Report on loop safety status."""
+
     state: LoopState
     stop_reason: StopReason | None = None
     current_turn: int = 0
@@ -145,13 +150,15 @@ class LoopSafetyMonitor:
             LoopSafetyReport reflecting the current state AFTER this turn.
         """
         # 1. Record snapshot
-        self._snapshots.append(TurnSnapshot(
-            turn_num=turn_num,
-            tool_calls=tuple(tool_calls or []),
-            input_ids=tuple(input_ids or []),
-            text_length=text_length,
-            tokens_used=tokens_used,
-        ))
+        self._snapshots.append(
+            TurnSnapshot(
+                turn_num=turn_num,
+                tool_calls=tuple(tool_calls or []),
+                input_ids=tuple(input_ids or []),
+                text_length=text_length,
+                tokens_used=tokens_used,
+            )
+        )
         self._total_tokens += tokens_used
         wall_time = time.monotonic() - self._start_time
 
@@ -160,8 +167,10 @@ class LoopSafetyMonitor:
             self._state = LoopState.STOPPED
             self._stop_reason = StopReason.MAX_TURNS
             return self._build_report(
-                turn_num, tool_calls or [],
-                wall_time, tokens_used,
+                turn_num,
+                tool_calls or [],
+                wall_time,
+                tokens_used,
                 stop_reason=StopReason.MAX_TURNS,
             )
 
@@ -169,8 +178,10 @@ class LoopSafetyMonitor:
             self._state = LoopState.STOPPED
             self._stop_reason = StopReason.MAX_TOKENS
             return self._build_report(
-                turn_num, tool_calls or [],
-                wall_time, tokens_used,
+                turn_num,
+                tool_calls or [],
+                wall_time,
+                tokens_used,
                 stop_reason=StopReason.MAX_TOKENS,
             )
 
@@ -178,8 +189,10 @@ class LoopSafetyMonitor:
             self._state = LoopState.STOPPED
             self._stop_reason = StopReason.MAX_WALL_TIME
             return self._build_report(
-                turn_num, tool_calls or [],
-                wall_time, tokens_used,
+                turn_num,
+                tool_calls or [],
+                wall_time,
+                tokens_used,
                 stop_reason=StopReason.MAX_WALL_TIME,
             )
 
@@ -187,7 +200,7 @@ class LoopSafetyMonitor:
         rep_detected = False
         rep_count = 0
         if len(self._snapshots) >= self.config.repetition_window:
-            recent = list(self._snapshots)[-self.config.repetition_window:]
+            recent = list(self._snapshots)[-self.config.repetition_window :]
             if self._detect_repetition(recent):
                 self._repetition_count += 1
                 rep_detected = True
@@ -197,8 +210,10 @@ class LoopSafetyMonitor:
                     self._state = LoopState.STOPPED
                     self._stop_reason = StopReason.REPETITION
                     return self._build_report(
-                        turn_num, tool_calls or [],
-                        wall_time, tokens_used,
+                        turn_num,
+                        tool_calls or [],
+                        wall_time,
+                        tokens_used,
                         rep_count=rep_count,
                         stop_reason=StopReason.REPETITION,
                     )
@@ -216,15 +231,19 @@ class LoopSafetyMonitor:
             token_pct = self._total_tokens / max(1, self.config.max_tokens_total)
             turn_pct = turn_num / max(1, self.config.max_turns)
             time_pct = wall_time / max(0.001, self.config.max_wall_time_seconds)
-            if (turn_pct >= self.config.warning_threshold_pct
-                    or token_pct >= self.config.warning_threshold_pct
-                    or time_pct >= self.config.warning_threshold_pct):
+            if (
+                turn_pct >= self.config.warning_threshold_pct
+                or token_pct >= self.config.warning_threshold_pct
+                or time_pct >= self.config.warning_threshold_pct
+            ):
                 self._state = LoopState.WARNING
                 self._has_warned_threshold = True
 
         return self._build_report(
-            turn_num, tool_calls or [],
-            wall_time, tokens_used,
+            turn_num,
+            tool_calls or [],
+            wall_time,
+            tokens_used,
             rep_count=self._repetition_count if rep_detected else 0,
         )
 
@@ -241,21 +260,15 @@ class LoopSafetyMonitor:
         warnings: list[str] = []
 
         if stop_reason == StopReason.MAX_TURNS:
-            warnings.append(
-                f"Loop stopped: reached max turns ({self.config.max_turns})"
-            )
+            warnings.append(f"Loop stopped: reached max turns ({self.config.max_turns})")
         elif stop_reason == StopReason.MAX_TOKENS:
-            warnings.append(
-                f"Loop stopped: reached max tokens ({self.config.max_tokens_total})"
-            )
+            warnings.append(f"Loop stopped: reached max tokens ({self.config.max_tokens_total})")
         elif stop_reason == StopReason.MAX_WALL_TIME:
             warnings.append(
                 f"Loop stopped: exceeded max wall time ({self.config.max_wall_time_seconds}s)"
             )
         elif stop_reason == StopReason.REPETITION:
-            warnings.append(
-                f"Loop stopped: repetitive behavior ({rep_count} cycles)"
-            )
+            warnings.append(f"Loop stopped: repetitive behavior ({rep_count} cycles)")
         elif self._state == LoopState.WARNING and not rep_count:
             warnings.append(
                 f"Warning: approaching safety limits "
@@ -264,8 +277,7 @@ class LoopSafetyMonitor:
             )
         elif rep_count > 0:
             warnings.append(
-                f"Warning: repetitive behavior detected "
-                f"(turn {turn_num}, count {rep_count})"
+                f"Warning: repetitive behavior detected (turn {turn_num}, count {rep_count})"
             )
 
         return LoopSafetyReport(
@@ -301,8 +313,11 @@ class LoopSafetyMonitor:
             # Prefer comparing actual command content (input_ids) so that a
             # sequence of *different* bash commands is not flagged as a loop.
             with_inputs = [s for s in toolful if s.input_ids]
-            seq_getter = (lambda s: s.input_ids) if len(with_inputs) == len(toolful) \
+            seq_getter = (
+                (lambda s: s.input_ids)
+                if len(with_inputs) == len(toolful)
                 else (lambda s: s.tool_calls)
+            )
             sequences = [seq_getter(s) for s in toolful]
             last_seq = sequences[-1]
             if last_seq:  # non-empty
@@ -324,11 +339,8 @@ class LoopSafetyMonitor:
                     return True
 
         # Pattern 3: repeated tool calls with zero text output
-        recent = snapshots[-self.config.repetition_window:]
-        textless_tool_turns = sum(
-            1 for s in recent
-            if s.text_length == 0 and s.tool_calls
-        )
+        recent = snapshots[-self.config.repetition_window :]
+        textless_tool_turns = sum(1 for s in recent if s.text_length == 0 and s.tool_calls)
         if textless_tool_turns >= self.config.repetition_threshold:
             return True
 
@@ -337,10 +349,7 @@ class LoopSafetyMonitor:
     def get_report(self) -> LoopSafetyReport:
         """Get current loop safety report without consuming a turn."""
         wall_time = time.monotonic() - self._start_time
-        last_tools = (
-            list(self._snapshots[-1].tool_calls)
-            if self._snapshots else []
-        )
+        last_tools = list(self._snapshots[-1].tool_calls) if self._snapshots else []
         return LoopSafetyReport(
             state=self._state,
             stop_reason=self._stop_reason,
@@ -367,7 +376,9 @@ class LoopSafetyMonitor:
         self._repetition_count = 0
         self._has_warned_threshold = False
 
-    def detect_stall(self, event_count: int = 0, tool_call_count: int = 0, text_length: int = 0) -> bool:
+    def detect_stall(
+        self, event_count: int = 0, tool_call_count: int = 0, text_length: int = 0
+    ) -> bool:
         """Detect if the agent is stalled (not making progress).
 
         A stall is when the agent has made very few events/tool calls

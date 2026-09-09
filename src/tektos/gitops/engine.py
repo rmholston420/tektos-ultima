@@ -10,10 +10,9 @@ Provides version-controlled file operations with:
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
-import time
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +24,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class GitChange:
     """A single git change."""
+
     file_path: str
     status: str  # modified, added, deleted, renamed
     diff: str = ""
@@ -38,6 +38,7 @@ class GitChange:
 @dataclass
 class GitOperationResult:
     """Result of a git operation."""
+
     success: bool
     operation: str
     message: str
@@ -48,6 +49,7 @@ class GitOperationResult:
 @dataclass
 class GitDiff:
     """A git diff for a single file."""
+
     path: str = ""
     staged: list[str] = field(default_factory=list)
     unstaged: list[str] = field(default_factory=list)
@@ -67,6 +69,7 @@ class GitDiff:
 @dataclass
 class GitStatus:
     """Overall git status summary."""
+
     path: str = ""
     branch: str = ""
     dirty: bool = False
@@ -96,6 +99,7 @@ class GitStatus:
 @dataclass
 class GitSnapshot:
     """A named snapshot (branch + commit) for rollback."""
+
     name: str
     commit: str
     branch: str
@@ -178,7 +182,9 @@ class GitOpsEngine:
             status.modified_files = [f for f in modified_result.stdout.strip().split("\n") if f]
 
         # Get untracked files
-        untracked_result = self._run_git(["ls-files", "--others", "--exclude-standard"], capture=True)
+        untracked_result = self._run_git(
+            ["ls-files", "--others", "--exclude-standard"], capture=True
+        )
         if untracked_result.returncode == 0:
             status.untracked_files = [f for f in untracked_result.stdout.strip().split("\n") if f]
 
@@ -230,12 +236,14 @@ class GitOpsEngine:
             result = self._run_git(["commit", "-m", message])
             if result.returncode == 0:
                 log.info(f"Committed: {message}")
-                self._operation_log.append({
-                    "operation": "commit",
-                    "message": message,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "files": files or ["all"],
-                })
+                self._operation_log.append(
+                    {
+                        "operation": "commit",
+                        "message": message,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "files": files or ["all"],
+                    }
+                )
                 if self.event_bus:
                     self.event_bus.emit("git.commit", message=message, files=files)
                 return GitOperationResult(
@@ -275,9 +283,7 @@ class GitOpsEngine:
                 # Use current branch as base
                 result = self._run_git(["checkout", "-b", branch_name])
             else:
-                result = self._run_git([
-                    "checkout", "-b", branch_name, base_branch
-                ])
+                result = self._run_git(["checkout", "-b", branch_name, base_branch])
             if result.returncode == 0:
                 log.info(f"Created branch: {branch_name} from {base_branch or 'current'}")
                 return GitOperationResult(
@@ -358,7 +364,9 @@ class GitOpsEngine:
             log.error(f"Failed to delete branch {branch_name}: {e}")
             return False
 
-    def merge_branch(self, source_branch: str, target_branch: str | None = None) -> GitOperationResult:
+    def merge_branch(
+        self, source_branch: str, target_branch: str | None = None
+    ) -> GitOperationResult:
         """Merge a branch into the current (or target) branch.
 
         Args:
@@ -372,7 +380,9 @@ class GitOpsEngine:
             if target_branch:
                 self._run_git(["checkout", target_branch])
 
-            result = self._run_git(["merge", source_branch, "--no-ff", "-m", f"Merge {source_branch}"])
+            result = self._run_git(
+                ["merge", source_branch, "--no-ff", "-m", f"Merge {source_branch}"]
+            )
             if result.returncode == 0:
                 log.info(f"Merged {source_branch} into {target_branch or 'current'}")
                 return GitOperationResult(
@@ -445,9 +455,7 @@ class GitOpsEngine:
         Returns:
             List of log entries with hash, full_hash, date, author, message.
         """
-        result = self._run_git([
-            "log", f"-{limit}", "--format=%H|%h|%an|%ad|%s", "--date=short"
-        ])
+        result = self._run_git(["log", f"-{limit}", "--format=%H|%h|%an|%ad|%s", "--date=short"])
 
         entries = []
         for line in result.stdout.strip().split("\n"):
@@ -455,13 +463,15 @@ class GitOpsEngine:
                 continue
             parts = line.split("|", 4)
             if len(parts) >= 5:
-                entries.append({
-                    "hash": parts[1],
-                    "full_hash": parts[0],
-                    "author": parts[2],
-                    "date": parts[3],
-                    "message": parts[4],
-                })
+                entries.append(
+                    {
+                        "hash": parts[1],
+                        "full_hash": parts[0],
+                        "author": parts[2],
+                        "date": parts[3],
+                        "message": parts[4],
+                    }
+                )
 
         return entries
 
@@ -483,7 +493,9 @@ class GitOpsEngine:
                 "staged_files": len(status.staged_files),
                 "modified_files": len(status.modified_files),
                 "untracked_files": len(status.untracked_files),
-                "total_commits": int(commits_result.stdout.strip()) if commits_result.stdout.strip() else 0,
+                "total_commits": int(commits_result.stdout.strip())
+                if commits_result.stdout.strip()
+                else 0,
                 "branches": branches_result.stdout.strip().count("\n") + 1,
                 "operation_count": len(self._operation_log),
             }
@@ -585,7 +597,9 @@ class GitOpsEngine:
                 return hash_result.stdout.strip()
         return None
 
-    def create_snapshot(self, name: str, message: str = "", is_safety: bool = False) -> GitSnapshot | None:
+    def create_snapshot(
+        self, name: str, message: str = "", is_safety: bool = False
+    ) -> GitSnapshot | None:
         """Create a named snapshot (branch + commit) for rollback.
 
         Returns:
@@ -644,12 +658,16 @@ class GitOpsEngine:
         # Get staged changes
         staged_result = self._run_git(["diff", "--cached", "--name-only"], capture=True)
         if staged_result.stdout.strip():
-            for file_path in staged_result.stdout.strip().split('\n'):
+            for file_path in staged_result.stdout.strip().split("\n"):
                 diff_result = self._run_git(["diff", "--cached", "--", file_path], capture=True)
-                diffs.append(GitDiff(
-                    path=file_path,
-                    staged=diff_result.stdout.strip().split('\n') if diff_result.stdout.strip() else [],
-                ))
+                diffs.append(
+                    GitDiff(
+                        path=file_path,
+                        staged=diff_result.stdout.strip().split("\n")
+                        if diff_result.stdout.strip()
+                        else [],
+                    )
+                )
 
         if staged_only:
             return diffs
@@ -657,17 +675,23 @@ class GitOpsEngine:
         # Get unstaged changes
         unstaged_result = self._run_git(["diff", "--name-only"], capture=True)
         if unstaged_result.stdout.strip():
-            for file_path in unstaged_result.stdout.strip().split('\n'):
+            for file_path in unstaged_result.stdout.strip().split("\n"):
                 diff_result = self._run_git(["diff", "--", file_path], capture=True)
                 # Check if already in diffs list
                 existing = next((d for d in diffs if d.path == file_path), None)
                 if existing:
-                    existing.unstaged = diff_result.stdout.strip().split('\n') if diff_result.stdout.strip() else []
+                    existing.unstaged = (
+                        diff_result.stdout.strip().split("\n") if diff_result.stdout.strip() else []
+                    )
                 else:
-                    diffs.append(GitDiff(
-                        path=file_path,
-                        unstaged=diff_result.stdout.strip().split('\n') if diff_result.stdout.strip() else [],
-                    ))
+                    diffs.append(
+                        GitDiff(
+                            path=file_path,
+                            unstaged=diff_result.stdout.strip().split("\n")
+                            if diff_result.stdout.strip()
+                            else [],
+                        )
+                    )
 
         return diffs
 
@@ -702,7 +726,9 @@ _gitops_instance: GitOpsEngine | None = None
 def get_gitops_engine(repo_root: str = ".") -> GitOpsEngine:
     """Get or create the global gitops engine instance."""
     global _gitops_instance
-    if _gitops_instance is None or str(_gitops_instance.repo_root) != str(Path(repo_root).resolve()):
+    if _gitops_instance is None or str(_gitops_instance.repo_root) != str(
+        Path(repo_root).resolve()
+    ):
         _gitops_instance = GitOpsEngine(repo_root=repo_root)
     return _gitops_instance
 

@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 
 MigrationFn = Callable[["SchemaMigrationEngine"], None]
 
+
 class SchemaMigrationEngine:
     """
     Versioned, idempotent database schema migration engine.
@@ -105,11 +106,13 @@ class SchemaMigrationEngine:
                     fn(self)
                     self._record_migration(conn, version, name, time.time())
                     applied.append(version)
-                    self._applied.append({
-                        "version": version,
-                        "name": name,
-                        "applied_at": time.time(),
-                    })
+                    self._applied.append(
+                        {
+                            "version": version,
+                            "name": name,
+                            "applied_at": time.time(),
+                        }
+                    )
                 except Exception as exc:
                     log.error("Migration v%d failed: %s", version, exc)
                     raise RuntimeError(f"Migration v{version} ({name}) failed: {exc}")
@@ -128,9 +131,7 @@ class SchemaMigrationEngine:
         if downgrades:
             non_rev = [v for v in downgrades if not self._reversible.get(v, False)]
             if non_rev:
-                raise RuntimeError(
-                    f"Cannot downgrade: versions {non_rev} are not reversible"
-                )
+                raise RuntimeError(f"Cannot downgrade: versions {non_rev} are not reversible")
 
         # Apply up to target
         return self.apply_migrations(target=target)
@@ -141,9 +142,7 @@ class SchemaMigrationEngine:
             raise ValueError(f"Version {target} not registered")
 
         # Collect reverse migrations
-        reverse_versions = sorted(
-            v for v in self._migrations if target < v
-        )
+        reverse_versions = sorted(v for v in self._migrations if target < v)
 
         with self._connect() as conn:
             for version in reverse_versions:
@@ -175,6 +174,7 @@ class SchemaMigrationEngine:
 
             for (table_name,) in tables:
                 from tektos.utils.db_utils import escape_sql_identifier
+
                 safe_name = escape_sql_identifier(table_name)
                 columns = conn.execute(f"PRAGMA table_info({safe_name})").fetchall()
                 schema["tables"][table_name] = {
@@ -220,10 +220,7 @@ class SchemaMigrationEngine:
         for table_name, columns in target_columns.items():
             if table_name not in current_schema["tables"]:
                 # New table
-                col_defs = ", ".join(
-                    f"{col['name']} {col['type']}"
-                    for col in columns
-                )
+                col_defs = ", ".join(f"{col['name']} {col['type']}" for col in columns)
                 sql = f"CREATE TABLE {table_name} ({col_defs})"
                 proposed.append(sql)
             else:
@@ -244,6 +241,7 @@ class SchemaMigrationEngine:
     def _connect(self):
         """Context manager for database connections."""
         import sqlite3
+
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.db_path))
         conn.execute("PRAGMA journal_mode=WAL")
@@ -270,9 +268,7 @@ class SchemaMigrationEngine:
     def _get_version(self, conn: sqlite3.Connection) -> int:
         """Get the highest applied migration version."""
         self._ensure_schema_table(conn)
-        row = conn.execute(
-            "SELECT MAX(version) FROM _schema_migrations"
-        ).fetchone()
+        row = conn.execute("SELECT MAX(version) FROM _schema_migrations").fetchone()
         return row[0] or 0
 
     def _record_migration(
@@ -299,10 +295,7 @@ class SchemaMigrationEngine:
         rows = conn.execute(
             "SELECT version, name, applied_at FROM _schema_migrations ORDER BY version"
         ).fetchall()
-        return [
-            {"version": r[0], "name": r[1], "applied_at": r[2]}
-            for r in rows
-        ]
+        return [{"version": r[0], "name": r[1], "applied_at": r[2]} for r in rows]
 
     def list_pending(self) -> list[int]:
         """Get list of pending migration versions."""

@@ -21,7 +21,7 @@ from .config import (
     PID_KP,
     TARGET_TEMP,
 )
-from .metrics import GPUTelemetry, ThermalSnapshot
+from .metrics import ThermalSnapshot
 from .power_optimizer import PowerOptimizer
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ def _get_pynvml():
     if _pynvml is None:
         try:
             import pynvml as _mod
+
             _pynvml = _mod
         except ImportError:
             _pynvml = None
@@ -44,6 +45,7 @@ def _get_pynvml():
 @dataclass
 class PIDState:
     """State for a single PID controller."""
+
     integral: float = 0.0
     previous_error: float = 0.0
     previous_time: float = 0.0
@@ -52,6 +54,7 @@ class PIDState:
 @dataclass
 class RegulationDecision:
     """Decision from the thermal regulator."""
+
     gpu_power_limit: int
     gpu_clock_mhz: int
     gpu_action: str
@@ -198,7 +201,7 @@ class ThermalRegulator:
             self.gpu_optimizer._ensure_nvml()
             handle = nvml.nvmlDeviceGetHandleByIndex(self.gpu_optimizer.gpu_index)
             # nvmlDeviceSetPowerLimit may not exist in all pynvml versions
-            if hasattr(nvml, 'nvmlDeviceSetPowerLimit'):
+            if hasattr(nvml, "nvmlDeviceSetPowerLimit"):
                 nvml.nvmlDeviceSetPowerLimit(handle, decision.gpu_power_limit * 1000)
             else:
                 logger.debug("nvmlDeviceSetPowerLimit not available in this pynvml version")

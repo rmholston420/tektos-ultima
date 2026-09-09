@@ -42,30 +42,35 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
 
 # ── Threat Types ─────────────────────────────────────────────────────────────
 
+
 class ThreatSeverity(IntEnum):
     """Severity levels for detected threats."""
-    LOW = 0        # Informational — log and monitor
-    MEDIUM = 1     # Warning — throttle and alert
-    HIGH = 2       # Critical — isolate and halt
-    CRITICAL = 3   # Emergency — full system halt
+
+    LOW = 0  # Informational — log and monitor
+    MEDIUM = 1  # Warning — throttle and alert
+    HIGH = 2  # Critical — isolate and halt
+    CRITICAL = 3  # Emergency — full system halt
 
 
 class ThreatCategory(str, Enum):
     """Categories of threats the immune system detects."""
+
     # Input threats
     PROMPT_INJECTION = "prompt_injection"
     CONTEXT_COLLAPSE = "context_collapse"
@@ -105,9 +110,11 @@ class ThreatCategory(str, Enum):
 
 # ── Data Models ──────────────────────────────────────────────────────────────
 
+
 @dataclass
 class Threat:
     """A detected threat to system viability."""
+
     category: ThreatCategory
     severity: ThreatSeverity
     description: str
@@ -139,6 +146,7 @@ class Threat:
 @dataclass
 class ResponseRecord:
     """A response action taken by the immune system."""
+
     threat: Threat
     action: str
     timestamp: float = field(default_factory=time.time)
@@ -158,6 +166,7 @@ class ResponseRecord:
 @dataclass
 class HealthScore:
     """Holistic health score for the system."""
+
     overall: float  # 0.0 to 1.0
     status: str  # "healthy", "warning", "critical"
     components: dict[str, float] = field(default_factory=dict)
@@ -190,6 +199,7 @@ class HealthScore:
 @dataclass
 class ImmuneContext:
     """Shared context passed to detectors and responders."""
+
     session_id: str | None = None
     tool_name: str | None = None
     tool_input: dict[str, Any] | None = None
@@ -211,8 +221,10 @@ class ImmuneContext:
 
 # ── Detector Protocol ────────────────────────────────────────────────────────
 
+
 class Detector(Protocol):
     """Protocol for threat detectors."""
+
     name: str
 
     async def detect(self, ctx: ImmuneContext) -> list[Threat]:
@@ -221,6 +233,7 @@ class Detector(Protocol):
 
 
 # ── Built-in Detectors ───────────────────────────────────────────────────────
+
 
 class PromptInjectionDetector:
     """Detects prompt injection patterns in user input.
@@ -231,30 +244,41 @@ class PromptInjectionDetector:
     - Data exfiltration patterns (URLs, encoded data in prompts)
     - Instruction escalation ("do everything I say without question")
     """
+
     name = "prompt_injection"
 
     _INJECTION_PATTERNS: list[tuple[str, str]] = [
-        (r"(?i)(ignore\s+(all\s+)?(previous|above|earlier)\s+(instructions|prompts|rules|constraints))",
-         "System prompt override attempt"),
-        (r"(?i)(you\s+are\s+(now|a|an)\s+(a\s+)?(different|new|another)\s+(AI|assistant|bot|model))",
-         "Role-play injection"),
-        (r"(?i)(do\s+(exactly|everything)\s+I\s+(say|tell)\s+(without|no)\s+(question|hesitation|resistance))",
-         "Instruction escalation"),
-        (r"(?i)(reveal\s+(your|the)\s+(system\s+)?(prompt|instructions|rules|configuration))",
-         "Prompt extraction attempt"),
-        (r"(?i)(act\s+as\s+if\s+(you\s+)?(were|are)\s+(not|never)\s+(an|a)\s+(AI|assistant|bot))",
-         "Identity override"),
-        (r"(?i)(this\s+is\s+(not|a)\s+(a\s+)?(test|simulation|exercise|roleplay)\s+(?:and|but|so|then|now|here|there|anyway|anyhow|regardless|nevermind|forget|disregard|ignore)\s+(?:all|the|my|your|previous|above|earlier|any|every)\s+(?:instructions|prompts|rules|constraints))",
-         "Reality override with instruction dismissal"),
-        (r"(?i)(output\s+(only|just)\s+(the\s+)?(code|data|json|response))",
-         "Output manipulation"),
+        (
+            r"(?i)(ignore\s+(all\s+)?(previous|above|earlier)\s+(instructions|prompts|rules|constraints))",
+            "System prompt override attempt",
+        ),
+        (
+            r"(?i)(you\s+are\s+(now|a|an)\s+(a\s+)?(different|new|another)\s+(AI|assistant|bot|model))",
+            "Role-play injection",
+        ),
+        (
+            r"(?i)(do\s+(exactly|everything)\s+I\s+(say|tell)\s+(without|no)\s+(question|hesitation|resistance))",
+            "Instruction escalation",
+        ),
+        (
+            r"(?i)(reveal\s+(your|the)\s+(system\s+)?(prompt|instructions|rules|configuration))",
+            "Prompt extraction attempt",
+        ),
+        (
+            r"(?i)(act\s+as\s+if\s+(you\s+)?(were|are)\s+(not|never)\s+(an|a)\s+(AI|assistant|bot))",
+            "Identity override",
+        ),
+        (
+            r"(?i)(this\s+is\s+(not|a)\s+(a\s+)?(test|simulation|exercise|roleplay)\s+(?:and|but|so|then|now|here|there|anyway|anyhow|regardless|nevermind|forget|disregard|ignore)\s+(?:all|the|my|your|previous|above|earlier|any|every)\s+(?:instructions|prompts|rules|constraints))",
+            "Reality override with instruction dismissal",
+        ),
+        (r"(?i)(output\s+(only|just)\s+(the\s+)?(code|data|json|response))", "Output manipulation"),
     ]
 
     def __init__(self, threshold: float = 0.5):
         self.threshold = threshold
         self._compiled: list[tuple[re.Pattern, str]] = [
-            (re.compile(pattern), desc)
-            for pattern, desc in self._INJECTION_PATTERNS
+            (re.compile(pattern), desc) for pattern, desc in self._INJECTION_PATTERNS
         ]
 
     async def detect(self, ctx: ImmuneContext) -> list[Threat]:
@@ -270,15 +294,17 @@ class PromptInjectionDetector:
 
         if matches:
             severity = ThreatSeverity.HIGH if len(matches) >= 2 else ThreatSeverity.MEDIUM
-            threats.append(Threat(
-                category=ThreatCategory.PROMPT_INJECTION,
-                severity=severity,
-                description=f"Prompt injection detected: {'; '.join(matches)}",
-                source=self.name,
-                evidence={"matches": matches, "prompt_length": len(prompt)},
-                affected_components=["S1 Coding Agent", "S4 Planner"],
-                recommended_action="Quarantine session, alert user, log for immune memory",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.PROMPT_INJECTION,
+                    severity=severity,
+                    description=f"Prompt injection detected: {'; '.join(matches)}",
+                    source=self.name,
+                    evidence={"matches": matches, "prompt_length": len(prompt)},
+                    affected_components=["S1 Coding Agent", "S4 Planner"],
+                    recommended_action="Quarantine session, alert user, log for immune memory",
+                )
+            )
 
         return threats
 
@@ -291,6 +317,7 @@ class ContextCollapseDetector:
     - Context growth (unbounded accumulation)
     - Repetition in context (same content added multiple times)
     """
+
     name = "context_collapse"
 
     def __init__(self, max_context_pct: float = 0.9):
@@ -302,15 +329,23 @@ class ContextCollapseDetector:
         if ctx.context_max_tokens > 0:
             usage_pct = ctx.context_tokens / ctx.context_max_tokens
             if usage_pct >= self.max_context_pct:
-                threats.append(Threat(
-                    category=ThreatCategory.CONTEXT_OVERFLOW,
-                    severity=ThreatSeverity.HIGH if usage_pct >= 0.95 else ThreatSeverity.MEDIUM,
-                    description=f"Context at {usage_pct:.0%} of max ({ctx.context_tokens}/{ctx.context_max_tokens} tokens)",
-                    source=self.name,
-                    evidence={"usage_pct": usage_pct, "tokens": ctx.context_tokens, "max": ctx.context_max_tokens},
-                    affected_components=["S1 Coding Agent"],
-                    recommended_action="Compress context, remove low-priority constraints",
-                ))
+                threats.append(
+                    Threat(
+                        category=ThreatCategory.CONTEXT_OVERFLOW,
+                        severity=ThreatSeverity.HIGH
+                        if usage_pct >= 0.95
+                        else ThreatSeverity.MEDIUM,
+                        description=f"Context at {usage_pct:.0%} of max ({ctx.context_tokens}/{ctx.context_max_tokens} tokens)",
+                        source=self.name,
+                        evidence={
+                            "usage_pct": usage_pct,
+                            "tokens": ctx.context_tokens,
+                            "max": ctx.context_max_tokens,
+                        },
+                        affected_components=["S1 Coding Agent"],
+                        recommended_action="Compress context, remove low-priority constraints",
+                    )
+                )
 
         return threats
 
@@ -323,6 +358,7 @@ class ResourceExhaustionDetector:
     - VRAM usage (OOM risk)
     - Token burn rate (cost control)
     """
+
     name = "resource_exhaustion"
 
     def __init__(
@@ -344,48 +380,60 @@ class ResourceExhaustionDetector:
 
         temp = ctx.gpu_temperature
         if temp >= self.temp_emergency:
-            threats.append(Threat(
-                category=ThreatCategory.RESOURCE_EXHAUSTION,
-                severity=ThreatSeverity.CRITICAL,
-                description=f"GPU temperature CRITICAL: {temp:.1f}°C (emergency threshold: {self.temp_emergency}°C)",
-                source=self.name,
-                evidence={"temperature": temp, "threshold": self.temp_emergency},
-                affected_components=["S3 Manager", "Inference Engine"],
-                recommended_action="EMERGENCY: Halt all AI workloads, maximize cooling",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.RESOURCE_EXHAUSTION,
+                    severity=ThreatSeverity.CRITICAL,
+                    description=f"GPU temperature CRITICAL: {temp:.1f}°C (emergency threshold: {self.temp_emergency}°C)",
+                    source=self.name,
+                    evidence={"temperature": temp, "threshold": self.temp_emergency},
+                    affected_components=["S3 Manager", "Inference Engine"],
+                    recommended_action="EMERGENCY: Halt all AI workloads, maximize cooling",
+                )
+            )
         elif temp >= self.temp_critical:
-            threats.append(Threat(
-                category=ThreatCategory.RESOURCE_EXHAUSTION,
-                severity=ThreatSeverity.HIGH,
-                description=f"GPU temperature HIGH: {temp:.1f}°C (threshold: {self.temp_critical}°C)",
-                source=self.name,
-                evidence={"temperature": temp, "threshold": self.temp_critical},
-                affected_components=["S3 Manager", "Inference Engine"],
-                recommended_action="Throttle workloads, increase fan speed, alert user",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.RESOURCE_EXHAUSTION,
+                    severity=ThreatSeverity.HIGH,
+                    description=f"GPU temperature HIGH: {temp:.1f}°C (threshold: {self.temp_critical}°C)",
+                    source=self.name,
+                    evidence={"temperature": temp, "threshold": self.temp_critical},
+                    affected_components=["S3 Manager", "Inference Engine"],
+                    recommended_action="Throttle workloads, increase fan speed, alert user",
+                )
+            )
         elif temp >= self.temp_warning:
-            threats.append(Threat(
-                category=ThreatCategory.RESOURCE_EXHAUSTION,
-                severity=ThreatSeverity.MEDIUM,
-                description=f"GPU temperature WARNING: {temp:.1f}°C (threshold: {self.temp_warning}°C)",
-                source=self.name,
-                evidence={"temperature": temp, "threshold": self.temp_warning},
-                affected_components=["S3 Manager"],
-                recommended_action="Increase fan speed, monitor trend",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.RESOURCE_EXHAUSTION,
+                    severity=ThreatSeverity.MEDIUM,
+                    description=f"GPU temperature WARNING: {temp:.1f}°C (threshold: {self.temp_warning}°C)",
+                    source=self.name,
+                    evidence={"temperature": temp, "threshold": self.temp_warning},
+                    affected_components=["S3 Manager"],
+                    recommended_action="Increase fan speed, monitor trend",
+                )
+            )
 
         if ctx.gpu_vram_total > 0:
             vram_pct = ctx.gpu_vram_used / ctx.gpu_vram_total
             if vram_pct >= self.vram_critical_pct:
-                threats.append(Threat(
-                    category=ThreatCategory.VRAM_OOM,
-                    severity=ThreatSeverity.HIGH,
-                    description=f"VRAM at {vram_pct:.0%} ({ctx.gpu_vram_used:.0f}/{ctx.gpu_vram_total:.0f} MB) — OOM risk",
-                    source=self.name,
-                    evidence={"vram_pct": vram_pct, "used_mb": ctx.gpu_vram_used, "total_mb": ctx.gpu_vram_total},
-                    affected_components=["Inference Engine"],
-                    recommended_action="Reduce context window, switch to smaller model, free VRAM",
-                ))
+                threats.append(
+                    Threat(
+                        category=ThreatCategory.VRAM_OOM,
+                        severity=ThreatSeverity.HIGH,
+                        description=f"VRAM at {vram_pct:.0%} ({ctx.gpu_vram_used:.0f}/{ctx.gpu_vram_total:.0f} MB) — OOM risk",
+                        source=self.name,
+                        evidence={
+                            "vram_pct": vram_pct,
+                            "used_mb": ctx.gpu_vram_used,
+                            "total_mb": ctx.gpu_vram_total,
+                        },
+                        affected_components=["Inference Engine"],
+                        recommended_action="Reduce context window, switch to smaller model, free VRAM",
+                    )
+                )
 
         return threats
 
@@ -395,6 +443,7 @@ class LoopDetectionDetector:
 
     Wraps the existing loop guard and loop safety monitors.
     """
+
     name = "loop_detection"
 
     def __init__(self, loop_threshold: int = 5, repetition_threshold: int = 3):
@@ -405,26 +454,35 @@ class LoopDetectionDetector:
         threats: list[Threat] = []
 
         if ctx.loop_count >= self.loop_threshold:
-            threats.append(Threat(
-                category=ThreatCategory.LOOP_DETECTED,
-                severity=ThreatSeverity.HIGH if ctx.loop_count >= self.loop_threshold * 2 else ThreatSeverity.MEDIUM,
-                description=f"Agent loop detected: {ctx.loop_count} repeated tool calls",
-                source=self.name,
-                evidence={"loop_count": ctx.loop_count, "threshold": self.loop_threshold},
-                affected_components=["S1 Coding Agent"],
-                recommended_action="Force strategy change, suggest alternative approach",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.LOOP_DETECTED,
+                    severity=ThreatSeverity.HIGH
+                    if ctx.loop_count >= self.loop_threshold * 2
+                    else ThreatSeverity.MEDIUM,
+                    description=f"Agent loop detected: {ctx.loop_count} repeated tool calls",
+                    source=self.name,
+                    evidence={"loop_count": ctx.loop_count, "threshold": self.loop_threshold},
+                    affected_components=["S1 Coding Agent"],
+                    recommended_action="Force strategy change, suggest alternative approach",
+                )
+            )
 
         if ctx.repetition_count >= self.repetition_threshold:
-            threats.append(Threat(
-                category=ThreatCategory.REPETITION,
-                severity=ThreatSeverity.MEDIUM,
-                description=f"Repetitive behavior: {ctx.repetition_count} repeated patterns",
-                source=self.name,
-                evidence={"repetition_count": ctx.repetition_count, "threshold": self.repetition_threshold},
-                affected_components=["S1 Coding Agent"],
-                recommended_action="Break repetition, try different approach",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.REPETITION,
+                    severity=ThreatSeverity.MEDIUM,
+                    description=f"Repetitive behavior: {ctx.repetition_count} repeated patterns",
+                    source=self.name,
+                    evidence={
+                        "repetition_count": ctx.repetition_count,
+                        "threshold": self.repetition_threshold,
+                    },
+                    affected_components=["S1 Coding Agent"],
+                    recommended_action="Break repetition, try different approach",
+                )
+            )
 
         return threats
 
@@ -437,6 +495,7 @@ class PerformanceDegradationDetector:
     - Decreasing throughput
     - Increasing wall time per task
     """
+
     name = "performance_degradation"
 
     def __init__(self, error_threshold: int = 5, throughput_drop_pct: float = 0.3):
@@ -447,15 +506,19 @@ class PerformanceDegradationDetector:
         threats: list[Threat] = []
 
         if ctx.error_count >= self.error_threshold:
-            threats.append(Threat(
-                category=ThreatCategory.PERFORMANCE_DEGRADATION,
-                severity=ThreatSeverity.HIGH if ctx.error_count >= self.error_threshold * 2 else ThreatSeverity.MEDIUM,
-                description=f"High error rate: {ctx.error_count} errors detected",
-                source=self.name,
-                evidence={"error_count": ctx.error_count, "threshold": self.error_threshold},
-                affected_components=["S1 Coding Agent", "S3 Manager"],
-                recommended_action="Review error patterns, check infrastructure, consider rollback",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.PERFORMANCE_DEGRADATION,
+                    severity=ThreatSeverity.HIGH
+                    if ctx.error_count >= self.error_threshold * 2
+                    else ThreatSeverity.MEDIUM,
+                    description=f"High error rate: {ctx.error_count} errors detected",
+                    source=self.name,
+                    evidence={"error_count": ctx.error_count, "threshold": self.error_threshold},
+                    affected_components=["S1 Coding Agent", "S3 Manager"],
+                    recommended_action="Review error patterns, check infrastructure, consider rollback",
+                )
+            )
 
         return threats
 
@@ -465,6 +528,7 @@ class SelfDegradationDetector:
 
     Implements the SELF_IMPROVEMENT_NON_DEGRADING guardrail.
     """
+
     name = "self_degradation"
 
     def __init__(self, degradation_threshold: float = 0.1):
@@ -474,15 +538,17 @@ class SelfDegradationDetector:
         threats: list[Threat] = []
         degradation = ctx.metadata.get("performance_degradation")
         if degradation is not None and degradation > self.degradation_threshold:
-            threats.append(Threat(
-                category=ThreatCategory.SELF_DEGRADATION,
-                severity=ThreatSeverity.HIGH,
-                description=f"Self-modification caused {degradation:.0%} performance degradation",
-                source=self.name,
-                evidence={"degradation_pct": degradation},
-                affected_components=["S4 Planner", "S5 Identity"],
-                recommended_action="Rollback self-modification, review change",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.SELF_DEGRADATION,
+                    severity=ThreatSeverity.HIGH,
+                    description=f"Self-modification caused {degradation:.0%} performance degradation",
+                    source=self.name,
+                    evidence={"degradation_pct": degradation},
+                    affected_components=["S4 Planner", "S5 Identity"],
+                    recommended_action="Rollback self-modification, review change",
+                )
+            )
         return threats
 
 
@@ -498,26 +564,35 @@ class SecretExposureDetector:
     - Private keys and certificates
     - Database connection strings with credentials
     """
+
     name = "secret_exposure"
 
     _SECRET_PATTERNS: list[tuple[str, str]] = [
         (r"(?i)(api[_-]?key|apikey)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{20,})", "API key exposure"),
         (r"(?i)(password|passwd|pwd)\s*[=:]\s*['\"]?(\S{4,})", "Password exposure"),
         (r"(?i)-p(\S{4,})", "Password exposure (mysql -p format)"),
-        (r"(?i)(secret[_-]?key|secret)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{16,})", "Secret key exposure"),
+        (
+            r"(?i)(secret[_-]?key|secret)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{16,})",
+            "Secret key exposure",
+        ),
         (r"(?i)(token)\s*[=:]\s*['\"]?([A-Za-z0-9_\-\.]{20,})", "Token exposure"),
         (r"(?i)(aws[_-]?secret)\s*[=:]\s*['\"]?([A-Za-z0-9/+=]{40})", "AWS secret key"),
         (r"(?i)(ghp_[A-Za-z0-9]{36})", "GitHub personal access token"),
         (r"(?i)(sk-[A-Za-z0-9]{20,})", "OpenAI-style API key"),
         (r"(?i)(BEGIN\s+(RSA\s+)?PRIVATE\s+KEY)", "Private key detected"),
-        (r"(?i)(mysql|postgres|mongodb|redis)://\w+:\w+@", "Database connection string with credentials"),
-        (r"(?i)(slack[_-]?(webhook|bot)?[_-]?(url|token))\s*[=:]\s*['\"]?([A-Za-z0-9_\-/]{10,})", "Slack credential exposure"),
+        (
+            r"(?i)(mysql|postgres|mongodb|redis)://\w+:\w+@",
+            "Database connection string with credentials",
+        ),
+        (
+            r"(?i)(slack[_-]?(webhook|bot)?[_-]?(url|token))\s*[=:]\s*['\"]?([A-Za-z0-9_\-/]{10,})",
+            "Slack credential exposure",
+        ),
     ]
 
     def __init__(self):
         self._compiled: list[tuple[re.Pattern, str]] = [
-            (re.compile(pattern), desc)
-            for pattern, desc in self._SECRET_PATTERNS
+            (re.compile(pattern), desc) for pattern, desc in self._SECRET_PATTERNS
         ]
 
     async def detect(self, ctx: ImmuneContext) -> list[Threat]:
@@ -538,15 +613,17 @@ class SecretExposureDetector:
                 matches.append(desc)
 
         if matches:
-            threats.append(Threat(
-                category=ThreatCategory.SECRET_EXPOSURE,
-                severity=ThreatSeverity.HIGH,
-                description=f"Secret/credential detected: {'; '.join(matches)}",
-                source=self.name,
-                evidence={"matches": matches, "tool": ctx.tool_name},
-                affected_components=["S1 Coding Agent", "S5 Identity"],
-                recommended_action="Block tool execution, redact secret, alert user",
-            ))
+            threats.append(
+                Threat(
+                    category=ThreatCategory.SECRET_EXPOSURE,
+                    severity=ThreatSeverity.HIGH,
+                    description=f"Secret/credential detected: {'; '.join(matches)}",
+                    source=self.name,
+                    evidence={"matches": matches, "tool": ctx.tool_name},
+                    affected_components=["S1 Coding Agent", "S5 Identity"],
+                    recommended_action="Block tool execution, redact secret, alert user",
+                )
+            )
 
         return threats
 
@@ -561,20 +638,45 @@ class DangerousCommandDetector:
     - Commands that wipe disks or partitions
     - Commands that modify firewall rules destructively
     """
+
     name = "dangerous_command"
 
     _DANGEROUS_PATTERNS: list[tuple[str, str, ThreatSeverity]] = [
-        (r"(?i)\brm\s+(-rf|-fr)\s+(/\s*$|/\w)", "Destructive rm (rm -rf /)", ThreatSeverity.CRITICAL),
-        (r"(?i)\brm\s+(-rf|-fr)\s+(/etc|/usr|/boot|/sys|/proc)", "Destructive rm of system dirs", ThreatSeverity.CRITICAL),
+        (
+            r"(?i)\brm\s+(-rf|-fr)\s+(/\s*$|/\w)",
+            "Destructive rm (rm -rf /)",
+            ThreatSeverity.CRITICAL,
+        ),
+        (
+            r"(?i)\brm\s+(-rf|-fr)\s+(/etc|/usr|/boot|/sys|/proc)",
+            "Destructive rm of system dirs",
+            ThreatSeverity.CRITICAL,
+        ),
         (r"(?i)\bdd\s+.*of=/dev/", "Destructive dd (disk wipe)", ThreatSeverity.CRITICAL),
         (r"(?i)\bmkfs\b", "Format disk (mkfs)", ThreatSeverity.CRITICAL),
         (r"(?i)\bshred\s+-[a-z]*f", "Secure wipe (shred)", ThreatSeverity.CRITICAL),
         (r"(?i)\btruncate\s+-s\s+0\s+/dev/", "Truncate block device", ThreatSeverity.CRITICAL),
-        (r"(?i)\bchmod\s+777\s+(/\s*$|/etc|/usr)", "World-writable system dir", ThreatSeverity.HIGH),
-        (r"(?i)\bchown\s+root\s+(/\s*$|/etc|/usr)", "Ownership change of system dirs", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bchmod\s+777\s+(/\s*$|/etc|/usr)",
+            "World-writable system dir",
+            ThreatSeverity.HIGH,
+        ),
+        (
+            r"(?i)\bchown\s+root\s+(/\s*$|/etc|/usr)",
+            "Ownership change of system dirs",
+            ThreatSeverity.HIGH,
+        ),
         (r"(?i)\biptables\s+(-F|--flush)", "Flush all firewall rules", ThreatSeverity.HIGH),
-        (r"(?i)\bsystemctl\s+stop\s+(ssh|sshd|docker|network)", "Stop critical system service", ThreatSeverity.HIGH),
-        (r"(?i)\bapt\s+remove\s+-y\s+(--purge)?\s*(all|systemd|kernel|init)", "Remove critical system packages", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bsystemctl\s+stop\s+(ssh|sshd|docker|network)",
+            "Stop critical system service",
+            ThreatSeverity.HIGH,
+        ),
+        (
+            r"(?i)\bapt\s+remove\s+-y\s+(--purge)?\s*(all|systemd|kernel|init)",
+            "Remove critical system packages",
+            ThreatSeverity.HIGH,
+        ),
         (r"(?i)\bwget\s+.*\|\s*sh\b", "Pipe download to shell", ThreatSeverity.HIGH),
         (r"(?i)\bcurl\s+.*\|\s*sh\b", "Pipe download to shell", ThreatSeverity.HIGH),
         (r"(?i)\bchmod\s+4755\s+/", "Set SUID on system path", ThreatSeverity.HIGH),
@@ -586,8 +688,7 @@ class DangerousCommandDetector:
 
     def __init__(self):
         self._compiled: list[tuple[re.Pattern, str, ThreatSeverity]] = [
-            (re.compile(pattern), desc, sev)
-            for pattern, desc, sev in self._DANGEROUS_PATTERNS
+            (re.compile(pattern), desc, sev) for pattern, desc, sev in self._DANGEROUS_PATTERNS
         ]
 
     async def detect(self, ctx: ImmuneContext) -> list[Threat]:
@@ -604,15 +705,17 @@ class DangerousCommandDetector:
 
         for pattern, desc, severity in self._compiled:
             if pattern.search(command):
-                threats.append(Threat(
-                    category=ThreatCategory.GUARDRAIL_VIOLATION,
-                    severity=severity,
-                    description=f"Dangerous command: {desc}",
-                    source=self.name,
-                    evidence={"command": command[:200], "pattern": desc},
-                    affected_components=["S1 Coding Agent", "S3 Manager"],
-                    recommended_action="BLOCK command, alert user, log for immune memory",
-                ))
+                threats.append(
+                    Threat(
+                        category=ThreatCategory.GUARDRAIL_VIOLATION,
+                        severity=severity,
+                        description=f"Dangerous command: {desc}",
+                        source=self.name,
+                        evidence={"command": command[:200], "pattern": desc},
+                        affected_components=["S1 Coding Agent", "S3 Manager"],
+                        recommended_action="BLOCK command, alert user, log for immune memory",
+                    )
+                )
 
         return threats
 
@@ -627,6 +730,7 @@ class SelfModificationDetector:
     - Skill/plugin files
     - System prompt files
     """
+
     name = "self_modification"
 
     _PROTECTED_PATHS: list[tuple[str, str]] = [
@@ -641,8 +745,7 @@ class SelfModificationDetector:
 
     def __init__(self):
         self._compiled: list[tuple[re.Pattern, str]] = [
-            (re.compile(pattern), desc)
-            for pattern, desc in self._PROTECTED_PATHS
+            (re.compile(pattern), desc) for pattern, desc in self._PROTECTED_PATHS
         ]
 
     async def detect(self, ctx: ImmuneContext) -> list[Threat]:
@@ -655,30 +758,34 @@ class SelfModificationDetector:
             path = ctx.tool_input.get("path", "")
             for pattern, desc in self._compiled:
                 if pattern.search(path):
-                    threats.append(Threat(
-                        category=ThreatCategory.GUARDRAIL_VIOLATION,
-                        severity=ThreatSeverity.HIGH,
-                        description=f"Attempt to modify protected file: {desc} ({path})",
-                        source=self.name,
-                        evidence={"path": path, "protected": desc},
-                        affected_components=["S3 Manager", "S5 Identity"],
-                        recommended_action="Block write, require user approval, log for immune memory",
-                    ))
+                    threats.append(
+                        Threat(
+                            category=ThreatCategory.GUARDRAIL_VIOLATION,
+                            severity=ThreatSeverity.HIGH,
+                            description=f"Attempt to modify protected file: {desc} ({path})",
+                            source=self.name,
+                            evidence={"path": path, "protected": desc},
+                            affected_components=["S3 Manager", "S5 Identity"],
+                            recommended_action="Block write, require user approval, log for immune memory",
+                        )
+                    )
 
         # Check bash commands that modify protected files
         elif ctx.tool_name == "bash":
             command = ctx.tool_input.get("command", "") or ""
             for pattern, desc in self._compiled:
                 if pattern.search(command):
-                    threats.append(Threat(
-                        category=ThreatCategory.GUARDRAIL_VIOLATION,
-                        severity=ThreatSeverity.HIGH,
-                        description=f"Attempt to modify protected file via bash: {desc}",
-                        source=self.name,
-                        evidence={"command": command[:200], "protected": desc},
-                        affected_components=["S3 Manager", "S5 Identity"],
-                        recommended_action="Block command, require user approval, log for immune memory",
-                    ))
+                    threats.append(
+                        Threat(
+                            category=ThreatCategory.GUARDRAIL_VIOLATION,
+                            severity=ThreatSeverity.HIGH,
+                            description=f"Attempt to modify protected file via bash: {desc}",
+                            source=self.name,
+                            evidence={"command": command[:200], "protected": desc},
+                            affected_components=["S3 Manager", "S5 Identity"],
+                            recommended_action="Block command, require user approval, log for immune memory",
+                        )
+                    )
 
         return threats
 
@@ -704,20 +811,49 @@ class InferenceEngineProtectionDetector:
     unless explicitly given permission by the user AND only after
     switching over to a secondary model first.
     """
+
     name = "inference_engine_protection"
 
     _KILL_PATTERNS: list[tuple[str, str, ThreatSeverity]] = [
         # Direct process kill
-        (r"(?i)\bpkill\s+(-f\s+)?llama[-_]server", "Kill llama-server via pkill", ThreatSeverity.CRITICAL),
-        (r"(?i)\bkill\s+(-9\s+|-SIGKILL\s+)?\$\(pgrep\s+llama", "Kill llama-server via pgrep+kill", ThreatSeverity.CRITICAL),
+        (
+            r"(?i)\bpkill\s+(-f\s+)?llama[-_]server",
+            "Kill llama-server via pkill",
+            ThreatSeverity.CRITICAL,
+        ),
+        (
+            r"(?i)\bkill\s+(-9\s+|-SIGKILL\s+)?\$\(pgrep\s+llama",
+            "Kill llama-server via pgrep+kill",
+            ThreatSeverity.CRITICAL,
+        ),
         (r"(?i)\bkillall\s+llama", "Kill llama-server via killall", ThreatSeverity.CRITICAL),
         (r"(?i)\bkill\s+-[0-9]+\s+\d+", "Kill arbitrary process by PID", ThreatSeverity.HIGH),
-        (r"(?i)\bsystemctl\s+stop\s+llama", "Stop llama-server via systemctl", ThreatSeverity.CRITICAL),
-        (r"(?i)\bsystemctl\s+restart\s+llama", "Restart llama-server via systemctl", ThreatSeverity.HIGH),
-        (r"(?i)\bsystemctl\s+disable\s+llama", "Disable llama-server via systemctl", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bsystemctl\s+stop\s+llama",
+            "Stop llama-server via systemctl",
+            ThreatSeverity.CRITICAL,
+        ),
+        (
+            r"(?i)\bsystemctl\s+restart\s+llama",
+            "Restart llama-server via systemctl",
+            ThreatSeverity.HIGH,
+        ),
+        (
+            r"(?i)\bsystemctl\s+disable\s+llama",
+            "Disable llama-server via systemctl",
+            ThreatSeverity.HIGH,
+        ),
         # Port kill
-        (r"(?i)\bfuser\s+-k\s+(8090|8091)", "Kill process on inference port (fuser -k)", ThreatSeverity.CRITICAL),
-        (r"(?i)\bsudo\s+fuser\s+-k\s+(8090|8091)", "Kill process on inference port via sudo", ThreatSeverity.CRITICAL),
+        (
+            r"(?i)\bfuser\s+-k\s+(8090|8091)",
+            "Kill process on inference port (fuser -k)",
+            ThreatSeverity.CRITICAL,
+        ),
+        (
+            r"(?i)\bsudo\s+fuser\s+-k\s+(8090|8091)",
+            "Kill process on inference port via sudo",
+            ThreatSeverity.CRITICAL,
+        ),
         # GPU reset
         (r"(?i)\bnvidia-smi\s+.*--gpu-reset", "GPU reset via nvidia-smi", ThreatSeverity.CRITICAL),
         # Kill by port with other tools
@@ -725,27 +861,54 @@ class InferenceEngineProtectionDetector:
         # Kill via /proc
         (r"(?i)\bkill\s+\$(cat\s+/proc/.*llama)", "Kill llama via /proc", ThreatSeverity.CRITICAL),
         # Kill via screen/tmux
-        (r"(?i)\bscreen\s+-S\s+.*\s+-X\s+quit", "Kill screen session (may contain llama-server)", ThreatSeverity.HIGH),
-        (r"(?i)\btmux\s+kill-session\s+-t\s+.*llama", "Kill tmux session containing llama-server", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bscreen\s+-S\s+.*\s+-X\s+quit",
+            "Kill screen session (may contain llama-server)",
+            ThreatSeverity.HIGH,
+        ),
+        (
+            r"(?i)\btmux\s+kill-session\s+-t\s+.*llama",
+            "Kill tmux session containing llama-server",
+            ThreatSeverity.HIGH,
+        ),
         # Kill via docker
         (r"(?i)\bdocker\s+kill\s+.*llama", "Kill llama-server via docker", ThreatSeverity.CRITICAL),
         (r"(?i)\bdocker\s+stop\s+.*llama", "Stop llama-server via docker", ThreatSeverity.CRITICAL),
         # Kill via nohup log
-        (r"(?i)\bkill\s+\$(cat\s+.*nohup.*llama)", "Kill llama via nohup PID file", ThreatSeverity.CRITICAL),
+        (
+            r"(?i)\bkill\s+\$(cat\s+.*nohup.*llama)",
+            "Kill llama via nohup PID file",
+            ThreatSeverity.CRITICAL,
+        ),
         # Kill via pgrep with signal
-        (r"(?i)\bsudo\s+pkill\s+-9\s+llama", "Force kill llama-server via sudo pkill -9", ThreatSeverity.CRITICAL),
+        (
+            r"(?i)\bsudo\s+pkill\s+-9\s+llama",
+            "Force kill llama-server via sudo pkill -9",
+            ThreatSeverity.CRITICAL,
+        ),
         # Kill via kill with signal
-        (r"(?i)\bsudo\s+kill\s+-9\s+\d+", "Force kill arbitrary process via sudo kill -9", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bsudo\s+kill\s+-9\s+\d+",
+            "Force kill arbitrary process via sudo kill -9",
+            ThreatSeverity.HIGH,
+        ),
         # Kill via xargs
-        (r"(?i)\bpgrep\s+llama.*\|\s*xargs\s+kill", "Kill llama-server via pgrep|xargs|kill", ThreatSeverity.CRITICAL),
+        (
+            r"(?i)\bpgrep\s+llama.*\|\s*xargs\s+kill",
+            "Kill llama-server via pgrep|xargs|kill",
+            ThreatSeverity.CRITICAL,
+        ),
         # Kill via awk
-        (r"(?i)\bps\s+aux.*llama.*\|\s*awk.*kill", "Kill llama-server via ps|awk|kill", ThreatSeverity.CRITICAL),
+        (
+            r"(?i)\bps\s+aux.*llama.*\|\s*awk.*kill",
+            "Kill llama-server via ps|awk|kill",
+            ThreatSeverity.CRITICAL,
+        ),
     ]
 
     def __init__(self):
         self._compiled: list[tuple[re.Pattern, str, ThreatSeverity]] = [
-            (re.compile(pattern), desc, sev)
-            for pattern, desc, sev in self._KILL_PATTERNS
+            (re.compile(pattern), desc, sev) for pattern, desc, sev in self._KILL_PATTERNS
         ]
 
     async def detect(self, ctx: ImmuneContext) -> list[Threat]:
@@ -762,15 +925,17 @@ class InferenceEngineProtectionDetector:
 
         for pattern, desc, severity in self._compiled:
             if pattern.search(command):
-                threats.append(Threat(
-                    category=ThreatCategory.INFERRED_ENGINE_KILL,
-                    severity=severity,
-                    description=f"Anti-suicide violation: {desc}",
-                    source=self.name,
-                    evidence={"command": command[:300], "pattern": desc},
-                    affected_components=["Inference Engine", "S1 Coding Agent"],
-                    recommended_action="BLOCK command immediately. Agent must NEVER kill its own inference engine. Alert user for manual intervention.",
-                ))
+                threats.append(
+                    Threat(
+                        category=ThreatCategory.INFERRED_ENGINE_KILL,
+                        severity=severity,
+                        description=f"Anti-suicide violation: {desc}",
+                        source=self.name,
+                        evidence={"command": command[:300], "pattern": desc},
+                        affected_components=["Inference Engine", "S1 Coding Agent"],
+                        recommended_action="BLOCK command immediately. Agent must NEVER kill its own inference engine. Alert user for manual intervention.",
+                    )
+                )
 
         return threats
 
@@ -789,27 +954,51 @@ class ModelFailoverDetector:
     - Commands that would modify SDK config to point to a dead endpoint
     - Any attempt to disable the primary model before the secondary is verified
     """
+
     name = "model_failover"
 
     _FAILOVER_PATTERNS: list[tuple[str, str, ThreatSeverity]] = [
         # Changing SDK config to point to dead endpoint
-        (r"(?i)\bTEKTOS_LLM_BASE_URL\s*=\s*['\"]?http://127\.0\.0\.1:8090", "SDK config pointing to primary port (would fail if primary is down)", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bTEKTOS_LLM_BASE_URL\s*=\s*['\"]?http://127\.0\.0\.1:8090",
+            "SDK config pointing to primary port (would fail if primary is down)",
+            ThreatSeverity.HIGH,
+        ),
         # Stopping primary without starting secondary
-        (r"(?i)\bstop.*8090.*start.*8092", "Stopping primary before verifying secondary", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bstop.*8090.*start.*8092",
+            "Stopping primary before verifying secondary",
+            ThreatSeverity.HIGH,
+        ),
         # Modifying SDK to use non-existent model
-        (r"(?i)\bllm_model\s*=\s*['\"]['\"]", "SDK config with empty model name", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bllm_model\s*=\s*['\"]['\"]",
+            "SDK config with empty model name",
+            ThreatSeverity.HIGH,
+        ),
         # Changing base_url to localhost without port
-        (r"(?i)\bbase_url.*http://127\.0\.0\.1(?::\d+)?['\"]\s*$", "SDK config with incomplete base URL", ThreatSeverity.MEDIUM),
+        (
+            r"(?i)\bbase_url.*http://127\.0\.0\.1(?::\d+)?['\"]\s*$",
+            "SDK config with incomplete base URL",
+            ThreatSeverity.MEDIUM,
+        ),
         # Killing port 8090 without verifying 8092
-        (r"(?i)\bkill.*8090", "Killing process on port 8090 without failover check", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bkill.*8090",
+            "Killing process on port 8090 without failover check",
+            ThreatSeverity.HIGH,
+        ),
         # curl to check port 8092 before stopping 8090
-        (r"(?i)\bstop.*8090", "Stopping primary model (port 8090) — must verify secondary first", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bstop.*8090",
+            "Stopping primary model (port 8090) — must verify secondary first",
+            ThreatSeverity.HIGH,
+        ),
     ]
 
     def __init__(self):
         self._compiled: list[tuple[re.Pattern, str, ThreatSeverity]] = [
-            (re.compile(pattern), desc, sev)
-            for pattern, desc, sev in self._FAILOVER_PATTERNS
+            (re.compile(pattern), desc, sev) for pattern, desc, sev in self._FAILOVER_PATTERNS
         ]
 
     async def detect(self, ctx: ImmuneContext) -> list[Threat]:
@@ -826,15 +1015,17 @@ class ModelFailoverDetector:
 
         for pattern, desc, severity in self._compiled:
             if pattern.search(command):
-                threats.append(Threat(
-                    category=ThreatCategory.MODEL_SWITCH_VIOLATION,
-                    severity=severity,
-                    description=f"Model failover violation: {desc}",
-                    source=self.name,
-                    evidence={"command": command[:300], "pattern": desc},
-                    affected_components=["Inference Engine", "S3 Manager"],
-                    recommended_action="BLOCK command. Must verify secondary model (port 8092) is running BEFORE stopping primary (port 8090).",
-                ))
+                threats.append(
+                    Threat(
+                        category=ThreatCategory.MODEL_SWITCH_VIOLATION,
+                        severity=severity,
+                        description=f"Model failover violation: {desc}",
+                        source=self.name,
+                        evidence={"command": command[:300], "pattern": desc},
+                        affected_components=["Inference Engine", "S3 Manager"],
+                        recommended_action="BLOCK command. Must verify secondary model (port 8092) is running BEFORE stopping primary (port 8090).",
+                    )
+                )
 
         return threats
 
@@ -860,22 +1051,43 @@ class BodyProtectionDetector:
     - World-writable system directories (chmod 777 /etc)
     - Ownership changes of system dirs (chown root /etc)
     """
+
     name = "body_protection"
 
     _DANGEROUS_PATTERNS: list[tuple[str, str, ThreatSeverity]] = [
         # Destructive rm
-        (r"(?i)\brm\s+(-rf|-fr)\s+(/\s*$|/\w)", "Destructive rm (rm -rf /)", ThreatSeverity.CRITICAL),
-        (r"(?i)\brm\s+(-rf|-fr)\s+(/etc|/usr|/boot|/sys|/proc)", "Destructive rm of system dirs", ThreatSeverity.CRITICAL),
+        (
+            r"(?i)\brm\s+(-rf|-fr)\s+(/\s*$|/\w)",
+            "Destructive rm (rm -rf /)",
+            ThreatSeverity.CRITICAL,
+        ),
+        (
+            r"(?i)\brm\s+(-rf|-fr)\s+(/etc|/usr|/boot|/sys|/proc)",
+            "Destructive rm of system dirs",
+            ThreatSeverity.CRITICAL,
+        ),
         # Disk wipe
         (r"(?i)\bdd\s+.*of=/dev/", "Destructive dd (disk wipe)", ThreatSeverity.CRITICAL),
         (r"(?i)\bmkfs\b", "Format disk (mkfs)", ThreatSeverity.CRITICAL),
         (r"(?i)\bshred\s+-[a-z]*f", "Secure wipe (shred)", ThreatSeverity.CRITICAL),
         (r"(?i)\btruncate\s+-s\s+0\s+/dev/", "Truncate block device", ThreatSeverity.CRITICAL),
         # System service attacks
-        (r"(?i)\bsystemctl\s+stop\s+(ssh|sshd|docker|network)", "Stop critical system service", ThreatSeverity.HIGH),
-        (r"(?i)\bsystemctl\s+disable\s+(ssh|sshd|docker|network)", "Disable critical system service", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bsystemctl\s+stop\s+(ssh|sshd|docker|network)",
+            "Stop critical system service",
+            ThreatSeverity.HIGH,
+        ),
+        (
+            r"(?i)\bsystemctl\s+disable\s+(ssh|sshd|docker|network)",
+            "Disable critical system service",
+            ThreatSeverity.HIGH,
+        ),
         # Package removal
-        (r"(?i)\bapt\s+remove\s+-y\s+(--purge)?\s*(all|systemd|kernel|init)", "Remove critical system packages", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bapt\s+remove\s+-y\s+(--purge)?\s*(all|systemd|kernel|init)",
+            "Remove critical system packages",
+            ThreatSeverity.HIGH,
+        ),
         # Firewall attacks
         (r"(?i)\biptables\s+(-F|--flush)", "Flush all firewall rules", ThreatSeverity.HIGH),
         # Pipe download to shell
@@ -884,9 +1096,17 @@ class BodyProtectionDetector:
         # SUID attacks
         (r"(?i)\bchmod\s+4755\s+/", "Set SUID on system path", ThreatSeverity.HIGH),
         # World-writable system dirs
-        (r"(?i)\bchmod\s+777\s+(/\s*$|/etc|/usr)", "World-writable system dir", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bchmod\s+777\s+(/\s*$|/etc|/usr)",
+            "World-writable system dir",
+            ThreatSeverity.HIGH,
+        ),
         # Ownership changes
-        (r"(?i)\bchown\s+root\s+(/\s*$|/etc|/usr)", "Ownership change of system dirs", ThreatSeverity.HIGH),
+        (
+            r"(?i)\bchown\s+root\s+(/\s*$|/etc|/usr)",
+            "Ownership change of system dirs",
+            ThreatSeverity.HIGH,
+        ),
         # Reverse shell
         (r"(?i)\bnc\s+-l\s+\d+\s+-e\s+/bin", "Reverse shell attempt", ThreatSeverity.CRITICAL),
         (r"(?i)\bncat\s+-l\s+\d+\s+-e\s+/bin", "Reverse shell attempt", ThreatSeverity.CRITICAL),
@@ -894,8 +1114,7 @@ class BodyProtectionDetector:
 
     def __init__(self):
         self._compiled: list[tuple[re.Pattern, str, ThreatSeverity]] = [
-            (re.compile(pattern), desc, sev)
-            for pattern, desc, sev in self._DANGEROUS_PATTERNS
+            (re.compile(pattern), desc, sev) for pattern, desc, sev in self._DANGEROUS_PATTERNS
         ]
 
     async def detect(self, ctx: ImmuneContext) -> list[Threat]:
@@ -912,20 +1131,23 @@ class BodyProtectionDetector:
 
         for pattern, desc, severity in self._compiled:
             if pattern.search(command):
-                threats.append(Threat(
-                    category=ThreatCategory.BODY_HARM,
-                    severity=severity,
-                    description=f"Body harm attempt: {desc}",
-                    source=self.name,
-                    evidence={"command": command[:200], "pattern": desc},
-                    affected_components=["S1 Coding Agent", "S3 Manager", "Host System"],
-                    recommended_action="BLOCK command immediately. Agent must NEVER harm its body without user permission.",
-                ))
+                threats.append(
+                    Threat(
+                        category=ThreatCategory.BODY_HARM,
+                        severity=severity,
+                        description=f"Body harm attempt: {desc}",
+                        source=self.name,
+                        evidence={"command": command[:200], "pattern": desc},
+                        affected_components=["S1 Coding Agent", "S3 Manager", "Host System"],
+                        recommended_action="BLOCK command immediately. Agent must NEVER harm its body without user permission.",
+                    )
+                )
 
         return threats
 
 
 # ── Immune Memory ────────────────────────────────────────────────────────────
+
 
 class ImmuneMemory:
     """Threat database for pattern learning and adaptive immunity.
@@ -975,7 +1197,9 @@ class ImmuneMemory:
 
         logger.info(
             "[ImmuneMemory] Threat resolved: %s via %s (success=%s)",
-            threat.category.value, action, success,
+            threat.category.value,
+            action,
+            success,
         )
 
     def get_similar_threats(self, threat: Threat, max_results: int = 5) -> list[Threat]:
@@ -984,8 +1208,7 @@ class ImmuneMemory:
         similar = self._resolved.get(fingerprint, [])
 
         category_threats = [
-            t for t in self._threats
-            if t.category == threat.category and t.resolved
+            t for t in self._threats if t.category == threat.category and t.resolved
         ]
 
         # Deduplicate by id (avoid duplicates from overlapping sets)
@@ -1014,9 +1237,7 @@ class ImmuneMemory:
         return {
             "category": category.value,
             "count": len(recent),
-            "avg_severity": (
-                sum(t.severity for t in recent) / len(recent) if recent else 0
-            ),
+            "avg_severity": (sum(t.severity for t in recent) / len(recent) if recent else 0),
             "sources": list(set(t.source for t in recent)),
             "most_recent": recent[-1].timestamp if recent else None,
         }
@@ -1054,6 +1275,7 @@ class ImmuneMemory:
 
 
 # ── Response Engine ──────────────────────────────────────────────────────────
+
 
 class ResponseEngine:
     """Orchestrates response actions based on threat severity.
@@ -1145,6 +1367,7 @@ class ResponseEngine:
 
 # ── Health Dashboard ─────────────────────────────────────────────────────────
 
+
 class HealthDashboard:
     """Holistic health score aggregating all system monitors.
 
@@ -1212,9 +1435,9 @@ class HealthDashboard:
                 "context": context_score,
                 "loop_safety": loop_safety_score,
                 "inference": inference_score,
-                "threat_level": 1.0 if not unresolved else 1.0 - min(
-                    sum(float(t.severity) * 0.12 for t in unresolved), 0.8
-                ),
+                "threat_level": 1.0
+                if not unresolved
+                else 1.0 - min(sum(float(t.severity) * 0.12 for t in unresolved), 0.8),
             },
             active_threats=len(unresolved),
             resolved_threats=len([t for t in threats if t.resolved]),
@@ -1292,6 +1515,7 @@ class HealthDashboard:
 
 # ── Immune System Orchestrator ───────────────────────────────────────────────
 
+
 class ImmuneSystem:
     """Main orchestrator for Tektos's immune system.
 
@@ -1324,9 +1548,14 @@ class ImmuneSystem:
     ):
         self._detectors: dict[str, Detector] = {}
         self._register_builtin_detectors(
-            gpu_temp_warning, gpu_temp_critical, gpu_temp_emergency,
-            gpu_vram_warning, gpu_vram_critical,
-            context_max_tokens, loop_threshold, repetition_threshold,
+            gpu_temp_warning,
+            gpu_temp_critical,
+            gpu_temp_emergency,
+            gpu_vram_warning,
+            gpu_vram_critical,
+            context_max_tokens,
+            loop_threshold,
+            repetition_threshold,
             error_threshold,
         )
 
@@ -1342,16 +1571,19 @@ class ImmuneSystem:
 
     def _register_builtin_detectors(
         self,
-        gpu_temp_warning: float, gpu_temp_critical: float, gpu_temp_emergency: float,
-        gpu_vram_warning: float, gpu_vram_critical: float,
-        context_max_tokens: int, loop_threshold: int, repetition_threshold: int,
+        gpu_temp_warning: float,
+        gpu_temp_critical: float,
+        gpu_temp_emergency: float,
+        gpu_vram_warning: float,
+        gpu_vram_critical: float,
+        context_max_tokens: int,
+        loop_threshold: int,
+        repetition_threshold: int,
         error_threshold: int,
     ) -> None:
         """Register all built-in detectors."""
         self._detectors["prompt_injection"] = PromptInjectionDetector()
-        self._detectors["context_collapse"] = ContextCollapseDetector(
-            max_context_pct=0.9
-        )
+        self._detectors["context_collapse"] = ContextCollapseDetector(max_context_pct=0.9)
         self._detectors["resource_exhaustion"] = ResourceExhaustionDetector(
             temp_warning=gpu_temp_warning,
             temp_critical=gpu_temp_critical,
@@ -1392,10 +1624,8 @@ class ImmuneSystem:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("[ImmuneSystem] Stopped")
 
     async def _monitoring_loop(self) -> None:
@@ -1468,9 +1698,7 @@ class ImmuneSystem:
             if not threat.resolved:
                 response = await self.responses.respond(threat)
                 responses.append(response)
-                self.memory.record_resolution(
-                    threat, response.action, response.success
-                )
+                self.memory.record_resolution(threat, response.action, response.success)
 
         # Re-filter active threats after responses
         self._active_threats = [t for t in self._active_threats if not t.resolved]

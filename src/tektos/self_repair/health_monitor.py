@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from typing import Any
@@ -73,10 +74,8 @@ class HealthMonitor:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         log.info("[HealthMonitor] Stopped")
 
     async def _monitoring_loop(self) -> None:
@@ -130,7 +129,7 @@ class HealthMonitor:
         # Apply threat penalty
         if active_threats > 0:
             threat_penalty = min(active_threats * 0.10, 0.5)
-            overall *= (1.0 - threat_penalty)
+            overall *= 1.0 - threat_penalty
 
         # Determine status
         if overall >= self.warning_threshold:
@@ -160,7 +159,7 @@ class HealthMonitor:
         # Record snapshot
         self._snapshots.append(snapshot)
         if len(self._snapshots) > self.max_snapshots:
-            self._snapshots = self._snapshots[-self.max_snapshots:]
+            self._snapshots = self._snapshots[-self.max_snapshots :]
 
         # Trigger callbacks
         if status == "warning":
@@ -177,9 +176,16 @@ class HealthMonitor:
                 except Exception as e:
                     log.error("[HealthMonitor] Critical callback error: %s", e)
 
-        log.info("[HealthMonitor] Health: %.3f (%s) — GPU=%.2f Context=%.2f Loop=%.2f Inference=%.2f Threat=%.2f",
-                 overall, status, gpu_score, context_score, loop_safety_score,
-                 inference_score, threat_level_score)
+        log.info(
+            "[HealthMonitor] Health: %.3f (%s) — GPU=%.2f Context=%.2f Loop=%.2f Inference=%.2f Threat=%.2f",
+            overall,
+            status,
+            gpu_score,
+            context_score,
+            loop_safety_score,
+            inference_score,
+            threat_level_score,
+        )
 
         return snapshot
 
@@ -198,8 +204,8 @@ class HealthMonitor:
 
         # Determine trend direction
         if len(scores) >= 2:
-            first_half = scores[:len(scores)//2]
-            second_half = scores[len(scores)//2:]
+            first_half = scores[: len(scores) // 2]
+            second_half = scores[len(scores) // 2 :]
             first_avg = sum(first_half) / len(first_half)
             second_avg = sum(second_half) / len(second_half)
             if second_avg > first_avg + 0.05:

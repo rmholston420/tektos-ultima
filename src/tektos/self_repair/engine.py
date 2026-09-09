@@ -39,24 +39,26 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
 from typing import Any
 
+from .effectiveness import (
+    get_effectiveness_tracker,
+    reset_effectiveness_tracker,
+)
+from .health_monitor import get_health_monitor, reset_health_monitor
 from .models import (
     DegradationLevel,
     DegradationPlan,
     HealthSnapshot,
     RepairRecord,
-    RepairResult,
     RepairStatus,
-    RepairStrategy,
 )
-from .strategies import RepairStrategyRegistry, get_strategy_registry, reset_strategy_registry
-from .workflows import RepairWorkflows, get_healing_workflows, reset_healing_workflows
-from .effectiveness import RepairEffectivenessTracker, get_effectiveness_tracker, reset_effectiveness_tracker
-from .health_monitor import HealthMonitor, get_health_monitor, reset_health_monitor
+from .strategies import get_strategy_registry, reset_strategy_registry
+from .workflows import get_healing_workflows, reset_healing_workflows
 
 log = logging.getLogger(__name__)
 
@@ -100,11 +102,15 @@ class SelfRepairEngine:
         self.strategies = get_strategy_registry()
         self.workflows = get_healing_workflows() if enable_workflows else None
         self.effectiveness = get_effectiveness_tracker() if enable_effectiveness_tracking else None
-        self.health_monitor = get_health_monitor(
-            check_interval=check_interval,
-            warning_threshold=warning_threshold,
-            critical_threshold=critical_threshold,
-        ) if enable_health_monitoring else None
+        self.health_monitor = (
+            get_health_monitor(
+                check_interval=check_interval,
+                warning_threshold=warning_threshold,
+                critical_threshold=critical_threshold,
+            )
+            if enable_health_monitoring
+            else None
+        )
 
         # State
         self._running = False
@@ -139,8 +145,11 @@ class SelfRepairEngine:
 
         # Start background monitoring loop
         self._task = asyncio.create_task(self._monitoring_loop())
-        log.info("[SelfRepairEngine] Started (interval=%.1fs, workflows=%s)",
-                 self.check_interval, self.enable_workflows)
+        log.info(
+            "[SelfRepairEngine] Started (interval=%.1fs, workflows=%s)",
+            self.check_interval,
+            self.enable_workflows,
+        )
 
     async def stop(self) -> None:
         """Stop the self-repair engine."""
@@ -148,10 +157,8 @@ class SelfRepairEngine:
 
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
 
         if self.health_monitor:
             await self.health_monitor.stop()
@@ -205,8 +212,9 @@ class SelfRepairEngine:
             status=RepairStatus.PENDING,
         )
 
-        log.info("[SelfRepairEngine] Starting repair: %s (severity=%s)",
-                 threat_category, threat_severity)
+        log.info(
+            "[SelfRepairEngine] Starting repair: %s (severity=%s)", threat_category, threat_severity
+        )
 
         # Phase 1: Diagnosis
         record.status = RepairStatus.DIAGNOSING
@@ -276,8 +284,11 @@ class SelfRepairEngine:
 
         if record.verification_passed:
             record.status = RepairStatus.COMPLETED
-            log.info("[SelfRepairEngine] Repair completed: %s (%.1fs)",
-                     record_id, record.total_time_seconds)
+            log.info(
+                "[SelfRepairEngine] Repair completed: %s (%.1fs)",
+                record_id,
+                record.total_time_seconds,
+            )
 
             # Record effectiveness
             if self.effectiveness:
@@ -291,8 +302,11 @@ class SelfRepairEngine:
 
         elif record.degradation_applied != DegradationLevel.NONE:
             record.status = RepairStatus.DEGRADED
-            log.warning("[SelfRepairEngine] Repair degraded: %s → %s",
-                        record_id, record.degradation_applied.value)
+            log.warning(
+                "[SelfRepairEngine] Repair degraded: %s → %s",
+                record_id,
+                record.degradation_applied.value,
+            )
 
             if self.effectiveness:
                 self.effectiveness.record_degradation(record)
@@ -300,8 +314,7 @@ class SelfRepairEngine:
         else:
             record.status = RepairStatus.FAILED
             record.error = repair_result.error if repair_result else "No repair result"
-            log.error("[SelfRepairEngine] Repair failed: %s — %s",
-                      record_id, record.error)
+            log.error("[SelfRepairEngine] Repair failed: %s — %s", record_id, record.error)
 
             if self.effectiveness:
                 self.effectiveness.record_failure(record)
@@ -399,9 +412,15 @@ class SelfRepairEngine:
             "running": self._running,
             "uptime_seconds": round(uptime, 1),
             "total_repairs": len(self._repair_history),
-            "completed_repairs": sum(1 for r in self._repair_history if r.status == RepairStatus.COMPLETED),
-            "failed_repairs": sum(1 for r in self._repair_history if r.status == RepairStatus.FAILED),
-            "degraded_repairs": sum(1 for r in self._repair_history if r.status == RepairStatus.DEGRADED),
+            "completed_repairs": sum(
+                1 for r in self._repair_history if r.status == RepairStatus.COMPLETED
+            ),
+            "failed_repairs": sum(
+                1 for r in self._repair_history if r.status == RepairStatus.FAILED
+            ),
+            "degraded_repairs": sum(
+                1 for r in self._repair_history if r.status == RepairStatus.DEGRADED
+            ),
             "strategies_registered": len(self.strategies.list_strategies()),
             "workflows_registered": len(self.workflows.list_workflows()) if self.workflows else 0,
         }

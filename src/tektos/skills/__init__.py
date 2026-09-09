@@ -20,8 +20,8 @@ Skill lifecycle:
   6. Retention — Successful skills are retained; failed skills are archived or deleted
 """
 
-from .registry import Skill, SkillRegistry
-from .manager import SkillManager
 from .executor import SkillExecutor
+from .manager import SkillManager
+from .registry import Skill, SkillRegistry
 
 __all__ = ["Skill", "SkillRegistry", "SkillManager", "SkillExecutor"]

@@ -54,14 +54,13 @@ Novelty requires:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
-import logging
 from pydantic import BaseModel, Field
-
 
 # Import persistence layer here to avoid circular deps
 try:
@@ -78,17 +77,17 @@ log = logging.getLogger("tektos.memory")
 class MemoryTier(str, Enum):
     """The four memory tiers, ordered by persistence."""
 
-    SENSORY = "sensory"        # 100ms - 4s
-    WORKING = "working"        # seconds - minutes
-    LONG_TERM = "long_term"    # days - permanent
+    SENSORY = "sensory"  # 100ms - 4s
+    WORKING = "working"  # seconds - minutes
+    LONG_TERM = "long_term"  # days - permanent
     PROCEDURAL = "procedural"  # permanent (skills, wisdom)
 
 
 class Hemisphere(str, Enum):
     """Bicameral hemisphere — left vs right brain."""
 
-    LEFT = "left"      # Operative, logical, sequential, language
-    RIGHT = "right"    # Speculative, holistic, contextual, spatial
+    LEFT = "left"  # Operative, logical, sequential, language
+    RIGHT = "right"  # Speculative, holistic, contextual, spatial
 
 
 # ── Memory Entry ──────────────────────────────────────────────────────────
@@ -131,7 +130,9 @@ class MemoryEntry(BaseModel):
     who: str = Field(default="", description="Who created this memory")
     what: str = Field(default="", description="What event/pattern was encoded")
     where: str = Field(default="", description="Where was this generated")
-    when: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="When created")
+    when: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="When created"
+    )
     why: str = Field(default="", description="Why was this encoded")
     how: str = Field(default="", description="How was this encoded")
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -209,11 +210,10 @@ class MemorySystem:
     }
 
     def __init__(self, persistence: Any | None = None) -> None:
-        self.tiers: dict[MemoryTier, list[MemoryEntry]] = {
-            tier: [] for tier in MemoryTier
-        }
+        self.tiers: dict[MemoryTier, list[MemoryEntry]] = {tier: [] for tier in MemoryTier}
         # Deep-copy configs so tests can't mutate the shared class default
         import copy
+
         self.configs = copy.deepcopy(self.DEFAULT_CONFIGS)
         self.transfer_history: list[dict[str, Any]] = []
         self.novelty_count: int = 0
@@ -263,7 +263,9 @@ class MemorySystem:
             transfers = self.persistence.get_transfer_history(limit=200)
             self.transfer_history = transfers
 
-            log.info(f"Loaded {len(working)} working, {len(long_term)} long-term, {len(procedural)} procedural memories")
+            log.info(
+                f"Loaded {len(working)} working, {len(long_term)} long-term, {len(procedural)} procedural memories"
+            )
         except Exception as e:
             log.warning(f"Failed to load persisted memory: {e}")
 
@@ -296,62 +298,74 @@ class MemorySystem:
             return
         try:
             if entry.tier == MemoryTier.WORKING:
-                self.persistence.save_working({
-                    "id": entry.id,
-                    "content": entry.content,
-                    "hemisphere": entry.hemisphere.value,
-                    "is_novel": entry.is_novel,
-                    "novelty_score": entry.novelty_score,
-                    "timestamp": entry.timestamp,
-                    "expires_at": entry.expires_at,
-                    "source_tier": entry.source_tier.value if entry.source_tier else None,
-                    "destination_tier": entry.destination_tier.value if entry.destination_tier else None,
-                    "who": entry.who,
-                    "what": entry.what,
-                    "where": entry.where,
-                    "when": entry.when,
-                    "why": entry.why,
-                    "how": entry.how,
-                    "metadata": entry.metadata,
-                })
+                self.persistence.save_working(
+                    {
+                        "id": entry.id,
+                        "content": entry.content,
+                        "hemisphere": entry.hemisphere.value,
+                        "is_novel": entry.is_novel,
+                        "novelty_score": entry.novelty_score,
+                        "timestamp": entry.timestamp,
+                        "expires_at": entry.expires_at,
+                        "source_tier": entry.source_tier.value if entry.source_tier else None,
+                        "destination_tier": entry.destination_tier.value
+                        if entry.destination_tier
+                        else None,
+                        "who": entry.who,
+                        "what": entry.what,
+                        "where": entry.where,
+                        "when": entry.when,
+                        "why": entry.why,
+                        "how": entry.how,
+                        "metadata": entry.metadata,
+                    }
+                )
             elif entry.tier == MemoryTier.LONG_TERM:
-                self.persistence.save_long_term({
-                    "id": entry.id,
-                    "content": entry.content,
-                    "hemisphere": entry.hemisphere.value,
-                    "is_novel": entry.is_novel,
-                    "novelty_score": entry.novelty_score,
-                    "timestamp": entry.timestamp,
-                    "expires_at": entry.expires_at,
-                    "source_tier": entry.source_tier.value if entry.source_tier else None,
-                    "destination_tier": entry.destination_tier.value if entry.destination_tier else None,
-                    "who": entry.who,
-                    "what": entry.what,
-                    "where": entry.where,
-                    "when": entry.when,
-                    "why": entry.why,
-                    "how": entry.how,
-                    "metadata": entry.metadata,
-                })
+                self.persistence.save_long_term(
+                    {
+                        "id": entry.id,
+                        "content": entry.content,
+                        "hemisphere": entry.hemisphere.value,
+                        "is_novel": entry.is_novel,
+                        "novelty_score": entry.novelty_score,
+                        "timestamp": entry.timestamp,
+                        "expires_at": entry.expires_at,
+                        "source_tier": entry.source_tier.value if entry.source_tier else None,
+                        "destination_tier": entry.destination_tier.value
+                        if entry.destination_tier
+                        else None,
+                        "who": entry.who,
+                        "what": entry.what,
+                        "where": entry.where,
+                        "when": entry.when,
+                        "why": entry.why,
+                        "how": entry.how,
+                        "metadata": entry.metadata,
+                    }
+                )
             elif entry.tier == MemoryTier.PROCEDURAL:
-                self.persistence.save_procedural({
-                    "id": entry.id,
-                    "content": entry.content,
-                    "hemisphere": entry.hemisphere.value,
-                    "is_novel": entry.is_novel,
-                    "novelty_score": entry.novelty_score,
-                    "timestamp": entry.timestamp,
-                    "expires_at": entry.expires_at,
-                    "source_tier": entry.source_tier.value if entry.source_tier else None,
-                    "destination_tier": entry.destination_tier.value if entry.destination_tier else None,
-                    "who": entry.who,
-                    "what": entry.what,
-                    "where": entry.where,
-                    "when": entry.when,
-                    "why": entry.why,
-                    "how": entry.how,
-                    "metadata": entry.metadata,
-                })
+                self.persistence.save_procedural(
+                    {
+                        "id": entry.id,
+                        "content": entry.content,
+                        "hemisphere": entry.hemisphere.value,
+                        "is_novel": entry.is_novel,
+                        "novelty_score": entry.novelty_score,
+                        "timestamp": entry.timestamp,
+                        "expires_at": entry.expires_at,
+                        "source_tier": entry.source_tier.value if entry.source_tier else None,
+                        "destination_tier": entry.destination_tier.value
+                        if entry.destination_tier
+                        else None,
+                        "who": entry.who,
+                        "what": entry.what,
+                        "where": entry.where,
+                        "when": entry.when,
+                        "why": entry.why,
+                        "how": entry.how,
+                        "metadata": entry.metadata,
+                    }
+                )
             # SENSORY is ephemeral — not persisted
         except Exception as e:
             log.warning(f"Failed to persist memory entry {entry.id}: {e}")
@@ -403,7 +417,9 @@ class MemorySystem:
                         pass  # Best-effort cleanup
             log.info(
                 "Pruned %d oldest %s entries (capacity %d reached)",
-                excess, tier.value, config.capacity,
+                excess,
+                tier.value,
+                config.capacity,
             )
 
         entry = MemoryEntry(
@@ -535,7 +551,9 @@ class MemorySystem:
         **kwargs: Any,
     ) -> MemoryEntry:
         """Add a working memory entry. Alias for _add_working."""
-        return self._add_working(content, significance=significance, hemisphere=hemisphere, **kwargs)
+        return self._add_working(
+            content, significance=significance, hemisphere=hemisphere, **kwargs
+        )
 
     def add_long_term_memory(
         self,
@@ -576,12 +594,14 @@ class MemorySystem:
             source_tier=MemoryTier.SENSORY,
             **kwargs,
         )
-        self.transfer_history.append({
-            "from": MemoryTier.SENSORY,
-            "to": MemoryTier.WORKING,
-            "entry_id": entry.id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self.transfer_history.append(
+            {
+                "from": MemoryTier.SENSORY,
+                "to": MemoryTier.WORKING,
+                "entry_id": entry.id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         return entry
 
     def _transfer_to_long_term(
@@ -597,12 +617,14 @@ class MemorySystem:
             source_tier=MemoryTier.WORKING,
             **kwargs,
         )
-        self.transfer_history.append({
-            "from": MemoryTier.WORKING,
-            "to": MemoryTier.LONG_TERM,
-            "entry_id": entry.id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self.transfer_history.append(
+            {
+                "from": MemoryTier.WORKING,
+                "to": MemoryTier.LONG_TERM,
+                "entry_id": entry.id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         return entry
 
     def decay_sensory(self) -> int:
@@ -641,12 +663,7 @@ class MemorySystem:
 
     def get_novelty_entries(self) -> list[MemoryEntry]:
         """Get all entries flagged as novelty."""
-        return [
-            entry
-            for tier in self.tiers.values()
-            for entry in tier
-            if entry.is_novel
-        ]
+        return [entry for tier in self.tiers.values() for entry in tier if entry.is_novel]
 
     def get_hemisphere_balance(self) -> dict[str, int]:
         """Get count of memories per hemisphere across all tiers."""
@@ -675,11 +692,11 @@ class MemorySystem:
 class DreamState(str, Enum):
     """Dreamtime/contemplation states for right-hemisphere processing."""
 
-    IDLE = "idle"                    # Not currently dreaming
-    GATHERING = "gathering"          # Collecting memories for processing
-    PROCESSING = "processing"        # Right hemisphere cross-pollinating ideas
+    IDLE = "idle"  # Not currently dreaming
+    GATHERING = "gathering"  # Collecting memories for processing
+    PROCESSING = "processing"  # Right hemisphere cross-pollinating ideas
     INSIGHT_GENERATED = "insight_generated"  # Novel connections discovered
-    SAVING = "saving"                # Persisting insights to long-term memory
+    SAVING = "saving"  # Persisting insights to long-term memory
 
 
 class DreamResult(BaseModel):
@@ -692,12 +709,26 @@ class DreamResult(BaseModel):
     novelty_score: float = Field(default=0.0, ge=0.0, le=1.0)
     insights: list[str] = Field(default_factory=list)
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    who: str = Field(default="S4 Planner/Thinker (Right Hemisphere)", description="W5H1M: Who generated these insights")
+    who: str = Field(
+        default="S4 Planner/Thinker (Right Hemisphere)",
+        description="W5H1M: Who generated these insights",
+    )
     what: str = Field(default="", description="W5H1M: What insights were generated")
-    where: str = Field(default="right hemisphere (speculative processing)", description="W5H1M: Where generated")
-    when: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="W5H1M: When generated")
-    why: str = Field(default="Cross-pollinate ideas and generate novelty during contemplation", description="W5H1M: Why processing")
-    how: str = Field(default="Right-hemisphere associative processing of long-term memories", description="W5H1M: How processed")
+    where: str = Field(
+        default="right hemisphere (speculative processing)", description="W5H1M: Where generated"
+    )
+    when: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="W5H1M: When generated",
+    )
+    why: str = Field(
+        default="Cross-pollinate ideas and generate novelty during contemplation",
+        description="W5H1M: Why processing",
+    )
+    how: str = Field(
+        default="Right-hemisphere associative processing of long-term memories",
+        description="W5H1M: How processed",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -760,12 +791,15 @@ class DreamtimeEngine:
 
         # Gather procedural memories (skills, principles, wisdom)
         procedural = self.memory.get_procedural_memories()
-        gathered.extend(procedural[:max(1, max_memories // len(procedural) + 1) if procedural else 1])
+        gathered.extend(
+            procedural[: max(1, max_memories // len(procedural) + 1) if procedural else 1]
+        )
 
         # Filter by focus area if specified
         if focus_area:
             gathered = [
-                m for m in gathered
+                m
+                for m in gathered
                 if focus_area.lower() in m.content.lower() or focus_area.lower() in m.what.lower()
             ]
 
@@ -820,7 +854,7 @@ class DreamtimeEngine:
         # Combine multiple memories to generate emergent insights
         if len(memories) >= 3:
             # Take up to 3 memories and synthesize
-            sample = memories[:min(3, len(memories))]
+            sample = memories[: min(3, len(memories))]
             if len(sample) == 3:
                 insight = f"Synthesis: '{sample[0].content[:60]}' + '{sample[1].content[:60]}' + '{sample[2].content[:60]}' → emergent pattern"
                 insights.append(insight)
@@ -835,7 +869,9 @@ class DreamtimeEngine:
                 insights.append(f"Gap: Unanswered question — '{memory.content[:80]}'")
 
         # Evaluate novelty
-        is_novel = len(insights) > 0 and any("emergent" in i.lower() or "connection" in i.lower() for i in insights)
+        is_novel = len(insights) > 0 and any(
+            "emergent" in i.lower() or "connection" in i.lower() for i in insights
+        )
         novelty_score = min(1.0, len(insights) * 0.15) if is_novel else 0.0
 
         self.state = DreamState.INSIGHT_GENERATED
@@ -875,7 +911,7 @@ class DreamtimeEngine:
                     hemisphere=Hemisphere.RIGHT,
                     is_novel=result.is_novel,
                     novelty_score=result.novelty_score,
-                    what=f"dreamtime_insight",
+                    what="dreamtime_insight",
                     where="right hemisphere",
                     why="Creative emergence from associative processing",
                     how="Dreamtime engine",
@@ -886,7 +922,7 @@ class DreamtimeEngine:
                     hemisphere=Hemisphere.RIGHT,
                     is_novel=result.is_novel,
                     novelty_score=result.novelty_score,
-                    what=f"dreamtime_insight",
+                    what="dreamtime_insight",
                     where="right hemisphere",
                     why="Creative emergence from associative processing",
                     how="Dreamtime engine",

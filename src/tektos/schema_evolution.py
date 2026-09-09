@@ -51,7 +51,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import sqlite3
@@ -77,6 +76,7 @@ HEALTH_TABLE = "__tektos_health__"
 @dataclass
 class MigrationRecord:
     """A single migration record."""
+
     id: str
     version: int
     name: str
@@ -89,6 +89,7 @@ class MigrationRecord:
 @dataclass
 class SchemaDiff:
     """Difference between two schemas."""
+
     tables_to_create: list[dict] = field(default_factory=list)
     tables_to_drop: list[str] = field(default_factory=list)
     tables_to_alter: list[dict] = field(default_factory=list)
@@ -100,6 +101,7 @@ class SchemaDiff:
 @dataclass
 class Relationship:
     """Detected relationship between tables."""
+
     source_table: str
     source_column: str
     target_table: str
@@ -111,6 +113,7 @@ class Relationship:
 @dataclass
 class NormalizationIssue:
     """A normalization issue detected in the schema."""
+
     table: str
     column: str
     issue_type: str  # "repeating_group", "partial_dependency", "transitive_dependency"
@@ -121,6 +124,7 @@ class NormalizationIssue:
 @dataclass
 class HealthReport:
     """Database health report."""
+
     overall_score: float  # 0-100
     fragmentation_pct: float
     bloat_bytes: int
@@ -133,6 +137,7 @@ class HealthReport:
 @dataclass
 class SchemaDoc:
     """Generated schema documentation."""
+
     title: str
     version: int
     tables: list[dict] = field(default_factory=list)
@@ -198,8 +203,13 @@ class MigrationEngine:
             ).fetchall()
             return [
                 MigrationRecord(
-                    id=r[0], version=r[1], name=r[2], applied_at=r[3],
-                    sql=r[4], checksum=r[5], rolled_back=bool(r[6])
+                    id=r[0],
+                    version=r[1],
+                    name=r[2],
+                    applied_at=r[3],
+                    sql=r[4],
+                    checksum=r[5],
+                    rolled_back=bool(r[6]),
                 )
                 for r in rows
             ]
@@ -214,8 +224,13 @@ class MigrationEngine:
             ).fetchall()
             return [
                 MigrationRecord(
-                    id=r[0], version=r[1], name=r[2], applied_at=r[3],
-                    sql=r[4], checksum=r[5], rolled_back=bool(r[6])
+                    id=r[0],
+                    version=r[1],
+                    name=r[2],
+                    applied_at=r[3],
+                    sql=r[4],
+                    checksum=r[5],
+                    rolled_back=bool(r[6]),
                 )
                 for r in rows
             ]
@@ -249,6 +264,7 @@ class MigrationEngine:
 
         if not checksum:
             import hashlib
+
             checksum = hashlib.sha256(sql.encode()).hexdigest()[:16]
 
         with self._connect() as conn:
@@ -356,7 +372,8 @@ class SchemaDiffer:
     def _safe_identifier(self, name: str) -> str:
         """Escape a SQL identifier safely."""
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$', name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", name):
             raise ValueError(f"Invalid identifier: {name}")
         return f'"{name}"'
 
@@ -378,22 +395,20 @@ class SchemaDiffer:
 
                 # Get columns
                 columns = []
-                for col_data in conn.execute(
-                    f"PRAGMA table_info({safe_name})"
-                ).fetchall():
-                    columns.append({
-                        "name": col_data[1],
-                        "type": col_data[2] or "",
-                        "notnull": bool(col_data[3]),
-                        "default_value": col_data[4],
-                        "pk": bool(col_data[5]),
-                    })
+                for col_data in conn.execute(f"PRAGMA table_info({safe_name})").fetchall():
+                    columns.append(
+                        {
+                            "name": col_data[1],
+                            "type": col_data[2] or "",
+                            "notnull": bool(col_data[3]),
+                            "default_value": col_data[4],
+                            "pk": bool(col_data[5]),
+                        }
+                    )
 
                 # Get indexes
                 indexes = []
-                for idx_data in conn.execute(
-                    f"PRAGMA index_list({safe_name})"
-                ).fetchall():
+                for idx_data in conn.execute(f"PRAGMA index_list({safe_name})").fetchall():
                     idx_name = idx_data[1]
                     is_unique = bool(idx_data[2])
                     idx_cols = [
@@ -402,11 +417,13 @@ class SchemaDiffer:
                             f"PRAGMA index_info({self._safe_identifier(idx_name)})"
                         ).fetchall()
                     ]
-                    indexes.append({
-                        "name": idx_name,
-                        "unique": is_unique,
-                        "columns": idx_cols,
-                    })
+                    indexes.append(
+                        {
+                            "name": idx_name,
+                            "unique": is_unique,
+                            "columns": idx_cols,
+                        }
+                    )
 
                 schema[table_name] = {
                     "columns": columns,
@@ -453,11 +470,13 @@ class SchemaDiffer:
         # Tables to create
         for table_name, table_def in normalized_desired.items():
             if table_name not in current_schema:
-                diff.tables_to_create.append({
-                    "name": table_name,
-                    "columns": table_def.get("columns", {}),
-                    "primary_key": table_def.get("primary_key"),
-                })
+                diff.tables_to_create.append(
+                    {
+                        "name": table_name,
+                        "columns": table_def.get("columns", {}),
+                        "primary_key": table_def.get("primary_key"),
+                    }
+                )
                 diff.changes.append(f"CREATE TABLE {table_name}")
 
         # Tables to drop
@@ -475,39 +494,55 @@ class SchemaDiffer:
                 # Columns to add
                 for col_name, col_def in desired_cols.items():
                     if col_name not in current_cols:
-                        diff.tables_to_alter.append({
-                            "table": table_name,
-                            "action": "add_column",
-                            "column": col_name,
-                            "type": col_def.get("type", "TEXT") if isinstance(col_def, dict) else col_def,
-                            "notnull": col_def.get("notnull", False) if isinstance(col_def, dict) else False,
-                            "default": col_def.get("default") if isinstance(col_def, dict) else None,
-                        })
+                        diff.tables_to_alter.append(
+                            {
+                                "table": table_name,
+                                "action": "add_column",
+                                "column": col_name,
+                                "type": col_def.get("type", "TEXT")
+                                if isinstance(col_def, dict)
+                                else col_def,
+                                "notnull": col_def.get("notnull", False)
+                                if isinstance(col_def, dict)
+                                else False,
+                                "default": col_def.get("default")
+                                if isinstance(col_def, dict)
+                                else None,
+                            }
+                        )
                         diff.changes.append(f"ALTER TABLE {table_name} ADD COLUMN {col_name}")
 
                 # Columns to drop
                 for col_name in current_cols:
                     if col_name not in desired_cols:
-                        diff.tables_to_alter.append({
-                            "table": table_name,
-                            "action": "drop_column",
-                            "column": col_name,
-                        })
+                        diff.tables_to_alter.append(
+                            {
+                                "table": table_name,
+                                "action": "drop_column",
+                                "column": col_name,
+                            }
+                        )
                         diff.changes.append(f"ALTER TABLE {table_name} DROP COLUMN {col_name}")
 
                 # Columns to modify (type change)
                 for col_name, desired_col in desired_cols.items():
                     if col_name in current_cols:
                         current_type = current_cols[col_name].get("type", "")
-                        desired_type = desired_col.get("type", "") if isinstance(desired_col, dict) else desired_col
+                        desired_type = (
+                            desired_col.get("type", "")
+                            if isinstance(desired_col, dict)
+                            else desired_col
+                        )
                         if current_type != desired_type:
-                            diff.tables_to_alter.append({
-                                "table": table_name,
-                                "action": "modify_column",
-                                "column": col_name,
-                                "from_type": current_type,
-                                "to_type": desired_type,
-                            })
+                            diff.tables_to_alter.append(
+                                {
+                                    "table": table_name,
+                                    "action": "modify_column",
+                                    "column": col_name,
+                                    "from_type": current_type,
+                                    "to_type": desired_type,
+                                }
+                            )
                             diff.changes.append(
                                 f"ALTER TABLE {table_name} MODIFY COLUMN {col_name} {desired_type}"
                             )
@@ -515,31 +550,28 @@ class SchemaDiffer:
         # Indexes to create
         for table_name, table_def in normalized_desired.items():
             if table_name in current_schema:
-                desired_indexes = {
-                    idx["name"]: idx
-                    for idx in table_def.get("indexes", [])
-                }
+                desired_indexes = {idx["name"]: idx for idx in table_def.get("indexes", [])}
                 current_indexes = {
-                    idx["name"]: idx
-                    for idx in current_schema[table_name]["indexes"]
+                    idx["name"]: idx for idx in current_schema[table_name]["indexes"]
                 }
 
                 for idx_name, idx_def in desired_indexes.items():
                     if idx_name not in current_indexes:
-                        diff.indexes_to_create.append({
-                            "name": idx_name,
-                            "table": table_name,
-                            "columns": idx_def.get("columns", []),
-                            "unique": idx_def.get("unique", False),
-                        })
+                        diff.indexes_to_create.append(
+                            {
+                                "name": idx_name,
+                                "table": table_name,
+                                "columns": idx_def.get("columns", []),
+                                "unique": idx_def.get("unique", False),
+                            }
+                        )
                         diff.changes.append(f"CREATE INDEX {idx_name}")
 
         # Indexes to drop
         for table_name, table_def in current_schema.items():
             if table_name in normalized_desired:
                 desired_indexes = {
-                    idx["name"]: idx
-                    for idx in normalized_desired[table_name].get("indexes", [])
+                    idx["name"]: idx for idx in normalized_desired[table_name].get("indexes", [])
                 }
                 for idx_name in table_def.get("indexes", []):
                     if isinstance(idx_name, dict):
@@ -577,25 +609,22 @@ class SchemaDiffer:
                     default = ""
                     if "default" in col_def:
                         val = col_def["default"]
-                        if isinstance(val, str):
-                            default = f" DEFAULT '{val}'"
-                        else:
-                            default = f" DEFAULT {val}"
+                        default = f" DEFAULT '{val}'" if isinstance(val, str) else f" DEFAULT {val}"
                     if "PRIMARY KEY" in col_type.upper():
                         pk_set = True
                     cols.append(f'"{col_name}" {col_type}{notnull}{default}')
 
             pk = table.get("primary_key")
             if pk and not pk_set:
-                cols.append(f"PRIMARY KEY (\"{pk}\")")
+                cols.append(f'PRIMARY KEY ("{pk}")')
 
             sql_statements.append(
-                f"CREATE TABLE IF NOT EXISTS \"{table['name']}\" ({', '.join(cols)})"
+                f'CREATE TABLE IF NOT EXISTS "{table["name"]}" ({", ".join(cols)})'
             )
 
         # Drop tables
         for table_name in diff.tables_to_drop:
-            sql_statements.append(f"DROP TABLE IF EXISTS \"{table_name}\"")
+            sql_statements.append(f'DROP TABLE IF EXISTS "{table_name}"')
 
         # Alter tables
         for alter in diff.tables_to_alter:
@@ -605,16 +634,13 @@ class SchemaDiffer:
                 default = ""
                 if "default" in alter:
                     val = alter["default"]
-                    if isinstance(val, str):
-                        default = f" DEFAULT '{val}'"
-                    else:
-                        default = f" DEFAULT {val}"
+                    default = f" DEFAULT '{val}'" if isinstance(val, str) else f" DEFAULT {val}"
                 sql_statements.append(
-                    f"ALTER TABLE \"{alter['table']}\" ADD COLUMN \"{alter['column']}\" {col_type}{notnull}{default}"
+                    f'ALTER TABLE "{alter["table"]}" ADD COLUMN "{alter["column"]}" {col_type}{notnull}{default}'
                 )
             elif alter["action"] == "drop_column":
                 sql_statements.append(
-                    f"ALTER TABLE \"{alter['table']}\" DROP COLUMN \"{alter['column']}\""
+                    f'ALTER TABLE "{alter["table"]}" DROP COLUMN "{alter["column"]}"'
                 )
             elif alter["action"] == "modify_column":
                 # SQLite doesn't support MODIFY COLUMN directly
@@ -628,13 +654,12 @@ class SchemaDiffer:
             unique = "UNIQUE " if idx.get("unique") else ""
             cols = ", ".join(f'"{c}"' for c in idx["columns"])
             sql_statements.append(
-                f"CREATE {unique}INDEX IF NOT EXISTS \"{idx['name']}\" "
-                f"ON \"{idx['table']}\" ({cols})"
+                f'CREATE {unique}INDEX IF NOT EXISTS "{idx["name"]}" ON "{idx["table"]}" ({cols})'
             )
 
         # Drop indexes
         for idx_name in diff.indexes_to_drop:
-            sql_statements.append(f"DROP INDEX IF EXISTS \"{idx_name}\"")
+            sql_statements.append(f'DROP INDEX IF EXISTS "{idx_name}"')
 
         return "\n".join(sql_statements)
 
@@ -666,7 +691,9 @@ class SchemaDiffer:
                 "changes": diff.changes,
             },
             "sql": sql,
-            "statement_count": len([s for s in sql.split("\n") if s.strip() and not s.strip().startswith("--")]),
+            "statement_count": len(
+                [s for s in sql.split("\n") if s.strip() and not s.strip().startswith("--")]
+            ),
         }
 
 
@@ -718,31 +745,29 @@ class RelationshipDetector:
             # Check for explicit foreign keys
             for table_name in table_names:
                 safe_name = f'"{table_name}"'
-                fk_info = conn.execute(
-                    f"PRAGMA foreign_key_list({safe_name})"
-                ).fetchall()
+                fk_info = conn.execute(f"PRAGMA foreign_key_list({safe_name})").fetchall()
 
                 for fk in fk_info:
                     # fk: (id, seq, table, from, to, on_update, on_delete, match)
-                    relationships.append(Relationship(
-                        source_table=table_name,
-                        source_column=fk[3],
-                        target_table=fk[2],
-                        target_column=fk[4],
-                        relationship_type="one-to-many",
-                        confidence=0.95,
-                    ))
+                    relationships.append(
+                        Relationship(
+                            source_table=table_name,
+                            source_column=fk[3],
+                            target_table=fk[2],
+                            target_column=fk[4],
+                            relationship_type="one-to-many",
+                            confidence=0.95,
+                        )
+                    )
 
             # Check for implicit relationships (column name patterns)
             for table_name in table_names:
                 safe_name = f'"{table_name}"'
-                columns = conn.execute(
-                    f"PRAGMA table_info({safe_name})"
-                ).fetchall()
+                columns = conn.execute(f"PRAGMA table_info({safe_name})").fetchall()
 
                 for col in columns:
                     col_name = col[1]
-                    col_type = col[2] or ""
+                    col[2] or ""
 
                     # Check if column name matches another table's primary key
                     if col_name.lower().endswith("_id"):
@@ -760,28 +785,32 @@ class RelationshipDetector:
                         if target_table:
                             # Check if target table has an integer primary key
                             target_pk = conn.execute(
-                                f"PRAGMA table_info(\"{target_table}\")"
+                                f'PRAGMA table_info("{target_table}")'
                             ).fetchall()
-                            if target_pk and target_pk[0][2] and "INTEGER" in target_pk[0][2].upper():
+                            if (
+                                target_pk
+                                and target_pk[0][2]
+                                and "INTEGER" in target_pk[0][2].upper()
+                            ):
                                 # Check data correlation
                                 correlation = self._check_correlation(
                                     conn, table_name, col_name, target_table
                                 )
-                                relationships.append(Relationship(
-                                    source_table=table_name,
-                                    source_column=col_name,
-                                    target_table=target_table,
-                                    target_column=target_pk[0][1],
-                                    relationship_type="one-to-many",
-                                    confidence=correlation,
-                                ))
+                                relationships.append(
+                                    Relationship(
+                                        source_table=table_name,
+                                        source_column=col_name,
+                                        target_table=target_table,
+                                        target_column=target_pk[0][1],
+                                        relationship_type="one-to-many",
+                                        confidence=correlation,
+                                    )
+                                )
 
             # Check for many-to-many relationships (junction tables)
             for table_name in table_names:
                 safe_name = f'"{table_name}"'
-                columns = conn.execute(
-                    f"PRAGMA table_info({safe_name})"
-                ).fetchall()
+                columns = conn.execute(f"PRAGMA table_info({safe_name})").fetchall()
 
                 # A junction table typically has exactly 2 foreign key columns
                 # and no primary key other than the combination
@@ -790,28 +819,31 @@ class RelationshipDetector:
                     col2_name = columns[1][1]
 
                     # Check if both columns look like foreign keys
-                    if (col1_name.lower().endswith("_id") and
-                            col2_name.lower().endswith("_id")):
+                    if col1_name.lower().endswith("_id") and col2_name.lower().endswith("_id"):
                         target1 = col1_name[:-3]
                         target2 = col2_name[:-3]
 
-                        if (target1 in table_names and target2 in table_names):
-                            relationships.append(Relationship(
-                                source_table=table_name,
-                                source_column=col1_name,
-                                target_table=target1,
-                                target_column="id",
-                                relationship_type="many-to-many",
-                                confidence=0.85,
-                            ))
-                            relationships.append(Relationship(
-                                source_table=table_name,
-                                source_column=col2_name,
-                                target_table=target2,
-                                target_column="id",
-                                relationship_type="many-to-many",
-                                confidence=0.85,
-                            ))
+                        if target1 in table_names and target2 in table_names:
+                            relationships.append(
+                                Relationship(
+                                    source_table=table_name,
+                                    source_column=col1_name,
+                                    target_table=target1,
+                                    target_column="id",
+                                    relationship_type="many-to-many",
+                                    confidence=0.85,
+                                )
+                            )
+                            relationships.append(
+                                Relationship(
+                                    source_table=table_name,
+                                    source_column=col2_name,
+                                    target_table=target2,
+                                    target_column="id",
+                                    relationship_type="many-to-many",
+                                    confidence=0.85,
+                                )
+                            )
 
             return relationships
 
@@ -841,8 +873,7 @@ class RelationshipDetector:
             placeholders = ",".join("?" for _ in source_ids)
 
             target_exists = conn.execute(
-                f'SELECT COUNT(*) FROM "{target_table}" '
-                f'WHERE "id" IN ({placeholders})',
+                f'SELECT COUNT(*) FROM "{target_table}" WHERE "id" IN ({placeholders})',
                 source_ids,
             ).fetchone()[0]
 
@@ -899,14 +930,10 @@ class NormalizationAnalyzer:
                 safe_name = f'"{table_name}"'
 
                 # Get columns
-                columns = conn.execute(
-                    f"PRAGMA table_info({safe_name})"
-                ).fetchall()
+                columns = conn.execute(f"PRAGMA table_info({safe_name})").fetchall()
 
                 # Get row count
-                row_count = conn.execute(
-                    f"SELECT COUNT(*) FROM {safe_name}"
-                ).fetchone()[0]
+                row_count = conn.execute(f"SELECT COUNT(*) FROM {safe_name}").fetchone()[0]
 
                 if row_count == 0:
                     continue
@@ -915,13 +942,15 @@ class NormalizationAnalyzer:
                 col_names = [col[1] for col in columns]
                 repeating = self._detect_repeating_groups(col_names)
                 for group in repeating:
-                    issues.append(NormalizationIssue(
-                        table=table_name,
-                        column=", ".join(group),
-                        issue_type="repeating_group",
-                        description=f"Columns {group} appear to be a repeating group",
-                        suggestion=f"Create a separate table for {group[0]} values",
-                    ))
+                    issues.append(
+                        NormalizationIssue(
+                            table=table_name,
+                            column=", ".join(group),
+                            issue_type="repeating_group",
+                            description=f"Columns {group} appear to be a repeating group",
+                            suggestion=f"Create a separate table for {group[0]} values",
+                        )
+                    )
 
                 # Check for partial dependencies (non-key columns depending on part of composite key)
                 pk_cols = [col[1] for col in columns if col[5]]
@@ -933,16 +962,18 @@ class NormalizationAnalyzer:
                             for pk_col in pk_cols:
                                 if pk_col.lower().endswith("_id"):
                                     # This column might depend on just this PK part
-                                    issues.append(NormalizationIssue(
-                                        table=table_name,
-                                        column=col_name,
-                                        issue_type="partial_dependency",
-                                        description=(
-                                            f"Column '{col_name}' may depend only on "
-                                            f"'{pk_col}' part of composite key"
-                                        ),
-                                        suggestion=f"Consider moving '{col_name}' to a separate table",
-                                    ))
+                                    issues.append(
+                                        NormalizationIssue(
+                                            table=table_name,
+                                            column=col_name,
+                                            issue_type="partial_dependency",
+                                            description=(
+                                                f"Column '{col_name}' may depend only on "
+                                                f"'{pk_col}' part of composite key"
+                                            ),
+                                            suggestion=f"Consider moving '{col_name}' to a separate table",
+                                        )
+                                    )
 
                 # Check for transitive dependencies
                 for col1 in columns:
@@ -956,16 +987,18 @@ class NormalizationAnalyzer:
                                     conn, table_name, col1_name, col2_name
                                 )
                                 if correlation > 0.9:
-                                    issues.append(NormalizationIssue(
-                                        table=table_name,
-                                        column=f"{col1_name} -> {col2_name}",
-                                        issue_type="transitive_dependency",
-                                        description=(
-                                            f"Column '{col2_name}' appears to transitively "
-                                            f"depend on '{col1_name}'"
-                                        ),
-                                        suggestion=f"Remove '{col2_name}' and derive it from '{col1_name}'",
-                                    ))
+                                    issues.append(
+                                        NormalizationIssue(
+                                            table=table_name,
+                                            column=f"{col1_name} -> {col2_name}",
+                                            issue_type="transitive_dependency",
+                                            description=(
+                                                f"Column '{col2_name}' appears to transitively "
+                                                f"depend on '{col1_name}'"
+                                            ),
+                                            suggestion=f"Remove '{col2_name}' and derive it from '{col1_name}'",
+                                        )
+                                    )
 
             return issues
 
@@ -977,7 +1010,7 @@ class NormalizationAnalyzer:
         patterns = {}
         for name in col_names:
             # Match patterns like "name_1", "name_2", etc.
-            match = re.match(r'^(.+?)_(\d+)$', name)
+            match = re.match(r"^(.+?)_(\d+)$", name)
             if match:
                 base = match.group(1)
                 num = int(match.group(2))
@@ -986,7 +1019,7 @@ class NormalizationAnalyzer:
                 patterns[base].append((num, name))
 
             # Match patterns like "name_a", "name_b", etc.
-            match = re.match(r'^(.+?)_([a-z])$', name)
+            match = re.match(r"^(.+?)_([a-z])$", name)
             if match:
                 base = match.group(1)
                 letter = match.group(2)
@@ -1014,8 +1047,7 @@ class NormalizationAnalyzer:
         try:
             # Get distinct values of col1
             col1_values = conn.execute(
-                f'SELECT DISTINCT "{col1}" FROM "{table_name}" '
-                f'WHERE "{col1}" IS NOT NULL'
+                f'SELECT DISTINCT "{col1}" FROM "{table_name}" WHERE "{col1}" IS NOT NULL'
             ).fetchall()
 
             if not col1_values:
@@ -1026,8 +1058,7 @@ class NormalizationAnalyzer:
             consistent = 0
             for (val,) in col1_values:
                 col2_vals = conn.execute(
-                    f'SELECT DISTINCT "{col2}" FROM "{table_name}" '
-                    f'WHERE "{col1}" = ?',
+                    f'SELECT DISTINCT "{col2}" FROM "{table_name}" WHERE "{col1}" = ?',
                     (val,),
                 ).fetchall()
                 total += 1
@@ -1093,19 +1124,13 @@ class SchemaDocumenter:
                 safe_name = f'"{table_name}"'
 
                 # Get columns
-                columns = conn.execute(
-                    f"PRAGMA table_info({safe_name})"
-                ).fetchall()
+                columns = conn.execute(f"PRAGMA table_info({safe_name})").fetchall()
 
                 # Get row count
-                row_count = conn.execute(
-                    f"SELECT COUNT(*) FROM {safe_name}"
-                ).fetchone()[0]
+                row_count = conn.execute(f"SELECT COUNT(*) FROM {safe_name}").fetchone()[0]
 
                 # Get indexes
-                indexes = conn.execute(
-                    f"PRAGMA index_list({safe_name})"
-                ).fetchall()
+                indexes = conn.execute(f"PRAGMA index_list({safe_name})").fetchall()
 
                 table_doc = {
                     "name": table_name,
@@ -1115,44 +1140,48 @@ class SchemaDocumenter:
                 }
 
                 for col in columns:
-                    table_doc["columns"].append({
-                        "name": col[1],
-                        "type": col[2] or "",
-                        "notnull": bool(col[3]),
-                        "default": col[4],
-                        "primary_key": bool(col[5]),
-                    })
+                    table_doc["columns"].append(
+                        {
+                            "name": col[1],
+                            "type": col[2] or "",
+                            "notnull": bool(col[3]),
+                            "default": col[4],
+                            "primary_key": bool(col[5]),
+                        }
+                    )
 
                 for idx in indexes:
                     idx_name = idx[1]
                     is_unique = bool(idx[2])
                     idx_cols = [
-                        c[1]
-                        for c in conn.execute(
-                            f'PRAGMA index_info("{idx_name}")'
-                        ).fetchall()
+                        c[1] for c in conn.execute(f'PRAGMA index_info("{idx_name}")').fetchall()
                     ]
-                    table_doc["indexes"].append({
-                        "name": idx_name,
-                        "unique": is_unique,
-                        "columns": idx_cols,
-                    })
+                    table_doc["indexes"].append(
+                        {
+                            "name": idx_name,
+                            "unique": is_unique,
+                            "columns": idx_cols,
+                        }
+                    )
 
                 doc.tables.append(table_doc)
 
             # Detect relationships
             from .schema_evolution import RelationshipDetector
+
             detector = RelationshipDetector(self.db_path)
             relationships = detector.detect_relationships()
             for rel in relationships:
-                doc.relationships.append({
-                    "source_table": rel.source_table,
-                    "source_column": rel.source_column,
-                    "target_table": rel.target_table,
-                    "target_column": rel.target_column,
-                    "type": rel.relationship_type,
-                    "confidence": rel.confidence,
-                })
+                doc.relationships.append(
+                    {
+                        "source_table": rel.source_table,
+                        "source_column": rel.source_column,
+                        "target_table": rel.target_table,
+                        "target_column": rel.target_column,
+                        "type": rel.relationship_type,
+                        "confidence": rel.confidence,
+                    }
+                )
 
             return doc
 
@@ -1163,18 +1192,18 @@ class SchemaDocumenter:
             doc = SchemaDoc(title=doc, version=0, generated_at=time.time())
         lines = [
             f"# {doc.title}",
-            f"",
+            "",
             f"Generated at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(doc.generated_at))}",
-            f"",
-            f"## Tables",
-            f"",
+            "",
+            "## Tables",
+            "",
         ]
 
         for table in doc.tables:
             lines.append(f"### `{table['name']}`")
-            lines.append(f"")
+            lines.append("")
             lines.append(f"Rows: {table['row_count']}")
-            lines.append(f"")
+            lines.append("")
             lines.append("| Column | Type | Not Null | Default | Primary Key |")
             lines.append("|--------|------|----------|---------|-------------|")
 
@@ -1187,19 +1216,19 @@ class SchemaDocumenter:
                 )
 
             if table["indexes"]:
-                lines.append(f"")
-                lines.append(f"**Indexes:**")
-                lines.append(f"")
+                lines.append("")
+                lines.append("**Indexes:**")
+                lines.append("")
                 for idx in table["indexes"]:
                     unique = "UNIQUE " if idx["unique"] else ""
                     cols = ", ".join(idx["columns"])
                     lines.append(f"- `{unique}{idx['name']}` on ({cols})")
 
-            lines.append(f"")
+            lines.append("")
 
         if doc.relationships:
-            lines.append(f"## Relationships")
-            lines.append(f"")
+            lines.append("## Relationships")
+            lines.append("")
             lines.append("| Source | Source Column | Target | Target Column | Type | Confidence |")
             lines.append("|--------|--------------|--------|---------------|------|------------|")
 
@@ -1210,7 +1239,7 @@ class SchemaDocumenter:
                     f"{rel['type']} | {rel['confidence']:.0%} |"
                 )
 
-            lines.append(f"")
+            lines.append("")
 
         return "\n".join(lines)
 
@@ -1255,7 +1284,7 @@ class HealthMonitor:
 
             total_pages = page_count
             free_pages = freelist_count
-            used_pages = total_pages - free_pages
+            total_pages - free_pages
 
             # Calculate fragmentation
             fragmentation_pct = (free_pages / total_pages * 100) if total_pages > 0 else 0.0
@@ -1276,8 +1305,7 @@ class HealthMonitor:
             suggestions = []
             if fragmentation_pct > 20:
                 suggestions.append(
-                    f"Database is {fragmentation_pct:.1f}% fragmented — "
-                    f"run VACUUM to reclaim space"
+                    f"Database is {fragmentation_pct:.1f}% fragmented — run VACUUM to reclaim space"
                 )
             if bloat_bytes > 10 * 1024 * 1024:  # 10 MB
                 suggestions.append(
@@ -1291,8 +1319,7 @@ class HealthMonitor:
                 )
             if large_tables:
                 suggestions.append(
-                    f"Found {len(large_tables)} large tables — "
-                    f"consider partitioning or archiving"
+                    f"Found {len(large_tables)} large tables — consider partitioning or archiving"
                 )
             if corruption_detected:
                 suggestions.append(
@@ -1341,22 +1368,15 @@ class HealthMonitor:
             safe_name = f'"{table_name}"'
 
             # Get columns
-            columns = conn.execute(
-                f"PRAGMA table_info({safe_name})"
-            ).fetchall()
+            columns = conn.execute(f"PRAGMA table_info({safe_name})").fetchall()
 
             # Get existing indexes
-            indexes = conn.execute(
-                f"PRAGMA index_list({safe_name})"
-            ).fetchall()
+            indexes = conn.execute(f"PRAGMA index_list({safe_name})").fetchall()
             indexed_cols = set()
             for idx in indexes:
                 idx_name = idx[1]
                 idx_cols = [
-                    c[1]
-                    for c in conn.execute(
-                        f'PRAGMA index_info("{idx_name}")'
-                    ).fetchall()
+                    c[1] for c in conn.execute(f'PRAGMA index_info("{idx_name}")').fetchall()
                 ]
                 indexed_cols.update(idx_cols)
 
@@ -1388,9 +1408,9 @@ class HealthMonitor:
         for (table_name,) in tables:
             safe_name = f'"{table_name}"'
             # Estimate table size
-            size = conn.execute(
-                f"SELECT COUNT(*) FROM {safe_name}"
-            ).fetchone()[0] * page_size  # Rough estimate
+            size = (
+                conn.execute(f"SELECT COUNT(*) FROM {safe_name}").fetchone()[0] * page_size
+            )  # Rough estimate
 
             if size > threshold_bytes:
                 large.append(table_name)

@@ -25,10 +25,10 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 log = logging.getLogger("tektos.skill_registry")
 
@@ -70,7 +70,7 @@ class Skill:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Skill":
+    def from_dict(cls, data: dict[str, Any]) -> Skill:
         data = dict(data)
         data["is_active"] = bool(data.get("is_active", True))
         # Parse JSON string fields
@@ -111,13 +111,13 @@ class Skill:
         lines = [
             f"# {self.name}",
             "",
-            f"## Description",
+            "## Description",
             self.description or "",
             "",
-            f"## Category",
+            "## Category",
             self.category or "general",
             "",
-            f"## Trigger Conditions",
+            "## Trigger Conditions",
         ]
         for tc in self.trigger_conditions:
             lines.append(f"- {tc}")
@@ -132,7 +132,7 @@ class Skill:
             if args:
                 lines.append(f"   - Parameters: {json.dumps(args, indent=4)}")
         lines.append("")
-        lines.append(f"## Metadata")
+        lines.append("## Metadata")
         lines.append(f"- Source: {self.source}")
         lines.append(f"- Version: {self.version}")
         lines.append(f"- Created: {self.created_at}")
@@ -141,7 +141,7 @@ class Skill:
         return "\n".join(lines)
 
     @classmethod
-    def from_skill_md(cls, content: str, name: str, category: str = "") -> "Skill":
+    def from_skill_md(cls, content: str, name: str, category: str = "") -> Skill:
         """Parse a SKILL.md file into a Skill object."""
         skill = cls(id=str(uuid.uuid4()), name=name, category=category)
 
@@ -161,9 +161,11 @@ class Skill:
                 for line in section.split("\n"):
                     line = line.strip()
                     if line and line[0].isdigit() and ". " in line:
-                        skill.steps.append({
-                            "description": line.split(". ", 1)[1] if ". " in line else line,
-                        })
+                        skill.steps.append(
+                            {
+                                "description": line.split(". ", 1)[1] if ". " in line else line,
+                            }
+                        )
             elif section.startswith("Metadata"):
                 for line in section.split("\n"):
                     line = line.strip()
@@ -190,12 +192,13 @@ class SkillRegistry:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.skill_dir = Path(skill_dir or str(Path.home() / ".tektos/skills/"))
         self.skill_dir.mkdir(parents=True, exist_ok=True)
-        self._conn: Optional[Any] = None
+        self._conn: Any | None = None
         self._init_db()
 
     def _get_conn(self) -> Any:
         """Get a SQLite connection."""
         import sqlite3
+
         if self._conn is None:
             self._conn = sqlite3.connect(str(self.db_path), timeout=30.0)
             self._conn.row_factory = sqlite3.Row
@@ -228,8 +231,12 @@ class SkillRegistry:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_name ON skill_registry(name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_category ON skill_registry(category)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_active ON skill_registry(is_active)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_registry_category ON skill_registry(category)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_registry_active ON skill_registry(is_active)"
+        )
         conn.commit()
 
     # ── CRUD ─────────────────────────────────────────────────────────────
@@ -239,17 +246,25 @@ class SkillRegistry:
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         skill.updated_at = now
-        d = skill.to_dict()
+        skill.to_dict()
         conn.execute(
             """INSERT OR REPLACE INTO skill_registry
                (id, name, category, description, trigger_conditions, steps,
                 source, created_at, updated_at, version, is_active, metadata)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                skill.id, skill.name, skill.category, skill.description,
-                json.dumps(skill.trigger_conditions), json.dumps(skill.steps),
-                skill.source, skill.created_at, skill.updated_at, skill.version,
-                1 if skill.is_active else 0, json.dumps(skill.metadata),
+                skill.id,
+                skill.name,
+                skill.category,
+                skill.description,
+                json.dumps(skill.trigger_conditions),
+                json.dumps(skill.steps),
+                skill.source,
+                skill.created_at,
+                skill.updated_at,
+                skill.version,
+                1 if skill.is_active else 0,
+                json.dumps(skill.metadata),
             ),
         )
         conn.commit()
@@ -258,22 +273,18 @@ class SkillRegistry:
         log.info("Created skill: %s (id=%s)", skill.name, skill.id)
         return skill
 
-    def get_by_id(self, skill_id: str) -> Optional[Skill]:
+    def get_by_id(self, skill_id: str) -> Skill | None:
         """Get a skill by ID."""
         conn = self._get_conn()
-        row = conn.execute(
-            "SELECT * FROM skill_registry WHERE id = ?", (skill_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM skill_registry WHERE id = ?", (skill_id,)).fetchone()
         if row is None:
             return None
         return Skill.from_dict(dict(row))
 
-    def get_by_name(self, name: str) -> Optional[Skill]:
+    def get_by_name(self, name: str) -> Skill | None:
         """Get a skill by name."""
         conn = self._get_conn()
-        row = conn.execute(
-            "SELECT * FROM skill_registry WHERE name = ?", (name,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM skill_registry WHERE name = ?", (name,)).fetchone()
         if row is None:
             return None
         return Skill.from_dict(dict(row))
@@ -281,7 +292,7 @@ class SkillRegistry:
     def update(self, skill: Skill) -> Skill:
         """Update an existing skill."""
         skill.updated_at = datetime.now(timezone.utc).isoformat()
-        d = skill.to_dict()
+        skill.to_dict()
         conn = self._get_conn()
         conn.execute(
             """UPDATE skill_registry SET
@@ -290,10 +301,15 @@ class SkillRegistry:
                 updated_at = ?, version = ?, is_active = ?, metadata = ?
                WHERE id = ?""",
             (
-                skill.name, skill.category, skill.description,
-                json.dumps(skill.trigger_conditions), json.dumps(skill.steps),
-                skill.updated_at, skill.version,
-                1 if skill.is_active else 0, json.dumps(skill.metadata),
+                skill.name,
+                skill.category,
+                skill.description,
+                json.dumps(skill.trigger_conditions),
+                json.dumps(skill.steps),
+                skill.updated_at,
+                skill.version,
+                1 if skill.is_active else 0,
+                json.dumps(skill.metadata),
                 skill.id,
             ),
         )
@@ -540,7 +556,9 @@ class SkillRegistry:
             dup_descriptions = [d.description for d in duplicates if d.description]
             enriched_desc = primary.description
             if dup_descriptions:
-                enriched_desc = f"{primary.description}\n\nMerged from: {'; '.join(dup_descriptions[:3])}"
+                enriched_desc = (
+                    f"{primary.description}\n\nMerged from: {'; '.join(dup_descriptions[:3])}"
+                )
 
             # Merge usage stats
             total_usage = primary.usage_count
@@ -604,7 +622,7 @@ class SkillRegistry:
         new_triggers: list[str] | None = None,
         improvement_note: str = "",
         metadata_updates: dict[str, Any] | None = None,
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """Improve a skill by updating its description, steps, or triggers.
 
         Args:
@@ -632,11 +650,13 @@ class SkillRegistry:
         # Track improvement history
         if "improvement_history" not in skill.metadata:
             skill.metadata["improvement_history"] = []
-        skill.metadata["improvement_history"].append({
-            "improved_at": datetime.now(timezone.utc).isoformat(),
-            "note": improvement_note,
-            "version_before": skill.version,
-        })
+        skill.metadata["improvement_history"].append(
+            {
+                "improved_at": datetime.now(timezone.utc).isoformat(),
+                "note": improvement_note,
+                "version_before": skill.version,
+            }
+        )
 
         if metadata_updates:
             skill.metadata.update(metadata_updates)
@@ -650,7 +670,7 @@ class SkillRegistry:
         self,
         skill_id: str,
         execution_result: dict[str, Any],
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """Improve a skill based on its execution result.
 
         Analyzes execution output to:
@@ -686,19 +706,23 @@ class SkillRegistry:
             for sr in step_results:
                 if sr.get("success") and sr.get("output"):
                     skill.metadata.setdefault("successful_patterns", [])
-                    skill.metadata["successful_patterns"].append({
-                        "step": sr.get("action", ""),
-                        "output_summary": sr["output"][:100],
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    skill.metadata["successful_patterns"].append(
+                        {
+                            "step": sr.get("action", ""),
+                            "output_summary": sr["output"][:100],
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
 
         if error:
             # Record failure patterns
             skill.metadata.setdefault("failure_patterns", [])
-            skill.metadata["failure_patterns"].append({
-                "error": error[:200],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            skill.metadata["failure_patterns"].append(
+                {
+                    "error": error[:200],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
 
             # If a specific step failed, mark it for review
             for sr in step_results:
@@ -710,12 +734,14 @@ class SkillRegistry:
         # Update improvement history
         if "improvement_history" not in skill.metadata:
             skill.metadata["improvement_history"] = []
-        skill.metadata["improvement_history"].append({
-            "improved_at": datetime.now(timezone.utc).isoformat(),
-            "note": f"Auto-improved from execution: {'success' if success else 'failure'}",
-            "version_before": skill.version,
-            "success": success,
-        })
+        skill.metadata["improvement_history"].append(
+            {
+                "improved_at": datetime.now(timezone.utc).isoformat(),
+                "note": f"Auto-improved from execution: {'success' if success else 'failure'}",
+                "version_before": skill.version,
+                "success": success,
+            }
+        )
 
         skill.version = self._bump_version(skill.version)
         skill.updated_at = datetime.now(timezone.utc).isoformat()
@@ -735,7 +761,7 @@ class SkillRegistry:
         if path.exists():
             path.unlink()
 
-    def _load_skill_file(self, skill: Skill) -> Optional[str]:
+    def _load_skill_file(self, skill: Skill) -> str | None:
         """Load a skill's SKILL.md file content."""
         path = self.skill_dir / f"{skill.name}.md"
         if path.exists():

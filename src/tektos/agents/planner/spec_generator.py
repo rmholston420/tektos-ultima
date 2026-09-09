@@ -71,17 +71,21 @@ def generate_spec(
     # Convert phase dicts to SpecPhase objects
     spec_phases: list[SpecPhase] = []
     for phase_data in phases:
-        spec_phases.append(SpecPhase(
-            id=phase_data.get("id", f"phase-{len(spec_phases)+1}"),
-            description=phase_data.get("description", ""),
-            deliverables=phase_data.get("deliverables", []),
-            acceptance_criteria=phase_data.get("acceptance_criteria", []),
-            estimated_effort=phase_data.get("estimated_effort", "unknown"),
-        ))
+        spec_phases.append(
+            SpecPhase(
+                id=phase_data.get("id", f"phase-{len(spec_phases) + 1}"),
+                description=phase_data.get("description", ""),
+                deliverables=phase_data.get("deliverables", []),
+                acceptance_criteria=phase_data.get("acceptance_criteria", []),
+                estimated_effort=phase_data.get("estimated_effort", "unknown"),
+            )
+        )
 
     spec_notes = list(notes) if notes else []
     if synthesis_guidance:
-        spec_notes.append(f"[SELF-IMPROVEMENT GUIDANCE — Past execution lessons]\n{synthesis_guidance}")
+        spec_notes.append(
+            f"[SELF-IMPROVEMENT GUIDANCE — Past execution lessons]\n{synthesis_guidance}"
+        )
         # Weave actionable guidance into requirements so the Coding Agent
         # sees them as first-class spec items, not just notes
         for line in synthesis_guidance.split("\n"):
@@ -95,7 +99,7 @@ def generate_spec(
             actionable = line
             for prefix in ["⚑ HIGH:", "⚠ URGENT:", "⚑ HIGH", "⚠ URGENT", "⚑ ", "⚠ ", "- "]:
                 if actionable.startswith(prefix):
-                    actionable = actionable[len(prefix):].strip()
+                    actionable = actionable[len(prefix) :].strip()
                     break
             if actionable and actionable not in requirements:
                 requirements.append(actionable)
@@ -230,27 +234,31 @@ def _default_phases(requirements: list[str]) -> list[dict[str, Any]]:
     ]
 
     if improvement_reqs:
-        phases.append({
-            "id": "phase-2",
-            "description": "Features that improve the slice",
-            "deliverables": improvement_reqs,
-            "acceptance_criteria": [
-                f"Each of the {len(improvement_reqs)} improvement requirements is implemented and tested",
-            ],
-            "estimated_effort": "M" if len(improvement_reqs) <= 3 else "L",
-        })
+        phases.append(
+            {
+                "id": "phase-2",
+                "description": "Features that improve the slice",
+                "deliverables": improvement_reqs,
+                "acceptance_criteria": [
+                    f"Each of the {len(improvement_reqs)} improvement requirements is implemented and tested",
+                ],
+                "estimated_effort": "M" if len(improvement_reqs) <= 3 else "L",
+            }
+        )
 
     if polish_needed:
-        phases.append({
-            "id": "phase-3",
-            "description": "Polish and robustness",
-            "deliverables": ["Error handling", "Input validation", "Documentation"],
-            "acceptance_criteria": [
-                "All error paths are handled",
-                "Input validation is comprehensive",
-                "Documentation covers all public APIs",
-            ],
-            "estimated_effort": "S",
-        })
+        phases.append(
+            {
+                "id": "phase-3",
+                "description": "Polish and robustness",
+                "deliverables": ["Error handling", "Input validation", "Documentation"],
+                "acceptance_criteria": [
+                    "All error paths are handled",
+                    "Input validation is comprehensive",
+                    "Documentation covers all public APIs",
+                ],
+                "estimated_effort": "S",
+            }
+        )
 
     return phases

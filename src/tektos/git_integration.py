@@ -17,23 +17,23 @@ Design:
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 log = logging.getLogger(__name__)
 
 # Match 40-character hex commit hashes at line start
-_HASH_RE = re.compile(r'^[0-9a-f]{40}\|')
+_HASH_RE = re.compile(r"^[0-9a-f]{40}\|")
 
 
 @dataclass
 class GitStatus:
     """Current status of a git repository."""
+
     root: str
     is_repo: bool = False
     branch: str = ""
@@ -47,6 +47,7 @@ class GitStatus:
 @dataclass
 class GitCommit:
     """A git commit with metadata."""
+
     hash: str
     short_hash: str
     message: str
@@ -69,7 +70,7 @@ class GitIntegration:
             return True
         try:
             subprocess.run(
-                ['git', 'init'],
+                ["git", "init"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -85,13 +86,13 @@ class GitIntegration:
         """Check if path is a git repository."""
         try:
             result = subprocess.run(
-                ['git', 'rev-parse', '--is-inside-work-tree'],
+                ["git", "rev-parse", "--is-inside-work-tree"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
-            return result.returncode == 0 and 'true' in result.stdout
+            return result.returncode == 0 and "true" in result.stdout
         except Exception:
             return False
 
@@ -105,7 +106,7 @@ class GitIntegration:
         try:
             # Check if dirty
             result = subprocess.run(
-                ['git', 'status', '--porcelain'],
+                ["git", "status", "--porcelain"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -114,24 +115,24 @@ class GitIntegration:
             status.is_dirty = bool(result.stdout.strip())
 
             # Parse status output
-            for line in result.stdout.split('\n'):
+            for line in result.stdout.split("\n"):
                 if not line:
                     continue
                 status_code = line[:2]
                 filepath = line[3:]
 
-                if status_code[0] == ' ':
+                if status_code[0] == " ":
                     # Work tree only changes (second char is M/D/U/R/C)
-                    if len(status_code) >= 2 and status_code[1] in ('M', 'D', 'U', 'R', 'C'):
+                    if len(status_code) >= 2 and status_code[1] in ("M", "D", "U", "R", "C"):
                         status.modified_files.append(filepath)
-                elif status_code.startswith('A') or status_code.startswith('M'):
+                elif status_code.startswith("A") or status_code.startswith("M"):
                     status.staged_files.append(filepath)
-                elif status_code.startswith('??'):
+                elif status_code.startswith("??"):
                     status.untracked_files.append(filepath)
 
             # Get current branch
             result = subprocess.run(
-                ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -148,9 +149,9 @@ class GitIntegration:
         """Get recent commits."""
         commits = []
         try:
-            cmd = ['git', 'log', f'-n{count}', '--format=%H|%h|%s|%an|%aI', '--numstat']
+            cmd = ["git", "log", f"-n{count}", "--format=%H|%h|%s|%an|%aI", "--numstat"]
             if since:
-                cmd.insert(3, f'--since={since}')
+                cmd.insert(3, f"--since={since}")
 
             result = subprocess.run(
                 cmd,
@@ -163,10 +164,10 @@ class GitIntegration:
                 return commits
 
             current_commit = None
-            for line in result.stdout.split('\n'):
+            for line in result.stdout.split("\n"):
                 if _HASH_RE.match(line):
                     # format output starts directly with the hash
-                    parts = line.split('|')
+                    parts = line.split("|")
                     if len(parts) >= 5:
                         current_commit = GitCommit(
                             hash=parts[0],
@@ -201,7 +202,7 @@ class GitIntegration:
                 if fp.exists() and not self.is_gitignored(file_path):
                     # Check if tracked
                     check = subprocess.run(
-                        ['git', 'ls-files', '--error-unmatch', file_path],
+                        ["git", "ls-files", "--error-unmatch", file_path],
                         cwd=str(self.repo_root),
                         capture_output=True,
                         text=True,
@@ -209,13 +210,13 @@ class GitIntegration:
                     )
                     if check.returncode != 0:
                         # File is untracked — show as new file
-                        with open(fp, 'r', errors='replace') as f:
+                        with open(fp, errors="replace") as f:
                             content = f.read()
                         return f"--- /dev/null\n+++ b/{file_path}\n@@ -0,0 +1 @@\n+{content.rstrip()}\n"
 
-            cmd = ['git', 'diff']
+            cmd = ["git", "diff"]
             if file_path:
-                cmd.extend(['--', file_path])
+                cmd.extend(["--", file_path])
 
             result = subprocess.run(
                 cmd,
@@ -232,9 +233,9 @@ class GitIntegration:
     def get_diff_staged(self, file_path: str | None = None) -> str:
         """Get diff for staged changes."""
         try:
-            cmd = ['git', 'diff', '--cached']
+            cmd = ["git", "diff", "--cached"]
             if file_path:
-                cmd.extend(['--', file_path])
+                cmd.extend(["--", file_path])
 
             result = subprocess.run(
                 cmd,
@@ -252,7 +253,7 @@ class GitIntegration:
         """Stage a file for commit."""
         try:
             subprocess.run(
-                ['git', 'add', file_path],
+                ["git", "add", file_path],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -267,7 +268,7 @@ class GitIntegration:
         """Stage all changes."""
         try:
             subprocess.run(
-                ['git', 'add', '-A'],
+                ["git", "add", "-A"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -285,18 +286,18 @@ class GitIntegration:
     ) -> str | None:
         """Create a commit."""
         try:
-            cmd = ['git', 'commit', '-m', message]
+            cmd = ["git", "commit", "-m", message]
             if author:
                 # Set git config temporarily
                 subprocess.run(
-                    ['git', 'config', 'user.name', author.split('<')[0].strip()],
+                    ["git", "config", "user.name", author.split("<")[0].strip()],
                     cwd=str(self.repo_root),
                     capture_output=True,
                     text=True,
                     timeout=10,
                 )
                 subprocess.run(
-                    ['git', 'config', 'user.email', author.split('<')[1].rstrip('>')],
+                    ["git", "config", "user.email", author.split("<")[1].rstrip(">")],
                     cwd=str(self.repo_root),
                     capture_output=True,
                     text=True,
@@ -322,7 +323,7 @@ class GitIntegration:
     def create_branch(self, branch_name: str, from_branch: str | None = None) -> bool:
         """Create a new branch."""
         try:
-            cmd = ['git', 'branch']
+            cmd = ["git", "branch"]
             if from_branch:
                 cmd.extend([branch_name, from_branch])
             else:
@@ -344,7 +345,7 @@ class GitIntegration:
         """Switch to a branch."""
         try:
             result = subprocess.run(
-                ['git', 'checkout', branch_name],
+                ["git", "checkout", branch_name],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -359,7 +360,7 @@ class GitIntegration:
         """Delete a branch."""
         try:
             result = subprocess.run(
-                ['git', 'branch', '-D', branch_name],
+                ["git", "branch", "-D", branch_name],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -374,7 +375,7 @@ class GitIntegration:
         """Get current branch name."""
         try:
             result = subprocess.run(
-                ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -386,9 +387,9 @@ class GitIntegration:
 
     def rollback(self, commit_hash: str | None = None, soft: bool = False) -> bool:
         """Rollback to a specific commit."""
-        target = commit_hash or 'HEAD~1'
+        target = commit_hash or "HEAD~1"
         try:
-            cmd = ['git', 'reset', '--soft' if soft else '--hard', target]
+            cmd = ["git", "reset", "--soft" if soft else "--hard", target]
             result = subprocess.run(
                 cmd,
                 cwd=str(self.repo_root),
@@ -405,13 +406,13 @@ class GitIntegration:
         """List all branches."""
         try:
             result = subprocess.run(
-                ['git', 'branch', '--list'],
+                ["git", "branch", "--list"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
-            return [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
+            return [b.strip().lstrip("* ") for b in result.stdout.strip().split("\n") if b.strip()]
         except Exception:
             return []
 
@@ -419,7 +420,7 @@ class GitIntegration:
         """Check if file is gitignored."""
         try:
             result = subprocess.run(
-                ['git', 'check-ignore', file_path],
+                ["git", "check-ignore", file_path],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -437,7 +438,7 @@ class GitIntegration:
         """Internal: get HEAD hash."""
         try:
             result = subprocess.run(
-                ['git', 'rev-parse', 'HEAD'],
+                ["git", "rev-parse", "HEAD"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -451,13 +452,17 @@ class GitIntegration:
         """Get commit history for a file."""
         try:
             result = subprocess.run(
-                ['git', 'log', f'-n{limit}', '--format=%h %s', '--', file_path],
+                ["git", "log", f"-n{limit}", "--format=%h %s", "--", file_path],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
-            return [line for line in result.stdout.strip().split('\n') if line] if result.returncode == 0 else []
+            return (
+                [line for line in result.stdout.strip().split("\n") if line]
+                if result.returncode == 0
+                else []
+            )
         except Exception:
             return []
 

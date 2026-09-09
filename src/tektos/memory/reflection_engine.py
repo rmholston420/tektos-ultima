@@ -40,14 +40,12 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from tektos.memory.memory_system import (
-    DreamState,
     DreamResult,
     DreamtimeEngine,
     Hemisphere,
     MemoryEntry,
     MemorySystem,
 )
-
 
 # ── Reflection State ──────────────────────────────────────────────────────
 
@@ -79,12 +77,25 @@ class ReflectionInsight(BaseModel):
     is_novel: bool = Field(default=False, description="Is this genuine novelty?")
     novelty_score: float = Field(default=0.0, ge=0.0, le=1.0)
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    who: str = Field(default="S3 Manager (active reflection)", description="W5H1M: Who generated this")
+    who: str = Field(
+        default="S3 Manager (active reflection)", description="W5H1M: Who generated this"
+    )
     what: str = Field(default="reflection_insight", description="W5H1M: What was generated")
-    where: str = Field(default="manager (active contemplation)", description="W5H1M: Where generated")
-    when: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="W5H1M: When generated")
-    why: str = Field(default="Periodic self-examination: examine patterns, biases, failure modes", description="W5H1M: Why generated")
-    how: str = Field(default="Active reflection: turn attention inward, examine direct experience", description="W5H1M: How generated")
+    where: str = Field(
+        default="manager (active contemplation)", description="W5H1M: Where generated"
+    )
+    when: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="W5H1M: When generated",
+    )
+    why: str = Field(
+        default="Periodic self-examination: examine patterns, biases, failure modes",
+        description="W5H1M: Why generated",
+    )
+    how: str = Field(
+        default="Active reflection: turn attention inward, examine direct experience",
+        description="W5H1M: How generated",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -141,7 +152,9 @@ class ReflectionEngine:
     The speculative hemisphere (S4) that plans generates hypotheses.
     """
 
-    def __init__(self, memory_system: MemorySystem, dreamtime_engine: DreamtimeEngine | None = None) -> None:
+    def __init__(
+        self, memory_system: MemorySystem, dreamtime_engine: DreamtimeEngine | None = None
+    ) -> None:
         """Initialize reflection engine.
 
         Args:
@@ -203,7 +216,7 @@ class ReflectionEngine:
                     content=f"Direct observation: {memory.content[:200]}",
                     is_direct_experience=True,
                     trust_score=0.9,
-                    what=f"direct_experience",
+                    what="direct_experience",
                     why=f"Observed reality > speculation: {memory.why}",
                     how="Active reflection on S1 execution data",
                 )
@@ -373,7 +386,9 @@ class ReflectionEngine:
                     if dream_result.is_novel:
                         insight = ReflectionInsight(
                             source="dreamtime",
-                            content=dream_insight[:200] if isinstance(dream_insight, str) else str(dream_insight),
+                            content=dream_insight[:200]
+                            if isinstance(dream_insight, str)
+                            else str(dream_insight),
                             is_direct_experience=False,
                             trust_score=0.4,
                             bias_detected=None,
@@ -413,13 +428,15 @@ class ReflectionEngine:
 
         # Also record in dreamtime history if engine exists
         if self.dreamtime is not None:
-            self.dreamtime.dream_history.append(DreamResult(
-                source_count=session.memories_examined,
-                insight_count=session.insights_generated,
-                is_novel=novelty_focused and session.trust_ratio < 0.5,
-                novelty_score=max((i.novelty_score for i in session.insights), default=0.0),
-                insights=[i.content for i in session.insights],
-            ))
+            self.dreamtime.dream_history.append(
+                DreamResult(
+                    source_count=session.memories_examined,
+                    insight_count=session.insights_generated,
+                    is_novel=novelty_focused and session.trust_ratio < 0.5,
+                    novelty_score=max((i.novelty_score for i in session.insights), default=0.0),
+                    insights=[i.content for i in session.insights],
+                )
+            )
 
         return session
 
@@ -431,8 +448,10 @@ class ReflectionEngine:
         """Get reflection system summary."""
         total_sessions = len(self.active_sessions)
         avg_trust = (
-            sum(s.trust_ratio for s in self.active_sessions) / max(total_sessions, 1)
-        ) if total_sessions > 0 else 0.0
+            (sum(s.trust_ratio for s in self.active_sessions) / max(total_sessions, 1))
+            if total_sessions > 0
+            else 0.0
+        )
         return {
             "total_reflection_sessions": total_sessions,
             "average_trust_ratio": avg_trust,

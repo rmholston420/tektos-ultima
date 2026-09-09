@@ -8,6 +8,6 @@ Replaces hardcoded TOOLS_SCHEMA with:
 - Built-in sandbox tools: bash, file_*, search
 """
 
-from tektos.tools.registry import ToolDefinition, ToolRegistry, MCPClient
+from tektos.tools.registry import MCPClient, ToolDefinition, ToolRegistry
 
 __all__ = ["ToolDefinition", "ToolRegistry", "MCPClient"]

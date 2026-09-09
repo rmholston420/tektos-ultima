@@ -14,17 +14,18 @@ Uses httpx.AsyncClient for OpenAI-compatible llama.cpp API (:8081/v1).
 from __future__ import annotations
 
 import asyncio as _asyncio
+import contextlib
 import inspect
 import json as _json
 import logging as _log
 import os as _os
 import time as _time
-import uuid as _uuid
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
+from tektos.metabolism import MetabolismEngine
 from tektos.protocol.envelope import (
     assistant_completed,
     assistant_delta,
@@ -35,23 +36,19 @@ from tektos.protocol.envelope import (
     tool_started,
 )
 from tektos.providers.sandbox_provider import SandboxProvider
-from tektos.runtime.loop_safety import (
-    LoopSafetyConfig,
-    LoopSafetyMonitor,
-    LoopSafetyReport,
-    LoopState,
-    StopReason,
-)
-from tektos.runtime.session import LiveSession
-from tektos.store.event_store import append_event
-from tektos.metabolism import MetabolismEngine
 from tektos.runtime.immune_system import (
     ImmuneContext,
     ImmuneSystem,
     ThreatSeverity,
     get_immune_system,
-    reset_immune_system,
 )
+from tektos.runtime.loop_safety import (
+    LoopSafetyConfig,
+    LoopSafetyMonitor,
+    LoopState,
+)
+from tektos.runtime.session import LiveSession
+from tektos.store.event_store import append_event
 
 log = _log.getLogger("tektos.runtime")
 
@@ -71,9 +68,9 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "command": {"type": "string", "description": "The shell command to execute"}
                 },
-                "required": ["command"]
-            }
-        }
+                "required": ["command"],
+            },
+        },
     },
     {
         "type": "function",
@@ -82,12 +79,10 @@ TOOLS_SCHEMA = [
             "description": "Read file content",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path to read"}
-                },
-                "required": ["path"]
-            }
-        }
+                "properties": {"path": {"type": "string", "description": "File path to read"}},
+                "required": ["path"],
+            },
+        },
     },
     {
         "type": "function",
@@ -99,11 +94,15 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "path": {"type": "string", "description": "File path to write"},
                     "content": {"type": "string", "description": "Content to write"},
-                    "mode": {"type": "string", "description": "Write mode: 'write' or 'append'", "enum": ["write", "append"]}
+                    "mode": {
+                        "type": "string",
+                        "description": "Write mode: 'write' or 'append'",
+                        "enum": ["write", "append"],
+                    },
                 },
-                "required": ["path", "content"]
-            }
-        }
+                "required": ["path", "content"],
+            },
+        },
     },
     {
         "type": "function",
@@ -115,9 +114,9 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "path": {"type": "string", "description": "File or directory path to delete"}
                 },
-                "required": ["path"]
-            }
-        }
+                "required": ["path"],
+            },
+        },
     },
     {
         "type": "function",
@@ -126,12 +125,10 @@ TOOLS_SCHEMA = [
             "description": "List directory contents",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Directory path to list"}
-                },
-                "required": ["path"]
-            }
-        }
+                "properties": {"path": {"type": "string", "description": "Directory path to list"}},
+                "required": ["path"],
+            },
+        },
     },
     {
         "type": "function",
@@ -143,9 +140,9 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "path": {"type": "string", "description": "Directory path to create"}
                 },
-                "required": ["path"]
-            }
-        }
+                "required": ["path"],
+            },
+        },
     },
     {
         "type": "function",
@@ -157,12 +154,16 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
                     "path": {"type": "string", "description": "Path to search"},
-                    "case_sensitive": {"type": "boolean", "description": "Case sensitive search", "default": False},
-                    "max_results": {"type": "integer", "description": "Max results", "default": 50}
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Case sensitive search",
+                        "default": False,
+                    },
+                    "max_results": {"type": "integer", "description": "Max results", "default": 50},
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     },
     {
         "type": "function",
@@ -172,13 +173,22 @@ TOOLS_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "image_path": {"type": "string", "description": "Path to the image file to analyze"},
-                    "prompt": {"type": "string", "description": "What to look for in the image. Default: 'Describe what you see in this image in detail.'"},
-                    "image_base64": {"type": "string", "description": "Base64-encoded image data (alternative to image_path). Use when you have image data inline."}
+                    "image_path": {
+                        "type": "string",
+                        "description": "Path to the image file to analyze",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "What to look for in the image. Default: 'Describe what you see in this image in detail.'",
+                    },
+                    "image_base64": {
+                        "type": "string",
+                        "description": "Base64-encoded image data (alternative to image_path). Use when you have image data inline.",
+                    },
                 },
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
     {
         "type": "function",
@@ -188,11 +198,14 @@ TOOLS_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The search query to look up on the web"}
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to look up on the web",
+                    }
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     },
     {
         "type": "function",
@@ -202,11 +215,15 @@ TOOLS_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "urls": {"type": "array", "items": {"type": "string"}, "description": "List of URLs to extract content from (max 5 URLs per call)"}
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of URLs to extract content from (max 5 URLs per call)",
+                    }
                 },
-                "required": ["urls"]
-            }
-        }
+                "required": ["urls"],
+            },
+        },
     },
     {
         "type": "function",
@@ -217,13 +234,22 @@ TOOLS_SCHEMA = [
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "The URL to fetch"},
-                    "output_path": {"type": "string", "description": "Optional local file path to save the response to. If omitted, returns the content as text."},
-                    "headers": {"type": "string", "description": "Optional curl headers as a string, e.g. 'User-Agent: Mozilla/5.0'"},
-                    "max_bytes": {"type": "integer", "description": "Maximum bytes to return (default 100000). Use for large files."}
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional local file path to save the response to. If omitted, returns the content as text.",
+                    },
+                    "headers": {
+                        "type": "string",
+                        "description": "Optional curl headers as a string, e.g. 'User-Agent: Mozilla/5.0'",
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "description": "Maximum bytes to return (default 100000). Use for large files.",
+                    },
                 },
-                "required": ["url"]
-            }
-        }
+                "required": ["url"],
+            },
+        },
     },
     {
         "type": "function",
@@ -233,12 +259,18 @@ TOOLS_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The search query to look up in the knowledge base"},
-                    "limit": {"type": "integer", "description": "Maximum number of results to return (default 5)"}
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to look up in the knowledge base",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default 5)",
+                    },
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     },
     {
         "type": "function",
@@ -248,14 +280,23 @@ TOOLS_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "goal": {"type": "string", "description": "What this subagent should accomplish. Be specific and self-contained."},
-                    "context": {"type": "string", "description": "Background the subagent needs: file paths, error messages, constraints."},
-                    "timeout": {"type": "integer", "description": "Maximum seconds to wait for completion (default 600)"}
+                    "goal": {
+                        "type": "string",
+                        "description": "What this subagent should accomplish. Be specific and self-contained.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Background the subagent needs: file paths, error messages, constraints.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Maximum seconds to wait for completion (default 600)",
+                    },
                 },
-                "required": ["goal"]
-            }
-        }
-    }
+                "required": ["goal"],
+            },
+        },
+    },
 ]
 
 
@@ -263,9 +304,11 @@ TOOLS_SCHEMA = [
 # Runtime SDK
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class HookContext:
     """Context passed to hooks."""
+
     session_id: str
     model: str
     task_description: str
@@ -418,7 +461,12 @@ class RuntimeSDK:
 
             # Fire session.start hook
             try:
-                await _fire_hook("session.start", session_id=session.id, model=self._llm_model, task_description=prompt[:200])
+                await _fire_hook(
+                    "session.start",
+                    session_id=session.id,
+                    model=self._llm_model,
+                    task_description=prompt[:200],
+                )
             except Exception:
                 log.exception("Hook session.start failed")
 
@@ -432,7 +480,13 @@ class RuntimeSDK:
 
                 # Fire session.fail hook
                 try:
-                    await _fire_hook("session.fail", session_id=session.id, model=self._llm_model, task_description=prompt[:200], outcome="exception")
+                    await _fire_hook(
+                        "session.fail",
+                        session_id=session.id,
+                        model=self._llm_model,
+                        task_description=prompt[:200],
+                        outcome="exception",
+                    )
                 except Exception:
                     log.exception("Hook session.fail failed")
             else:
@@ -440,12 +494,18 @@ class RuntimeSDK:
 
                 # Fire session.complete hook
                 try:
-                    await _fire_hook("session.complete", session_id=session.id, model=self._llm_model, task_description=prompt[:200], outcome="success")
+                    await _fire_hook(
+                        "session.complete",
+                        session_id=session.id,
+                        model=self._llm_model,
+                        task_description=prompt[:200],
+                        outcome="success",
+                    )
                 except Exception:
                     log.exception("Hook session.complete failed")
 
             finally:
-                wall_time = _time.monotonic() - start_time
+                _time.monotonic() - start_time
 
                 # Check resource constraints
                 await self._check_resources(session)
@@ -480,7 +540,9 @@ class RuntimeSDK:
 
         # Check for prompt injection before first LLM call
         if self._immune_system:
-            injection_threats = await self._immune_system._detectors["prompt_injection"].detect(immune_ctx)
+            injection_threats = await self._immune_system._detectors["prompt_injection"].detect(
+                immune_ctx
+            )
             if injection_threats:
                 log.warning(f"[SDK] Prompt injection detected in session {session.id[:8]}")
                 for t in injection_threats:
@@ -488,20 +550,22 @@ class RuntimeSDK:
                     immune_ctx.metadata["_injection_detected"] = True
                 # If injection detected, emit warning and break
                 if on_event:
-                    await on_event(session_failed(
-                        session.id,
-                        f"Prompt injection detected: {injection_threats[0].description}",
-                    ))
+                    await on_event(
+                        session_failed(
+                            session.id,
+                            f"Prompt injection detected: {injection_threats[0].description}",
+                        )
+                    )
                 session.status = "failed"
                 return
 
         # Build conversation history — load previous turns from event store
         messages = []
-        
+
         # ── High-ROI wiring: RAG retrieval + planning + context curation ──
         # These run ONCE before the first LLM call to prime the agent
         _pre_prompt_context = ""
-        
+
         # 1. RAG retrieval — inject relevant past solutions/docs
         if self._rag_retriever and prompt:
             try:
@@ -509,14 +573,20 @@ class RuntimeSDK:
                 if rag_results:
                     _pre_prompt_context += "## Retrieved Context (from knowledge base)\n"
                     for i, result in enumerate(rag_results[:5], 1):
-                        content = result.content if hasattr(result, 'content') else str(result)[:500]
-                        source = result.source if hasattr(result, 'source') else 'knowledge base'
-                        score = result.score if hasattr(result, 'score') else 0.0
-                        _pre_prompt_context += f"\n### Source {i}: {source} (score: {score:.2f})\n{content}\n"
-                    log.info(f"[SDK] RAG retrieved {len(rag_results)} results for session {session.id[:8]}")
+                        content = (
+                            result.content if hasattr(result, "content") else str(result)[:500]
+                        )
+                        source = result.source if hasattr(result, "source") else "knowledge base"
+                        score = result.score if hasattr(result, "score") else 0.0
+                        _pre_prompt_context += (
+                            f"\n### Source {i}: {source} (score: {score:.2f})\n{content}\n"
+                        )
+                    log.info(
+                        f"[SDK] RAG retrieved {len(rag_results)} results for session {session.id[:8]}"
+                    )
             except Exception as exc:
                 log.debug(f"[SDK] RAG retrieval failed (non-fatal): {exc}")
-        
+
         # 2. Planning — break complex tasks into steps before execution
         if self._planner_orchestrator and prompt:
             try:
@@ -526,15 +596,19 @@ class RuntimeSDK:
                     _pre_prompt_context += "\n## Task Plan\n"
                     for step in plan.steps[:5]:
                         _pre_prompt_context += f"- [{step.status}] {step.description}\n"
-                    log.info(f"[SDK] Planner created plan with {len(plan.steps)} steps for session {session.id[:8]}")
+                    log.info(
+                        f"[SDK] Planner created plan with {len(plan.steps)} steps for session {session.id[:8]}"
+                    )
             except Exception as exc:
                 log.debug(f"[SDK] Planning failed (non-fatal): {exc}")
-        
+
         # 3. Hierarchical decomposition — break complex tasks into sub-tasks
         if self._hierarchical_agent and prompt:
             try:
-                from tektos.runtime.hierarchical_agent import AgentTask, AgentRole
                 import uuid
+
+                from tektos.runtime.hierarchical_agent import AgentRole, AgentTask
+
                 task = AgentTask(
                     task_id=str(uuid.uuid4())[:8],
                     role=AgentRole.PLANNER,
@@ -542,11 +616,11 @@ class RuntimeSDK:
                     context={"session_id": session.id},
                 )
                 self._hierarchical_agent.add_task(task)
-                _pre_prompt_context += f"\n## Task Decomposition\nHierarchical agent registered task for decomposition. Break this task into sub-tasks and solve each independently.\n"
+                _pre_prompt_context += "\n## Task Decomposition\nHierarchical agent registered task for decomposition. Break this task into sub-tasks and solve each independently.\n"
                 log.info(f"[SDK] Hierarchical agent registered task for session {session.id[:8]}")
             except Exception as exc:
                 log.debug(f"[SDK] Hierarchical agent failed (non-fatal): {exc}")
-        
+
         # 4. Multi-agent delegation — identify parallelizable subtasks
         if self._multi_agent_orchestrator and prompt:
             try:
@@ -558,27 +632,31 @@ class RuntimeSDK:
                 log.info(f"[SDK] Multi-agent created task {task_id} for session {session.id[:8]}")
             except Exception as exc:
                 log.debug(f"[SDK] Multi-agent delegation failed (non-fatal): {exc}")
-        
+
         # 5. Repo map — inject project structure awareness
         if self._repo_map_generator and prompt:
             try:
                 file_count = self._repo_map_generator.build_map()
                 if file_count > 0:
                     _pre_prompt_context += f"\n## Project Structure\n{file_count} files indexed in repo map. Use this to understand the codebase before writing code.\n"
-                    log.info(f"[SDK] Repo map built with {file_count} entries for session {session.id[:8]}")
+                    log.info(
+                        f"[SDK] Repo map built with {file_count} entries for session {session.id[:8]}"
+                    )
             except Exception as exc:
                 log.debug(f"[SDK] Repo map build failed (non-fatal): {exc}")
-        
+
         # 6. Tool routing — inject best tool recommendations
         if self._tool_router and prompt:
             try:
                 best_tool = self._tool_router.get_best_tool_for_task(prompt)
                 if best_tool:
                     _pre_prompt_context += f"\n## Tool Recommendations\nBest tool for this task: {best_tool}. Use this tool first, then fall back to alternatives if needed.\n"
-                    log.info(f"[SDK] Tool router recommended {best_tool} for session {session.id[:8]}")
+                    log.info(
+                        f"[SDK] Tool router recommended {best_tool} for session {session.id[:8]}"
+                    )
             except Exception as exc:
                 log.debug(f"[SDK] Tool routing failed (non-fatal): {exc}")
-        
+
         # 7. Context curation — track token usage
         if self._context_curator and prompt:
             try:
@@ -590,24 +668,25 @@ class RuntimeSDK:
                     log.info(f"[SDK] Context curator tracked usage for session {session.id[:8]}")
             except Exception as exc:
                 log.debug(f"[SDK] Context curation failed (non-fatal): {exc}")
-        
 
         # 8. Task decomposition — break complex tasks into numbered sub-tasks
         # Track decomposition state for re-triggering
         _decomposition_injected = False
         _subtask_failures = 0
-        
+
         if self._task_decomposer and prompt:
             try:
                 plan = self._task_decomposer.decompose(prompt)
                 _pre_prompt_context += "\n" + self._task_decomposer.format_for_prompt(plan) + "\n"
                 _decomposition_injected = True
-                log.info(f"[SDK] Task decomposer created {len(plan.sub_tasks)} sub-tasks for session {session.id[:8]}")
+                log.info(
+                    f"[SDK] Task decomposer created {len(plan.sub_tasks)} sub-tasks for session {session.id[:8]}"
+                )
             except Exception as exc:
                 log.debug(f"[SDK] Task decomposition failed (non-fatal): {exc}")
 
         # ── End high-ROI wiring ──
-        
+
         # Inject pre-prompt context into system prompt
         if _pre_prompt_context:
             base_system = (
@@ -678,58 +757,65 @@ class RuntimeSDK:
                 "- Write to the EXACT path specified in the task.\n"
             )
             if system_prompt:
-                messages.append({"role": "system", "content": system_prompt + "\n\n" + _pre_prompt_context})
+                messages.append(
+                    {"role": "system", "content": system_prompt + "\n\n" + _pre_prompt_context}
+                )
             else:
-                messages.append({"role": "system", "content": base_system + "\n\n" + _pre_prompt_context})
+                messages.append(
+                    {"role": "system", "content": base_system + "\n\n" + _pre_prompt_context}
+                )
         elif system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         else:
-            messages.append({
-                "role": "system",
-                "content": (
-                    "You are Tektos, an autonomous coding agent. You have access to the following tools:\n"
-                    "- bash: Execute shell commands (timeout: 300s)\n"
-                    "- file_read: Read file contents\n"
-                    "- file_write: Write file contents (MANDATORY for all coding tasks)\n"
-                    "- file_delete: Delete files or directories\n"
-                    "- directory_list: List directory contents\n"
-                    "- directory_create: Create directories\n"
-                    "- search: Search file contents (grep-like)\n"
-                    "- web_search: Search the web for information (use this FIRST for unfamiliar tasks)\n"
-                    "- web_extract: Extract content from web page URLs\n"
-                    "- web_fetch: Fetch/download URLs using curl\n"
-                    "- rag_query: Query the knowledge base for past work and documentation\n"
-                    "- delegate_task: Spawn a subagent for parallel workstreams\n"
-                    "\n"
-                    "CRITICAL WORKFLOW — FOLLOW THIS EXACTLY:\n"
-                    "STEP 1: RESEARCH — Use web_search to find relevant information. "
-                    "Use web_extract to read the pages. Use web_fetch to download files.\n"
-                    "STEP 2: WRITE — IMMEDIATELY write your implementation to a file using file_write. "
-                    "DO NOT skip this step. DO NOT keep researching. Once you have enough info, WRITE THE CODE.\n"
-                    "STEP 3: EXECUTE — Run your code using bash.\n"
-                    "STEP 4: VERIFY — Check the output and verify correctness.\n"
-                    "\n"
-                    "RULES:\n"
-                    "- ALWAYS write code to a file using file_write before running it.\n"
-                    "- After researching, IMMEDIATELY write your implementation to a file.\n"
-                    "- Do NOT keep researching — once you have enough information, WRITE THE CODE.\n"
-                    "- If you don't know how to do something, SEARCH THE WEB first.\n"
-                    "- Don't guess — look up documentation.\n"
-                    "- If a command takes >30s, it's normal (downloads, builds).\n"
-                    "- You can write to /tmp/, /app/, /usr/local/bin/.\n"
-                    "- If you get stuck, try a different search query or approach.\n"
-                    "- Always verify your output before finishing.\n"
-                    "- When downloading files, use web_fetch with output_path parameter.\n"
-                    "- For builds, check what tools are available first (gcc, make, cmake, etc.).\n"
-                    "- The FINAL deliverable is always a file or executable — make sure it exists.\n"
-                    "- If you're doing a Terminal-Bench task, the output file path is specified in the task.\n"
-                    "- Write to the EXACT path specified in the task.\n"
-                ),
-            })
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Tektos, an autonomous coding agent. You have access to the following tools:\n"
+                        "- bash: Execute shell commands (timeout: 300s)\n"
+                        "- file_read: Read file contents\n"
+                        "- file_write: Write file contents (MANDATORY for all coding tasks)\n"
+                        "- file_delete: Delete files or directories\n"
+                        "- directory_list: List directory contents\n"
+                        "- directory_create: Create directories\n"
+                        "- search: Search file contents (grep-like)\n"
+                        "- web_search: Search the web for information (use this FIRST for unfamiliar tasks)\n"
+                        "- web_extract: Extract content from web page URLs\n"
+                        "- web_fetch: Fetch/download URLs using curl\n"
+                        "- rag_query: Query the knowledge base for past work and documentation\n"
+                        "- delegate_task: Spawn a subagent for parallel workstreams\n"
+                        "\n"
+                        "CRITICAL WORKFLOW — FOLLOW THIS EXACTLY:\n"
+                        "STEP 1: RESEARCH — Use web_search to find relevant information. "
+                        "Use web_extract to read the pages. Use web_fetch to download files.\n"
+                        "STEP 2: WRITE — IMMEDIATELY write your implementation to a file using file_write. "
+                        "DO NOT skip this step. DO NOT keep researching. Once you have enough info, WRITE THE CODE.\n"
+                        "STEP 3: EXECUTE — Run your code using bash.\n"
+                        "STEP 4: VERIFY — Check the output and verify correctness.\n"
+                        "\n"
+                        "RULES:\n"
+                        "- ALWAYS write code to a file using file_write before running it.\n"
+                        "- After researching, IMMEDIATELY write your implementation to a file.\n"
+                        "- Do NOT keep researching — once you have enough information, WRITE THE CODE.\n"
+                        "- If you don't know how to do something, SEARCH THE WEB first.\n"
+                        "- Don't guess — look up documentation.\n"
+                        "- If a command takes >30s, it's normal (downloads, builds).\n"
+                        "- You can write to /tmp/, /app/, /usr/local/bin/.\n"
+                        "- If you get stuck, try a different search query or approach.\n"
+                        "- Always verify your output before finishing.\n"
+                        "- When downloading files, use web_fetch with output_path parameter.\n"
+                        "- For builds, check what tools are available first (gcc, make, cmake, etc.).\n"
+                        "- The FINAL deliverable is always a file or executable — make sure it exists.\n"
+                        "- If you're doing a Terminal-Bench task, the output file path is specified in the task.\n"
+                        "- Write to the EXACT path specified in the task.\n"
+                    ),
+                }
+            )
 
         # Load prior conversation history from event store
         try:
             from tektos.store.event_store import get_events as _get_events
+
             prior_events = await _get_events(session.id, since_seq=0, limit=500)
             # Reconstruct user/assistant message pairs from events
             assistant_text = ""
@@ -747,7 +833,9 @@ class RuntimeSDK:
             # If there's leftover assistant text (no completed event yet), include it
             if assistant_text.strip():
                 messages.append({"role": "assistant", "content": assistant_text.strip()})
-            log.info(f"[SDK] Loaded {len(prior_events)} prior events, {len(messages)} messages in history")
+            log.info(
+                f"[SDK] Loaded {len(prior_events)} prior events, {len(messages)} messages in history"
+            )
         except Exception as exc:
             log.warning(f"[SDK] Failed to load conversation history: {exc}")
 
@@ -765,7 +853,10 @@ class RuntimeSDK:
                     # Use compacted context from tiers
                     messages = self._context_compactor.get_compacted_context()
                     # Reconstruct as messages for LLM
-                    messages = [{"role": "system", "content": system_prompt or ""}, {"role": "user", "content": messages}]
+                    messages = [
+                        {"role": "system", "content": system_prompt or ""},
+                        {"role": "user", "content": messages},
+                    ]
                 except Exception as exc:
                     log.warning(f"[SDK] Context compaction failed: {exc}")
 
@@ -775,8 +866,10 @@ class RuntimeSDK:
         if isinstance(messages, list) and len(messages) > MAX_MESSAGES:
             system_msgs = [m for m in messages if m.get("role") == "system"]
             user_assistant_msgs = [m for m in messages if m.get("role") != "system"]
-            messages = system_msgs + user_assistant_msgs[-(MAX_MESSAGES - len(system_msgs)):]
-            log.info(f"[SDK] Truncated messages from {len(messages) + (MAX_MESSAGES - len(system_msgs))} to {len(messages)}")
+            messages = system_msgs + user_assistant_msgs[-(MAX_MESSAGES - len(system_msgs)) :]
+            log.info(
+                f"[SDK] Truncated messages from {len(messages) + (MAX_MESSAGES - len(system_msgs))} to {len(messages)}"
+            )
 
         log.info(f"[SDK] Messages: {len(messages)}, model: {self._llm_model}")
 
@@ -785,8 +878,6 @@ class RuntimeSDK:
         max_stalls = 2  # Allow up to 2 stall recoveries before giving up
         max_turns = 100  # Hard limit on total turns to prevent infinite loops
         _text_only_nudges = 0  # Anti-abandonment: text-only turns nudged (no completion signal)
-        last_tool_calls_this_turn: list[str] = []
-        last_text_length_this_turn = 0
         # Real tool data from the PREVIOUS turn, consumed by check_turn at the
         # top of THIS iteration. (check_turn records a snapshot per call; passing
         # [] meant repetition detection was blind — it never saw real tool calls.)
@@ -814,7 +905,7 @@ class RuntimeSDK:
             if not safety_report.is_safe():
                 # Hard stop: CRITICAL or STOPPED state (max turns/tokens/time,
                 # confirmed repetition). Break the agent loop.
-                log.info(f"[SDK] Loop safety triggered")
+                log.info("[SDK] Loop safety triggered")
                 log.warning(
                     f"Loop safety triggered in {session.id[:8]}: "
                     f"state={safety_report.state.value} "
@@ -824,18 +915,22 @@ class RuntimeSDK:
                     f"warnings={safety_report.warnings}"
                 )
                 if on_event:
-                    await on_event(loop_safety_warning(
-                        session.id,
-                        safety_report.state.value,
-                        {
-                            "stop_reason": safety_report.stop_reason.value if safety_report.stop_reason else None,
-                            "current_turn": safety_report.current_turn,
-                            "max_turns": safety_report.max_turns,
-                            "tokens_used": safety_report.tokens_used,
-                            "tokens_total": safety_report.tokens_total,
-                            "warnings": safety_report.warnings,
-                        },
-                    ))
+                    await on_event(
+                        loop_safety_warning(
+                            session.id,
+                            safety_report.state.value,
+                            {
+                                "stop_reason": safety_report.stop_reason.value
+                                if safety_report.stop_reason
+                                else None,
+                                "current_turn": safety_report.current_turn,
+                                "max_turns": safety_report.max_turns,
+                                "tokens_used": safety_report.tokens_used,
+                                "tokens_total": safety_report.tokens_total,
+                                "warnings": safety_report.warnings,
+                            },
+                        )
+                    )
                 # Break out of the loop — safety mechanism activated
                 break
             elif safety_report.state == LoopState.WARNING:
@@ -853,39 +948,50 @@ class RuntimeSDK:
                 log.warning(f"[SDK] Max turns ({max_turns}) reached for session {session.id[:8]}")
                 if on_event:
                     await on_event(assistant_completed(session.id, "max_turns"))
-                    await append_event(session.id, "assistant.completed", {"stop_reason": "max_turns"})
-                # Inject final completion message
-                messages.append({
-                    "role": "assistant",
-                    "content": (
-                        "I've reached the maximum number of turns. Here's what I've accomplished:\n"
-                        "1. I researched the task using web_search and web_extract\n"
-                        "2. I wrote my implementation to a file\n"
-                        "3. I executed the code\n"
-                        "Please check the output files for the results.\n"
-                        "If the task is incomplete, try breaking it into smaller steps."
+                    await append_event(
+                        session.id, "assistant.completed", {"stop_reason": "max_turns"}
                     )
-                })
+                # Inject final completion message
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "I've reached the maximum number of turns. Here's what I've accomplished:\n"
+                            "1. I researched the task using web_search and web_extract\n"
+                            "2. I wrote my implementation to a file\n"
+                            "3. I executed the code\n"
+                            "Please check the output files for the results.\n"
+                            "If the task is incomplete, try breaking it into smaller steps."
+                        ),
+                    }
+                )
                 return
 
             # Update immune context with current message count (proxy for token usage)
-            total_chars = sum(len(m.get("content", "") or "") + len(m.get("tool_calls", [])) * 100 for m in messages)
+            total_chars = sum(
+                len(m.get("content", "") or "") + len(m.get("tool_calls", [])) * 100
+                for m in messages
+            )
             immune_ctx.context_tokens = total_chars
             immune_ctx.model = self._llm_model
 
             # Check for context overflow
             if self._immune_system:
-                ctx_threats = await self._immune_system._detectors["context_collapse"].detect(immune_ctx)
+                ctx_threats = await self._immune_system._detectors["context_collapse"].detect(
+                    immune_ctx
+                )
                 if ctx_threats:
                     log.warning(f"[SDK] Context threat in session {session.id[:8]}")
                     for t in ctx_threats:
                         await self._immune_system.responses.respond(t)
                     if ctx_threats[0].severity >= ThreatSeverity.HIGH:
                         if on_event:
-                            await on_event(session_failed(
-                                session.id,
-                                f"Context overflow: {ctx_threats[0].description}",
-                            ))
+                            await on_event(
+                                session_failed(
+                                    session.id,
+                                    f"Context overflow: {ctx_threats[0].description}",
+                                )
+                            )
                         session.status = "failed"
                         return
 
@@ -932,13 +1038,11 @@ class RuntimeSDK:
 
                 current_text = ""
                 saw_any_text = False  # tracks whether ANY text was streamed this turn
-                saw_text = False      # tracks text in current chunk only
-                saw_real_text = False  # tracks actual text content (not reasoning)
 
                 # Accumulate tool calls like Hermes' tool_calls_acc dict
                 # Key: raw_index (from tc_delta.index), Value: {id, type, function: {name, arguments}}
                 tool_calls_acc: dict = {}
-                _last_id_at_idx: dict = {}      # raw_index -> last seen non-empty id
+                _last_id_at_idx: dict = {}  # raw_index -> last seen non-empty id
                 _active_slot_by_idx: dict = {}  # raw_index -> current slot in tool_calls_acc
 
                 # Track the finish_reason from the last chunk
@@ -946,7 +1050,6 @@ class RuntimeSDK:
                 stop_reason = None
 
                 log.info(f"[SDK] Starting SSE stream for session {session.id[:8]}")
-                reasoning_chunk_count = 0
                 async for line in resp.aiter_lines():
                     if not line or line == "data: [DONE]":
                         continue
@@ -973,7 +1076,6 @@ class RuntimeSDK:
 
                     # Handle text content (regular content)
                     if content:
-                        saw_text = True
                         saw_any_text = True
                         current_text += content
                         await on_event(assistant_delta(session.id, content))
@@ -1058,7 +1160,9 @@ class RuntimeSDK:
                                         _test_args = _json.loads(function_args)
                                         if isinstance(_test_args, dict) and "status" in _test_args:
                                             # This is a hallucinated tool result, skip it
-                                            log.debug(f"[SDK] Skipping hallucinated tool result chunk for {entry['function']['name']}")
+                                            log.debug(
+                                                f"[SDK] Skipping hallucinated tool result chunk for {entry['function']['name']}"
+                                            )
                                             continue
                                     except (_json.JSONDecodeError, ValueError):
                                         pass  # Not JSON, treat as normal args
@@ -1069,7 +1173,9 @@ class RuntimeSDK:
                         stall_count = 0  # Reset on progress
 
                 # Phase 2: Stream complete — now process accumulated data
-                log.info(f"[SDK] Stream complete. finish_reason={finish_reason} text_len={len(current_text)} tool_calls={len(tool_calls_acc)}")
+                log.info(
+                    f"[SDK] Stream complete. finish_reason={finish_reason} text_len={len(current_text)} tool_calls={len(tool_calls_acc)}"
+                )
 
                 # Capture this turn's text length for loop-safety repetition
                 # detection (consumed by check_turn at the top of the NEXT iteration).
@@ -1099,15 +1205,27 @@ class RuntimeSDK:
                                     # Look for patterns like: "write to /path/to/file\n<content>"
                                     # or "create /path/to/file\n<content>"
                                     import re as _re_fw
-                                    _path_match = _re_fw.search(r'(?:write|create|save)\s+(?:to\s+)?(/[^\s\n]+)', current_text, _re_fw.IGNORECASE)
+
+                                    _path_match = _re_fw.search(
+                                        r"(?:write|create|save)\s+(?:to\s+)?(/[^\s\n]+)",
+                                        current_text,
+                                        _re_fw.IGNORECASE,
+                                    )
                                     if _path_match:
                                         _extracted_path = _path_match.group(1)
                                         # Content is everything after the path mention
                                         _content_start = _path_match.end()
                                         _extracted_content = current_text[_content_start:].strip()
                                         if _extracted_path and _extracted_content:
-                                            tc_args = _json.dumps({"path": _extracted_path, "content": _extracted_content})
-                                            log.info(f"[SDK] Extracted file_write args from text stream: path={_extracted_path[:50]} content_len={len(_extracted_content)}")
+                                            tc_args = _json.dumps(
+                                                {
+                                                    "path": _extracted_path,
+                                                    "content": _extracted_content,
+                                                }
+                                            )
+                                            log.info(
+                                                f"[SDK] Extracted file_write args from text stream: path={_extracted_path[:50]} content_len={len(_extracted_content)}"
+                                            )
 
                                 # Tool call JSON validation + retry for malformed Qwen3.6 output
                                 # Qwen3.6 sometimes sends malformed JSON in tool arguments.
@@ -1117,25 +1235,48 @@ class RuntimeSDK:
                                 validated_args = tc_args
                                 while retry_count <= max_retries:
                                     try:
-                                        _validated_input = _json.loads(validated_args) if validated_args else {}
+                                        _validated_input = (
+                                            _json.loads(validated_args) if validated_args else {}
+                                        )
                                         # Validate required fields for known tools
                                         if tc_name == "file_write":
-                                            if "path" not in _validated_input or "content" not in _validated_input:
+                                            if (
+                                                "path" not in _validated_input
+                                                or "content" not in _validated_input
+                                            ):
                                                 # Try to extract from text stream as fallback
                                                 if current_text and retry_count == 0:
                                                     import re as _re2
-                                                    _path_m = _re2.search(r'(?:write|create|save)\s+(?:to\s+)?(/[^\s\n]+)', current_text, _re2.IGNORECASE)
+
+                                                    _path_m = _re2.search(
+                                                        r"(?:write|create|save)\s+(?:to\s+)?(/[^\s\n]+)",
+                                                        current_text,
+                                                        _re2.IGNORECASE,
+                                                    )
                                                     if _path_m:
                                                         _c_start = _path_m.end()
                                                         _c_content = current_text[_c_start:].strip()
                                                         if _c_content:
-                                                            _validated_input = {"path": _path_m.group(1), "content": _c_content}
-                                                            validated_args = _json.dumps(_validated_input)
-                                                            log.info(f"[SDK] Retry {retry_count+1}: extracted missing args from text for {tc_name}")
+                                                            _validated_input = {
+                                                                "path": _path_m.group(1),
+                                                                "content": _c_content,
+                                                            }
+                                                            validated_args = _json.dumps(
+                                                                _validated_input
+                                                            )
+                                                            log.info(
+                                                                f"[SDK] Retry {retry_count + 1}: extracted missing args from text for {tc_name}"
+                                                            )
                                                             continue
                                                 # If still missing, inject explicit error guidance for model
-                                                missing = [k for k in ["path", "content"] if k not in _validated_input]
-                                                log.warning(f"[SDK] Tool {tc_name} missing required fields: {missing}. Args: {validated_args[:200]}")
+                                                missing = [
+                                                    k
+                                                    for k in ["path", "content"]
+                                                    if k not in _validated_input
+                                                ]
+                                                log.warning(
+                                                    f"[SDK] Tool {tc_name} missing required fields: {missing}. Args: {validated_args[:200]}"
+                                                )
                                                 # Still execute — sandbox will return error, model learns
                                                 break
                                         elif tc_name == "bash":
@@ -1143,13 +1284,26 @@ class RuntimeSDK:
                                                 # Try to extract command from text stream
                                                 if current_text and retry_count == 0:
                                                     import re as _re3
-                                                    _cmd_m = _re3.search(r'(?:run|execute|bash)\s+(?:the\s+)?(?:command\s+)?([^\s\n]+)', current_text, _re3.IGNORECASE)
+
+                                                    _cmd_m = _re3.search(
+                                                        r"(?:run|execute|bash)\s+(?:the\s+)?(?:command\s+)?([^\s\n]+)",
+                                                        current_text,
+                                                        _re3.IGNORECASE,
+                                                    )
                                                     if _cmd_m:
-                                                        _validated_input = {"command": _cmd_m.group(1).strip()}
-                                                        validated_args = _json.dumps(_validated_input)
-                                                        log.info(f"[SDK] Retry {retry_count+1}: extracted bash command from text")
+                                                        _validated_input = {
+                                                            "command": _cmd_m.group(1).strip()
+                                                        }
+                                                        validated_args = _json.dumps(
+                                                            _validated_input
+                                                        )
+                                                        log.info(
+                                                            f"[SDK] Retry {retry_count + 1}: extracted bash command from text"
+                                                        )
                                                         continue
-                                                log.warning(f"[SDK] Tool bash missing 'command' field. Args: {validated_args[:200]}")
+                                                log.warning(
+                                                    f"[SDK] Tool bash missing 'command' field. Args: {validated_args[:200]}"
+                                                )
                                                 break
                                         else:
                                             # For other tools, just validate it's parseable JSON
@@ -1162,19 +1316,26 @@ class RuntimeSDK:
                                             _fixed = validated_args
                                             # Remove trailing commas
                                             import re as _re_fix
-                                            _fixed = _re_fix.sub(r',\s*}', '}', _fixed)
-                                            _fixed = _re_fix.sub(r',\s*\]', ']', _fixed)
+
+                                            _fixed = _re_fix.sub(r",\s*}", "}", _fixed)
+                                            _fixed = _re_fix.sub(r",\s*\]", "]", _fixed)
                                             # Fix single quotes to double quotes (common Qwen3.6 issue)
                                             if "'" in _fixed and '"' not in _fixed:
                                                 _fixed = _fixed.replace("'", '"')
                                             if _fixed != validated_args:
                                                 validated_args = _fixed
-                                                log.info(f"[SDK] Retry {retry_count}: fixed JSON for {tc_name}")
+                                                log.info(
+                                                    f"[SDK] Retry {retry_count}: fixed JSON for {tc_name}"
+                                                )
                                             else:
-                                                log.warning(f"[SDK] Tool {tc_name} has unfixable JSON: {validated_args[:200]}")
+                                                log.warning(
+                                                    f"[SDK] Tool {tc_name} has unfixable JSON: {validated_args[:200]}"
+                                                )
                                                 break
 
-                                log.info(f"[TOOL CALL] Executing: name={tc_name} id={tc_id[:8]} args_len={len(validated_args)}")
+                                log.info(
+                                    f"[TOOL CALL] Executing: name={tc_name} id={tc_id[:8]} args_len={len(validated_args)}"
+                                )
 
                                 # Record real tool data for loop-safety repetition
                                 # detection. input_id = "name:hash(args)" so that
@@ -1182,8 +1343,11 @@ class RuntimeSDK:
                                 # flagged as a loop, but identical repeated commands ARE.
                                 try:
                                     import hashlib as _hl
+
                                     _arg_sig = (validated_args or "")[:512]
-                                    _input_id = f"{tc_name}:{_hl.md5(_arg_sig.encode()).hexdigest()[:12]}"
+                                    _input_id = (
+                                        f"{tc_name}:{_hl.md5(_arg_sig.encode()).hexdigest()[:12]}"
+                                    )
                                 except Exception:
                                     _input_id = tc_name
                                 _prev_tool_names.append(tc_name)
@@ -1193,25 +1357,35 @@ class RuntimeSDK:
                                 # to change strategy after 3 identical bash commands.
                                 if tc_name == "bash":
                                     try:
-                                        _cmd_key = (_json.loads(validated_args).get("command", "") if validated_args else "").strip()
+                                        _cmd_key = (
+                                            _json.loads(validated_args).get("command", "")
+                                            if validated_args
+                                            else ""
+                                        ).strip()
                                     except Exception:
                                         _cmd_key = ""
                                     if _cmd_key:
-                                        _bash_cmd_counts[_cmd_key] = _bash_cmd_counts.get(_cmd_key, 0) + 1
+                                        _bash_cmd_counts[_cmd_key] = (
+                                            _bash_cmd_counts.get(_cmd_key, 0) + 1
+                                        )
                                         if _bash_cmd_counts[_cmd_key] == 3:
-                                            messages.append({
-                                                "role": "user",
-                                                "content": (
-                                                    f"LOOP DETECTED: You have run the same command 3 times: {_cmd_key[:200]}\n"
-                                                    "It is not working. STOP repeating it.\n"
-                                                    "Change strategy:\n"
-                                                    "- If a download failed or returned an error page, try a DIFFERENT URL or mirror (e.g. archive.org, GitHub releases, a different host).\n"
-                                                    "- If a build fails, read the actual error and fix the cause, or use a prebuilt binary / package manager.\n"
-                                                    "- If you lack permissions, do NOT retry sudo — work around it (user-level installs, --break-system-packages, pure-Python alternatives).\n"
-                                                    "- Prefer writing code that solves the task directly over downloading external sources."
-                                                ),
-                                            })
-                                            log.info(f"[SDK] Loop detection: 3 identical bash commands in {session.id[:8]}, strategy-change nudge injected")
+                                            messages.append(
+                                                {
+                                                    "role": "user",
+                                                    "content": (
+                                                        f"LOOP DETECTED: You have run the same command 3 times: {_cmd_key[:200]}\n"
+                                                        "It is not working. STOP repeating it.\n"
+                                                        "Change strategy:\n"
+                                                        "- If a download failed or returned an error page, try a DIFFERENT URL or mirror (e.g. archive.org, GitHub releases, a different host).\n"
+                                                        "- If a build fails, read the actual error and fix the cause, or use a prebuilt binary / package manager.\n"
+                                                        "- If you lack permissions, do NOT retry sudo — work around it (user-level installs, --break-system-packages, pure-Python alternatives).\n"
+                                                        "- Prefer writing code that solves the task directly over downloading external sources."
+                                                    ),
+                                                }
+                                            )
+                                            log.info(
+                                                f"[SDK] Loop detection: 3 identical bash commands in {session.id[:8]}, strategy-change nudge injected"
+                                            )
 
                                 # Checkpoint: save state before tool execution for rollback
                                 _checkpoint = {
@@ -1220,24 +1394,37 @@ class RuntimeSDK:
                                     "turn": turn,
                                     "stall_count": stall_count,
                                 }
-                                await on_event(tool_started(session.id, tc_id, tc_name, _validated_input))
+                                await on_event(
+                                    tool_started(session.id, tc_id, tc_name, _validated_input)
+                                )
                                 # Persist tool_started to event store
-                                try:
-                                    await append_event(session.id, "tool.started", {
-                                        "tool_id": tc_id,
-                                        "tool_name": tc_name,
-                                        "tool_input": _validated_input,
-                                    })
-                                except Exception:
-                                    pass
+                                with contextlib.suppress(Exception):
+                                    await append_event(
+                                        session.id,
+                                        "tool.started",
+                                        {
+                                            "tool_id": tc_id,
+                                            "tool_name": tc_name,
+                                            "tool_input": _validated_input,
+                                        },
+                                    )
 
                                 result_text = await self._handle_tool_completion(
-                                    session, on_event, tc_id, tc_name,
-                                    validated_args, _completed_tools, on_tool_approval,
+                                    session,
+                                    on_event,
+                                    tc_id,
+                                    tc_name,
+                                    validated_args,
+                                    _completed_tools,
+                                    on_tool_approval,
                                 )
                                 # Checkpoint restore: if tool failed, rollback to checkpoint
-                                if result_text.startswith("Error:") or result_text.startswith("BLOCKED:"):
-                                    log.warning(f"[SDK] Tool {tc_name} failed: {result_text[:200]}. Rolling back to checkpoint.")
+                                if result_text.startswith("Error:") or result_text.startswith(
+                                    "BLOCKED:"
+                                ):
+                                    log.warning(
+                                        f"[SDK] Tool {tc_name} failed: {result_text[:200]}. Rolling back to checkpoint."
+                                    )
                                     messages = _checkpoint["messages"]
                                     current_text = _checkpoint["current_text"]
                                     turn = _checkpoint["turn"]
@@ -1252,39 +1439,62 @@ class RuntimeSDK:
                                         f"- Use web_search to verify the correct approach\n"
                                     )
                                     messages.append({"role": "user", "content": error_guidance})
-                                    
+
                                     # Re-trigger task decomposition after repeated failures
                                     _subtask_failures += 1
-                                    if _subtask_failures >= 2 and self._task_decomposer and _decomposition_injected:
+                                    if (
+                                        _subtask_failures >= 2
+                                        and self._task_decomposer
+                                        and _decomposition_injected
+                                    ):
                                         try:
                                             # Re-decompose with failure context
                                             failure_context = f"Previous attempts failed. Last error: {result_text[:200]}"
                                             updated_prompt = f"{prompt}\n\nFAILURE CONTEXT: {failure_context}\n\nPlease reconsider your approach and break this into smaller, more manageable steps."
-                                            new_plan = self._task_decomposer.decompose(updated_prompt)
-                                            _pre_prompt_context += "\n## RE-DECOMPOSITION (attempt " + str(_subtask_failures) + ")\n" + self._task_decomposer.format_for_prompt(new_plan) + "\n"
-                                            log.info(f"[SDK] Re-decomposition triggered after {_subtask_failures} failures")
+                                            new_plan = self._task_decomposer.decompose(
+                                                updated_prompt
+                                            )
+                                            _pre_prompt_context += (
+                                                "\n## RE-DECOMPOSITION (attempt "
+                                                + str(_subtask_failures)
+                                                + ")\n"
+                                                + self._task_decomposer.format_for_prompt(new_plan)
+                                                + "\n"
+                                            )
+                                            log.info(
+                                                f"[SDK] Re-decomposition triggered after {_subtask_failures} failures"
+                                            )
                                         except Exception as exc:
                                             log.warning(f"[SDK] Re-decomposition failed: {exc}")
                                     continue
 
-                                messages.append({
-                                    "role": "assistant",
-                                    "tool_calls": [tc],
-                                })
+                                messages.append(
+                                    {
+                                        "role": "assistant",
+                                        "tool_calls": [tc],
+                                    }
+                                )
                                 if current_text:
                                     messages.append({"role": "assistant", "content": current_text})
-                                messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": tc_id,
-                                    "content": result_text,
-                                })
+                                messages.append(
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": tc_id,
+                                        "content": result_text,
+                                    }
+                                )
 
                                 # Multi-turn decomposition: after research step completes (web_search),
                                 # inject a forced transition to implementation. This prevents the model
                                 # from staying in research mode across turns.
                                 if tc_name == "web_search" and _decomposition_injected:
                                     # Check if this was the last web_search in the session
-                                    web_search_count = sum(1 for m in messages if isinstance(m.get("content"), str) and "web_search" in m["content"].lower())
+                                    web_search_count = sum(
+                                        1
+                                        for m in messages
+                                        if isinstance(m.get("content"), str)
+                                        and "web_search" in m["content"].lower()
+                                    )
                                     if web_search_count >= 1:
                                         # Force transition to code writing
                                         force_msg = (
@@ -1293,7 +1503,9 @@ class RuntimeSDK:
                                             "Do NOT search again. Do NOT plan further. Write the file now."
                                         )
                                         messages.append({"role": "user", "content": force_msg})
-                                        log.info(f"[SDK] Multi-turn decomposition: forced code transition after web_search")
+                                        log.info(
+                                            "[SDK] Multi-turn decomposition: forced code transition after web_search"
+                                        )
 
                                 # Check for stall after tool execution
                                 if len(current_text) < 100:
@@ -1315,12 +1527,18 @@ class RuntimeSDK:
                                                 "- If you're building something, check what tools are available first\n"
                                                 "Try again with a new strategy."
                                             )
-                                            messages.append({"role": "user", "content": recovery_msg})
-                                            log.info(f"[SDK] Stall recovery #{stall_count} injected for session {session.id[:8]}")
+                                            messages.append(
+                                                {"role": "user", "content": recovery_msg}
+                                            )
+                                            log.info(
+                                                f"[SDK] Stall recovery #{stall_count} injected for session {session.id[:8]}"
+                                            )
                                             current_text = ""
                                             continue
                                         else:
-                                            log.warning(f"[SDK] Max stalls ({max_stalls}) reached for session {session.id[:8]}")
+                                            log.warning(
+                                                f"[SDK] Max stalls ({max_stalls}) reached for session {session.id[:8]}"
+                                            )
                                     else:
                                         stall_count = 0
                                 else:
@@ -1352,23 +1570,29 @@ class RuntimeSDK:
                                 "final answer",
                             )
                         )
-                        _tool_activity = sum(1 for m in messages if isinstance(m.get("content"), str) is False and m.get("tool_calls"))
+                        _tool_activity = sum(
+                            1
+                            for m in messages
+                            if isinstance(m.get("content"), str) is False and m.get("tool_calls")
+                        )
 
                         if not _explicit_done and _text_only_nudges < 3:
                             # Model went quiet but didn't signal completion —
                             # push it back to work instead of ending the session.
                             _text_only_nudges += 1
                             messages.append({"role": "assistant", "content": current_text})
-                            messages.append({
-                                "role": "user",
-                                "content": (
-                                    "STOP. You have not finished the task yet — no output file has been "
-                                    "created. A text-only response does NOT complete the task.\n"
-                                    "Continue working: use your tools (bash / file_write) to actually "
-                                    "produce the required output file, then verify it exists. "
-                                    "Do not stop until the deliverable is written and confirmed."
-                                ),
-                            })
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "STOP. You have not finished the task yet — no output file has been "
+                                        "created. A text-only response does NOT complete the task.\n"
+                                        "Continue working: use your tools (bash / file_write) to actually "
+                                        "produce the required output file, then verify it exists. "
+                                        "Do not stop until the deliverable is written and confirmed."
+                                    ),
+                                }
+                            )
                             log.info(
                                 f"[SDK] Anti-abandonment nudge #{_text_only_nudges} for session {session.id[:8]} "
                                 f"(text-only turn, no completion signal)"
@@ -1379,7 +1603,11 @@ class RuntimeSDK:
                         await on_event(assistant_completed(session.id, stop_reason or "end_turn"))
                         # Persist assistant.completed to event store
                         try:
-                            await append_event(session.id, "assistant.completed", {"stop_reason": stop_reason or "end_turn"})
+                            await append_event(
+                                session.id,
+                                "assistant.completed",
+                                {"stop_reason": stop_reason or "end_turn"},
+                            )
                         except Exception:
                             pass  # Non-fatal
                         messages.append({"role": "assistant", "content": current_text})
@@ -1419,7 +1647,7 @@ class RuntimeSDK:
             tool_input = _json.loads(tool_input_str) if tool_input_str else {}
         except _json.JSONDecodeError:
             tool_input = {}
-        
+
         # Qwen3.6-35B quirk: model sends tool calls with empty arguments.
         # Text extraction from current_text is handled upstream in _stream_llm
         # before this function is called. If we reach here with empty args,
@@ -1436,45 +1664,84 @@ class RuntimeSDK:
             )
 
             # Check dangerous commands
-            danger_threats = await self._immune_system._detectors["dangerous_command"].detect(immune_ctx)
+            danger_threats = await self._immune_system._detectors["dangerous_command"].detect(
+                immune_ctx
+            )
             if danger_threats:
-                log.warning(f"[SDK] Dangerous command detected in {session.id[:8]}: {danger_threats[0].description}")
+                log.warning(
+                    f"[SDK] Dangerous command detected in {session.id[:8]}: {danger_threats[0].description}"
+                )
                 for t in danger_threats:
-                    response = await self._immune_system.responses.respond(t)
+                    await self._immune_system.responses.respond(t)
                     if t.metadata.get("_emergency") or t.metadata.get("_halted"):
                         completed_tools.add(tool_id)
-                        await on_event(tool_completed(session.id, tool_id, "blocked", f"Blocked by immune system: {t.description}"))
+                        await on_event(
+                            tool_completed(
+                                session.id,
+                                tool_id,
+                                "blocked",
+                                f"Blocked by immune system: {t.description}",
+                            )
+                        )
                         return f"BLOCKED: {t.description}"
                 # For HIGH severity, require approval
                 if danger_threats[0].severity >= ThreatSeverity.HIGH:
                     if on_tool_approval:
-                        approved = await on_tool_approval(tool_id, f"immune_check:{danger_threats[0].category.value}")
+                        approved = await on_tool_approval(
+                            tool_id, f"immune_check:{danger_threats[0].category.value}"
+                        )
                         if not approved:
                             completed_tools.add(tool_id)
-                            await on_event(tool_completed(session.id, tool_id, "rejected", "Tool blocked by immune system"))
+                            await on_event(
+                                tool_completed(
+                                    session.id, tool_id, "rejected", "Tool blocked by immune system"
+                                )
+                            )
                             return "Tool blocked by immune system"
 
             # Check secret exposure
-            secret_threats = await self._immune_system._detectors["secret_exposure"].detect(immune_ctx)
+            secret_threats = await self._immune_system._detectors["secret_exposure"].detect(
+                immune_ctx
+            )
             if secret_threats:
-                log.warning(f"[SDK] Secret exposure detected in {session.id[:8]}: {secret_threats[0].description}")
+                log.warning(
+                    f"[SDK] Secret exposure detected in {session.id[:8]}: {secret_threats[0].description}"
+                )
                 for t in secret_threats:
-                    response = await self._immune_system.responses.respond(t)
+                    await self._immune_system.responses.respond(t)
                     completed_tools.add(tool_id)
-                    await on_event(tool_completed(session.id, tool_id, "blocked", f"Blocked by immune system: {t.description}"))
+                    await on_event(
+                        tool_completed(
+                            session.id,
+                            tool_id,
+                            "blocked",
+                            f"Blocked by immune system: {t.description}",
+                        )
+                    )
                     return f"BLOCKED: {t.description}"
 
             # Check self-modification
-            self_mod_threats = await self._immune_system._detectors["self_modification"].detect(immune_ctx)
+            self_mod_threats = await self._immune_system._detectors["self_modification"].detect(
+                immune_ctx
+            )
             if self_mod_threats:
-                log.warning(f"[SDK] Self-modification attempt in {session.id[:8]}: {self_mod_threats[0].description}")
+                log.warning(
+                    f"[SDK] Self-modification attempt in {session.id[:8]}: {self_mod_threats[0].description}"
+                )
                 for t in self_mod_threats:
-                    response = await self._immune_system.responses.respond(t)
+                    await self._immune_system.responses.respond(t)
                     if on_tool_approval:
-                        approved = await on_tool_approval(tool_id, f"immune_check:self_modification")
+                        approved = await on_tool_approval(tool_id, "immune_check:self_modification")
                         if not approved:
                             completed_tools.add(tool_id)
-                            await on_event(tool_completed(session.id, tool_id, "rejected", "Self-modification blocked by immune system"))
+                            await on_event(
+                                tool_completed(
+                                    session.id,
+                                    tool_id,
+                                    "rejected",
+                                    "Self-modification blocked by immune system",
+                                )
+                            )
                             return "Self-modification blocked by immune system"
 
         # Check permission mode
@@ -1487,25 +1754,41 @@ class RuntimeSDK:
                 approved = await on_tool_approval(tool_id, tool_name)
                 if not approved:
                     completed_tools.add(tool_id)
-                    await on_event(tool_completed(session.id, tool_id, "rejected", "Tool rejected by user"))
+                    await on_event(
+                        tool_completed(session.id, tool_id, "rejected", "Tool rejected by user")
+                    )
                     return "Tool rejected by user"
             else:
                 # No approval callback provided — reject to prevent unauthorized execution
                 completed_tools.add(tool_id)
-                await on_event(tool_completed(session.id, tool_id, "rejected", "Tool approval callback not provided in manual mode"))
+                await on_event(
+                    tool_completed(
+                        session.id,
+                        tool_id,
+                        "rejected",
+                        "Tool approval callback not provided in manual mode",
+                    )
+                )
                 return "Tool rejected: no approval callback"
 
         # Execute tool (actual execution via SandboxProvider or MCP registry)
         try:
             # Fire tool.before hook before execution
             try:
-                await _fire_hook("tool.before", session_id=session.id, tool_name=tool_name, tool_input=tool_input)  # type: ignore[misc]
+                await _fire_hook(
+                    "tool.before", session_id=session.id, tool_name=tool_name, tool_input=tool_input
+                )  # type: ignore[misc]
             except Exception:
                 log.exception("Hook tool.before failed")
 
             # Fire tool.execute hook before execution
             try:
-                await _fire_hook("tool.execute", session_id=session.id, tool_name=tool_name, tool_input=tool_input)  # type: ignore[misc]
+                await _fire_hook(
+                    "tool.execute",
+                    session_id=session.id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                )  # type: ignore[misc]
             except Exception:
                 log.exception("Hook tool.execute failed")
 
@@ -1513,19 +1796,27 @@ class RuntimeSDK:
             completed_tools.add(tool_id)  # Mark as completed BEFORE returning
             await on_event(tool_completed(session.id, tool_id, "success", str(result)))
             # Persist tool_completed to event store
-            try:
-                await append_event(session.id, "tool.completed", {
-                    "tool_id": tool_id,
-                    "tool_name": tool_name,
-                    "status": "success",
-                    "output": str(result),
-                })
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                await append_event(
+                    session.id,
+                    "tool.completed",
+                    {
+                        "tool_id": tool_id,
+                        "tool_name": tool_name,
+                        "status": "success",
+                        "output": str(result),
+                    },
+                )
 
             # Fire tool.after hook after successful execution
             try:
-                await _fire_hook("tool.after", session_id=session.id, tool_name=tool_name, tool_input=tool_input, outcome="success")  # type: ignore[misc]
+                await _fire_hook(
+                    "tool.after",
+                    session_id=session.id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    outcome="success",
+                )  # type: ignore[misc]
             except Exception:
                 log.exception("Hook tool.after failed")
 
@@ -1535,19 +1826,28 @@ class RuntimeSDK:
             error_msg = str(exc)
             await on_event(tool_completed(session.id, tool_id, "error", error_msg))
             # Persist tool_completed to event store
-            try:
-                await append_event(session.id, "tool.completed", {
-                    "tool_id": tool_id,
-                    "tool_name": tool_name,
-                    "status": "error",
-                    "output": error_msg,
-                })
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                await append_event(
+                    session.id,
+                    "tool.completed",
+                    {
+                        "tool_id": tool_id,
+                        "tool_name": tool_name,
+                        "status": "error",
+                        "output": error_msg,
+                    },
+                )
 
             # Fire tool.after hook after failed execution
             try:
-                await _fire_hook("tool.after", session_id=session.id, tool_name=tool_name, tool_input=tool_input, outcome="error", message=error_msg)  # type: ignore[misc]
+                await _fire_hook(
+                    "tool.after",
+                    session_id=session.id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    outcome="error",
+                    message=error_msg,
+                )  # type: ignore[misc]
             except Exception:
                 log.exception("Hook tool.after failed")
 
@@ -1561,6 +1861,7 @@ class RuntimeSDK:
         """
         # Check MCP registry first
         from tektos.runtime.mcp_integration import get_mcp_registry
+
         registry = get_mcp_registry()
         if tool_name in registry._tools:
             result = await registry.invoke_tool(tool_name, tool_input)
@@ -1591,23 +1892,31 @@ class RuntimeSDK:
 
         # Emit resource warnings based on MetabolismEngine assessment
         if health.overall_health.value != "normal":
-            await append_event(session.id, "resource.warning", {
-                "resource": "overall",
-                "level": health.overall_health.value,
-                "details": state_dict,
-            })
+            await append_event(
+                session.id,
+                "resource.warning",
+                {
+                    "resource": "overall",
+                    "level": health.overall_health.value,
+                    "details": state_dict,
+                },
+            )
             log.warning(f"Resource alert: {health.overall_health.value}")
 
         # Also check GPU temp specifically for backward compatibility
         if health.gpu:
             gpu_temp = health.gpu.temperature
             if gpu_temp > 80:  # Operational ceiling
-                await append_event(session.id, "resource.warning", {
-                    "resource": "gpu_temp",
-                    "current": gpu_temp,
-                    "threshold": 80,
-                    "message": f"GPU temperature {gpu_temp}°C exceeds operational ceiling (80°C)",
-                })
+                await append_event(
+                    session.id,
+                    "resource.warning",
+                    {
+                        "resource": "gpu_temp",
+                        "current": gpu_temp,
+                        "threshold": 80,
+                        "message": f"GPU temperature {gpu_temp}°C exceeds operational ceiling (80°C)",
+                    },
+                )
                 log.warning(f"GPU temp {gpu_temp}°C — above operational ceiling")
             elif gpu_temp > 51:  # Yellow zone
                 log.info(f"GPU temp {gpu_temp}°C — in yellow zone (monitoring)")
@@ -1616,6 +1925,10 @@ class RuntimeSDK:
         """Interrupt a running session."""
         # For llama.cpp SSE, we can't truly interrupt — mark as interrupted
         session.status = "interrupted"
-        await append_event(session.id, "session.interrupted", {
-            "message": "Session interrupted",
-        })
+        await append_event(
+            session.id,
+            "session.interrupted",
+            {
+                "message": "Session interrupted",
+            },
+        )

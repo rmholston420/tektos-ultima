@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class FileNode:
     """A node in the repository map."""
+
     path: str
     type: str  # "file", "directory", "symlink"
     size: int = 0
@@ -33,31 +34,36 @@ class RepoMap:
         """Build the repository map by scanning the project root."""
         for root, dirs, files in os.walk(self.project_root):
             # Skip hidden directories and common non-source dirs
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('__pycache__', 'node_modules', '.git', 'venv', '.venv')]
-            
+            dirs[:] = [
+                d
+                for d in dirs
+                if not d.startswith(".")
+                and d not in ("__pycache__", "node_modules", ".git", "venv", ".venv")
+            ]
+
             for file in files:
-                if file.endswith('.py') or file.endswith('.js') or file.endswith('.ts'):
+                if file.endswith(".py") or file.endswith(".js") or file.endswith(".ts"):
                     full_path = os.path.join(root, file)
                     rel_path = os.path.relpath(full_path, self.project_root)
-                    
+
                     node = FileNode(
                         path=rel_path,
                         type="file",
                         size=os.path.getsize(full_path),
                     )
-                    
+
                     # Extract imports for Python files
-                    if file.endswith('.py'):
+                    if file.endswith(".py"):
                         try:
-                            with open(full_path, 'r') as f:
+                            with open(full_path) as f:
                                 content = f.read(10000)  # Read first 10KB
-                            for line in content.split('\n'):
+                            for line in content.split("\n"):
                                 line = line.strip()
-                                if line.startswith('import ') or line.startswith('from '):
+                                if line.startswith("import ") or line.startswith("from "):
                                     node.imports.append(line)
                         except Exception:
                             pass
-                    
+
                     self._nodes[rel_path] = node
 
     def get_node(self, path: str) -> FileNode | None:

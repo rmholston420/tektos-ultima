@@ -44,7 +44,16 @@ exclude = ["tests/*"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "SIM"]
-ignore = ["E501", "E402"]  # E501=line-too-long, E402=module-not-at-top (for test mocks)
+ignore = [
+    "E501",   # line-too-long — line-length=100 is a soft target only
+    "E402",   # module-not-at-top — test files legitimately reorder for mocks
+    "SIM102", # collapsible-if — often less readable when combined
+    "SIM103", # needless-bool — early returns can be clearer
+    "SIM105", # suppressible-exception — contextlib.suppress hides intent
+    "SIM108", # if-else-block-instead-of-if-exp — long ternaries hurt readability
+    "SIM113", # enumerate-for-loop — explicit counters are sometimes clearer
+    "SIM117", # multiple-with-statements — nested with reads better sometimes
+]
 
 [tool.ruff.lint.per-file-ignores]
 "src/tektos/migrations/schema_evolution.py" = ["S608"]  # SQL strings are parameterized by design

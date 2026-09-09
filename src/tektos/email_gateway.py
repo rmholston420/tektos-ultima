@@ -15,18 +15,18 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import email
 import email.header
 import email.utils
 import inspect
 import logging
-import re
 import ssl
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class EmailMessage:
     to_addr: str = ""
     subject: str = ""
     body_text: str = ""
-    body_html: Optional[str] = None
+    body_html: str | None = None
     date: datetime = field(default_factory=datetime.now)
     has_attachments: bool = False
     raw_email: str = ""
@@ -82,7 +82,7 @@ class EmailGatewayResponse:
     """Response from email gateway operations."""
 
     success: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     email_count: int = 0
     emails: list[EmailMessage] = field(default_factory=list)
     sent: bool = False
@@ -116,11 +116,11 @@ class EmailGateway:
         await gateway.shutdown()
     """
 
-    def __init__(self, config: Optional[EmailConfig] = None) -> None:
+    def __init__(self, config: EmailConfig | None = None) -> None:
         self.config = config or EmailConfig()
-        self._imap: Optional[Any] = None
+        self._imap: Any | None = None
         self._running = False
-        self._poll_task: Optional[asyncio.Task] = None
+        self._poll_task: asyncio.Task | None = None
         self._handlers: list[Any] = []  # Email handlers
 
     async def initialize(self) -> None:
@@ -139,10 +139,8 @@ class EmailGateway:
         self._running = False
         if self._poll_task:
             self._poll_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_task
-            except asyncio.CancelledError:
-                pass
             self._poll_task = None
 
         if self._imap:
@@ -210,7 +208,7 @@ class EmailGateway:
         to: str,
         subject: str,
         body: str,
-        html: Optional[str] = None,
+        html: str | None = None,
     ) -> EmailGatewayResponse:
         """Send an email via SMTP.
 
@@ -252,9 +250,7 @@ class EmailGateway:
                 await asyncio.to_thread(smtp.starttls)
             else:
                 ctx = ssl.create_default_context()
-                smtp = smtplib.SMTP_SSL(
-                    self.config.smtp_host, self.config.smtp_port, context=ctx
-                )
+                smtp = smtplib.SMTP_SSL(self.config.smtp_host, self.config.smtp_port, context=ctx)
 
             try:
                 smtp.login(self.config.email_address, self.config.password)
@@ -298,11 +294,10 @@ class EmailGateway:
     async def _handle_email(self, email_msg: EmailMessage) -> None:
         """Handle a received email — invoke handlers."""
         # Extract Tektos session ID from subject
-        session_id = None
         if self.config.session_prefix in email_msg.subject:
             parts = email_msg.subject.split(self.config.session_prefix)
             if len(parts) > 1:
-                session_id = parts[1].strip()
+                parts[1].strip()
 
         # Invoke handlers
         for handler in self._handlers:
@@ -354,7 +349,6 @@ class EmailGateway:
         """Authenticate using OAuth2."""
         try:
             from google.oauth2.credentials import Credentials
-            from google_auth_oauthlib.flow import InstalledAppFlow
 
             creds = Credentials(
                 token=None,
@@ -382,11 +376,12 @@ class EmailGateway:
             )
 
         except ImportError:
-            logger.error("google-auth library not installed. Run: pip install google-auth google-auth-oauthlib")
+            logger.error(
+                "google-auth library not installed. Run: pip install google-auth google-auth-oauthlib"
+            )
             raise
         except Exception as e:
             logger.error("OAuth2 login failed: %s. Falling back to app password.", e)
-            import imaplib
             imap.login(self.config.email_address, self.config.password)
 
     def _parse_email(self, raw_email: bytes) -> EmailMessage:
@@ -456,7 +451,7 @@ class EmailGateway:
             return payload.decode(charset, errors="replace")
         return ""
 
-    async def __aenter__(self) -> "EmailGateway":
+    async def __aenter__(self) -> EmailGateway:
         await self.initialize()
         return self
 

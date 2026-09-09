@@ -5,32 +5,36 @@ with sensible localhost defaults.
 """
 
 import os
+
 from pydantic import BaseModel, Field
 
 
 class LLMConfig(BaseModel):
     """Configuration for the LLM inference backend."""
+
     base_url: str = Field(
         default="http://127.0.0.1:8091/v1",
-        description="LLM API base URL (TEKTOS_LLM_BASE_URL env var)"
+        description="LLM API base URL (TEKTOS_LLM_BASE_URL env var)",
     )
     timeout: float = Field(default=300.0, description="Request timeout in seconds")
 
 
 class HindsightConfig(BaseModel):
     """Configuration for the Hindsight memory daemon."""
+
     base_url: str = Field(
         default="http://127.0.0.1:9000",
-        description="Hindsight API base URL (TEKTOS_HINDSIGHT_URL env var)"
+        description="Hindsight API base URL (TEKTOS_HINDSIGHT_URL env var)",
     )
     timeout: float = Field(default=30.0, description="Request timeout in seconds")
 
 
 class SearXNGConfig(BaseModel):
     """Configuration for the SearXNG search backend."""
+
     base_url: str = Field(
         default="http://localhost:8888/search",
-        description="SearXNG JSON API URL (TEKTOS_SEARXNG_URL env var)"
+        description="SearXNG JSON API URL (TEKTOS_SEARXNG_URL env var)",
     )
     retry_backoff_base: float = Field(default=1.0, description="Base backoff seconds for retries")
     max_retries: int = Field(default=3, description="Maximum retry attempts")
@@ -38,21 +42,28 @@ class SearXNGConfig(BaseModel):
 
 class VisionConfig(BaseModel):
     """Configuration for the vision analysis backend."""
+
     base_url: str = Field(
         default="http://127.0.0.1:8083",
-        description="Vision analysis base URL (TEKTOS_VISION_URL env var)"
+        description="Vision analysis base URL (TEKTOS_VISION_URL env var)",
     )
     timeout: float = Field(default=300.0, description="Request timeout in seconds")
 
 
 class APIKeyConfig(BaseModel):
     """Configuration for API key authentication."""
-    enabled: bool = Field(default=False, description="Enable API key auth (TEKTOS_API_KEY_ENABLED env var)")
-    api_key: str | None = Field(default=None, description="API key for authentication (TEKTOS_API_KEY env var)")
+
+    enabled: bool = Field(
+        default=False, description="Enable API key auth (TEKTOS_API_KEY_ENABLED env var)"
+    )
+    api_key: str | None = Field(
+        default=None, description="API key for authentication (TEKTOS_API_KEY env var)"
+    )
 
 
 class TektosConfig(BaseModel):
     """Master configuration for Tektos-Ultima v1."""
+
     llm: LLMConfig = Field(default_factory=LLMConfig)
     hindsight: HindsightConfig = Field(default_factory=HindsightConfig)
     searxng: SearXNGConfig = Field(default_factory=SearXNGConfig)

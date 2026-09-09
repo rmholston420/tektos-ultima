@@ -32,19 +32,19 @@ Usage:
 
 from __future__ import annotations
 
+from .effectiveness import RepairEffectivenessTracker, get_effectiveness_tracker
 from .engine import SelfRepairEngine, get_self_repair_engine, reset_self_repair_engine
+from .health_monitor import HealthMonitor, get_health_monitor
 from .models import (
+    DegradationPlan,
+    HealthSnapshot,
     RepairRecord,
+    RepairResult,
     RepairStatus,
     RepairStrategy,
-    RepairResult,
-    HealthSnapshot,
-    DegradationPlan,
 )
 from .strategies import RepairStrategyRegistry, get_strategy_registry
 from .workflows import RepairWorkflows, get_healing_workflows
-from .effectiveness import RepairEffectivenessTracker, get_effectiveness_tracker
-from .health_monitor import HealthMonitor, get_health_monitor
 
 __all__ = [
     "SelfRepairEngine",
@@ -58,7 +58,7 @@ __all__ = [
     "DegradationPlan",
     "RepairStrategyRegistry",
     "get_strategy_registry",
-    "SelfHealingWorkflows",
+    "RepairWorkflows",
     "get_healing_workflows",
     "RepairEffectivenessTracker",
     "get_effectiveness_tracker",

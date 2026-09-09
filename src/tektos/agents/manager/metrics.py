@@ -41,8 +41,13 @@ class MetricSample(BaseModel):
     who: str = Field(default="S3 Manager", description="W5H1M: Who collected this")
     what: str = Field(default="", description="W5H1M: What was measured")
     where: str = Field(default="backend metrics store", description="W5H1M: Where collected")
-    when: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="W5H1M: When collected")
-    why: str = Field(default="prime mover variable tracking", description="W5H1M: Why tracking this")
+    when: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="W5H1M: When collected",
+    )
+    why: str = Field(
+        default="prime mover variable tracking", description="W5H1M: Why tracking this"
+    )
     how: str = Field(default="automatic collection", description="W5H1M: How collected")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -53,11 +58,16 @@ class MetricThreshold(BaseModel):
     name: str
     warning: float = Field(..., description="Warning threshold")
     critical: float = Field(..., description="Critical threshold")
-    direction: str = Field(default="lower_is_better", description="lower_is_better or higher_is_better")
+    direction: str = Field(
+        default="lower_is_better", description="lower_is_better or higher_is_better"
+    )
     who: str = Field(default="S3 Manager", description="W5H1M: Who set this threshold")
     what: str = Field(default="", description="W5H1M: What threshold")
     where: str = Field(default="manager config", description="W5H1M: Where configured")
-    when: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="W5H1M: When set")
+    when: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="W5H1M: When set",
+    )
     why: str = Field(default="system health monitoring", description="W5H1M: Why this threshold")
     how: str = Field(default="config-driven", description="W5H1M: How threshold works")
 
@@ -200,11 +210,7 @@ class PrimeMoverMetrics:
 
     def get_average(self, name: str, last_n: int = 10) -> float | None:
         """Get the average value for a metric over the last N samples."""
-        values = [
-            s.value
-            for s in reversed(self.samples)
-            if s.name == name
-        ][:last_n]
+        values = [s.value for s in reversed(self.samples) if s.name == name][:last_n]
         return sum(values) / len(values) if values else None
 
     def check_threshold(self, name: str) -> str | None:

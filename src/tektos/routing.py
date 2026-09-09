@@ -20,10 +20,8 @@ from __future__ import annotations
 
 import enum
 import logging
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -31,8 +29,10 @@ log = logging.getLogger(__name__)
 
 # ── Enums ───────────────────────────────────────────────────────────────────
 
+
 class TaskCategory(enum.Enum):
     """Categories of tasks Tektos performs."""
+
     CODE_GENERATION = "code_generation"
     CODE_REVIEW = "code_review"
     DEBUGGING = "debugging"
@@ -48,15 +48,17 @@ class TaskCategory(enum.Enum):
 
 class ModelTier(enum.Enum):
     """Model tiers by capability and cost."""
-    FAST = "fast"        # Quick tasks, low complexity
+
+    FAST = "fast"  # Quick tasks, low complexity
     BALANCED = "balanced"  # General purpose
-    POWER = "power"      # Complex tasks, high accuracy
-    EXPERT = "expert"    # Expert-level analysis
+    POWER = "power"  # Complex tasks, high accuracy
+    EXPERT = "expert"  # Expert-level analysis
 
 
 @dataclass
 class ModelProfile:
     """Profile of an available LLM."""
+
     name: str
     api_base: str
     model_name: str
@@ -74,6 +76,7 @@ class ModelProfile:
 @dataclass
 class RoutingDecision:
     """Result of a routing decision."""
+
     selected_model: str
     tier: ModelTier
     category: str
@@ -87,6 +90,7 @@ class RoutingDecision:
 @dataclass
 class CostRecord:
     """A single cost record."""
+
     model: str
     input_tokens: int
     output_tokens: int
@@ -97,6 +101,7 @@ class CostRecord:
 
 # ── Cost Tracker ────────────────────────────────────────────────────────────
 
+
 class CostTracker:
     """Track costs across models and sessions."""
 
@@ -104,14 +109,15 @@ class CostTracker:
         self.records: list[CostRecord] = []
         self.max_records = max_records
 
-    def record(self, model: str, input_tokens: int, output_tokens: int,
-               cost: float, task: str) -> CostRecord:
+    def record(
+        self, model: str, input_tokens: int, output_tokens: int, cost: float, task: str
+    ) -> CostRecord:
         record = CostRecord(
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost=cost,
-            timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             task=task,
         )
         self.records.append(record)
@@ -140,6 +146,7 @@ class CostTracker:
 
 
 # ── Router ──────────────────────────────────────────────────────────────────
+
 
 class ModelRouter:
     """Route tasks to appropriate models."""
@@ -237,11 +244,13 @@ class ModelRouter:
     def _find_candidates(self, category: TaskCategory, tier: ModelTier) -> list[ModelProfile]:
         """Find models that match category and tier."""
         return [
-            m for m in self.models.values()
-            if m.tier == tier and (
-                not m.preferred_categories or
-                category in m.preferred_categories or
-                m.category == category.value
+            m
+            for m in self.models.values()
+            if m.tier == tier
+            and (
+                not m.preferred_categories
+                or category in m.preferred_categories
+                or m.category == category.value
             )
         ]
 
@@ -271,17 +280,19 @@ class ModelRouter:
             return None
 
         # Try same tier first
-        candidates = [m for m in self.models.values()
-                      if m.tier == model.tier and m.name != model_name]
+        candidates = [
+            m for m in self.models.values() if m.tier == model.tier and m.name != model_name
+        ]
         if candidates:
             return candidates[0].name
 
         # Then try more capable tiers
         tier_order = [ModelTier.FAST, ModelTier.BALANCED, ModelTier.POWER, ModelTier.EXPERT]
         current_idx = tier_order.index(model.tier)
-        for higher_tier in tier_order[current_idx + 1:]:
-            candidates = [m for m in self.models.values()
-                          if m.tier == higher_tier and m.name != model_name]
+        for higher_tier in tier_order[current_idx + 1 :]:
+            candidates = [
+                m for m in self.models.values() if m.tier == higher_tier and m.name != model_name
+            ]
             if candidates:
                 return candidates[0].name
 
@@ -331,19 +342,22 @@ class ModelRouter:
 
 # ── Config Builder ─────────────────────────────────────────────────────────
 
+
 def build_default_config(base_url: str, model_name: str) -> dict[str, Any]:
     """Build default routing config from environment."""
     return {
-        "models": [{
-            "name": "default",
-            "api_base": base_url,
-            "model_name": model_name,
-            "tier": "balanced",
-            "category": "general",
-            "is_default": True,
-            "context_window": 131072,
-            "max_tokens": 8192,
-        }],
+        "models": [
+            {
+                "name": "default",
+                "api_base": base_url,
+                "model_name": model_name,
+                "tier": "balanced",
+                "category": "general",
+                "is_default": True,
+                "context_window": 131072,
+                "max_tokens": 8192,
+            }
+        ],
         "policies": {
             "auto_fallback": True,
             "cost_tracking": True,
@@ -354,6 +368,7 @@ def build_default_config(base_url: str, model_name: str) -> dict[str, Any]:
 def load_config(config_path: str) -> ModelRouter:
     """Load routing config from YAML file."""
     import yaml
+
     router = ModelRouter()
 
     with open(config_path) as f:

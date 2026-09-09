@@ -13,7 +13,6 @@ This is not monitoring — it's pattern recognition that leads to action.
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,13 +23,19 @@ class ArchetypeEvent(BaseModel):
     """A single event that may represent an archetype."""
 
     id: str = Field(default_factory=lambda: f"evt-{uuid.uuid4().hex[:8]}")
-    category: str = Field(..., description="High-level category (e.g., 'llm_malformed_json', 'timeout', 'auth_failure')")
+    category: str = Field(
+        ...,
+        description="High-level category (e.g., 'llm_malformed_json', 'timeout', 'auth_failure')",
+    )
     description: str = Field(..., description="Human-readable description of what happened")
     severity: str = Field(default="warning", description="Severity level (info, warning, critical)")
     who: str = Field(default="S1 Coding Agent", description="W5H1M: Who was involved")
     what: str = Field(..., description="W5H1M: What happened")
     where: str = Field(..., description="W5H1M: Where it happened")
-    when: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="W5H1M: When it happened")
+    when: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="W5H1M: When it happened",
+    )
     why: str = Field(default="unknown", description="W5H1M: Why it happened (if known)")
     how: str = Field(default="automatic", description="W5H1M: How it was detected")
 
@@ -41,17 +46,28 @@ class Archetype(BaseModel):
     id: str = Field(default_factory=lambda: f"arc-{uuid.uuid4().hex[:8]}")
     category: str = Field(..., description="Category name (e.g., 'llm_malformed_json')")
     description: str = Field(..., description="Human-readable description")
-    occurrence_count: int = Field(default=0, description="How many times this archetype has been observed")
-    threshold: int = Field(default=3, description="Frequency threshold to create a permanent structure")
+    occurrence_count: int = Field(
+        default=0, description="How many times this archetype has been observed"
+    )
+    threshold: int = Field(
+        default=3, description="Frequency threshold to create a permanent structure"
+    )
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_occurrence: str | None = None
-    permanent_structure_id: str | None = Field(default=None, description="ID of the created skill/tool if threshold met")
+    permanent_structure_id: str | None = Field(
+        default=None, description="ID of the created skill/tool if threshold met"
+    )
     is_active: bool = Field(default=True, description="Whether this archetype is actively tracked")
     who: str = Field(default="S3 Manager", description="W5H1M: Who tracks this")
     what: str = Field(default="", description="W5H1M: What is being tracked")
     where: str = Field(default="event store", description="W5H1M: Where tracked")
-    when: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), description="W5H1M: When tracking started")
-    why: str = Field(default="Repeated pattern detection and encoding", description="W5H1M: Why tracking this")
+    when: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="W5H1M: When tracking started",
+    )
+    why: str = Field(
+        default="Repeated pattern detection and encoding", description="W5H1M: Why tracking this"
+    )
     how: str = Field(default="automatic counting", description="W5H1M: How tracking works")
 
 
@@ -73,7 +89,9 @@ class ArchetypeTracker:
         self.threshold = threshold
         self._structure_created: set[str] = set()
 
-    def record_event(self, category: str, description: str, severity: str = "warning", **kwargs: Any) -> ArchetypeEvent:
+    def record_event(
+        self, category: str, description: str, severity: str = "warning", **kwargs: Any
+    ) -> ArchetypeEvent:
         """Record an event and update archetype counts.
 
         Args:
@@ -128,7 +146,8 @@ class ArchetypeTracker:
     def get_archetypes_at_threshold(self) -> list[Archetype]:
         """Get all archetypes that have hit or exceeded their threshold."""
         return [
-            a for a in self.archetypes.values()
+            a
+            for a in self.archetypes.values()
             if a.occurrence_count >= a.threshold and a.permanent_structure_id is None
         ]
 

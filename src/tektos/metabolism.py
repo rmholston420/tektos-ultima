@@ -46,14 +46,12 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 log = logging.getLogger("tektos.metabolism")
 
@@ -63,6 +61,7 @@ log = logging.getLogger("tektos.metabolism")
 
 class ResourceAlert(str, Enum):
     """Resource alert levels."""
+
     NORMAL = "normal"
     WARNING = "warning"
     CRITICAL = "critical"
@@ -71,6 +70,7 @@ class ResourceAlert(str, Enum):
 
 class ContextAction(str, Enum):
     """Actions to take when context budget exceeded."""
+
     NONE = "none"
     TRIM = "trim_shortest_messages"
     COMPRESS = "summarize_history"
@@ -83,6 +83,7 @@ class ContextAction(str, Enum):
 @dataclass
 class GpuMetrics:
     """GPU metrics from nvidia-smi/NVML."""
+
     timestamp: str
     temperature: float = 0.0
     utilization: float = 0.0
@@ -130,6 +131,7 @@ class GpuMetrics:
 @dataclass
 class SystemMetrics:
     """System-level metrics."""
+
     timestamp: str
     cpu_percent: float = 0.0
     memory_total_mb: float = 0.0
@@ -171,6 +173,7 @@ class SystemMetrics:
 @dataclass
 class ContextBudget:
     """Context window budget tracking."""
+
     max_tokens: int = 262144  # 256k + headroom
     current_tokens: int = 0
     warning_threshold_pct: float = 80.0
@@ -224,6 +227,7 @@ class ContextBudget:
 @dataclass
 class MetabolismState:
     """Complete metabolism state snapshot."""
+
     timestamp: str
     gpu: GpuMetrics | None = None
     system: SystemMetrics | None = None
@@ -469,9 +473,7 @@ class MetabolismEngine:
             alerts.append(ResourceAlert.EMERGENCY)
         elif gpu.temperature >= self.THERMAL_EMERGENCY:
             alerts.append(ResourceAlert.CRITICAL)
-        elif gpu.temperature >= self.THERMAL_COOLING:
-            alerts.append(ResourceAlert.WARNING)
-        elif gpu.temperature >= self.THERMAL_WARNING:
+        elif gpu.temperature >= self.THERMAL_COOLING or gpu.temperature >= self.THERMAL_WARNING:
             alerts.append(ResourceAlert.WARNING)
 
         # VRAM check
@@ -525,7 +527,7 @@ class MetabolismEngine:
         # Keep metrics history
         self._metrics_history.append(state.to_dict())
         if len(self._metrics_history) > self._max_history:
-            self._metrics_history = self._metrics_history[-self._max_history:]
+            self._metrics_history = self._metrics_history[-self._max_history :]
 
         return state
 
@@ -548,7 +550,9 @@ class MetabolismEngine:
         return {
             "max_tokens": self.max_tokens,
             "current_tokens": self._token_count,
-            "token_pct": round((self._token_count / self.max_tokens) * 100, 1) if self.max_tokens > 0 else 0,
+            "token_pct": round((self._token_count / self.max_tokens) * 100, 1)
+            if self.max_tokens > 0
+            else 0,
             "tool_calls": self._tool_call_count,
             "sessions": self._session_count,
             "metrics_history_count": len(self._metrics_history),

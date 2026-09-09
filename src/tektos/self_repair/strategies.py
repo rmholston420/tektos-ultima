@@ -23,10 +23,7 @@ import time
 from typing import Any
 
 from .models import (
-    DegradationLevel,
-    RepairRecord,
     RepairResult,
-    RepairStatus,
     RepairStrategy,
 )
 
@@ -42,6 +39,7 @@ class BaseRepairStrategy:
         - repair(ctx) → RepairResult (fix it)
         - verify(ctx) → bool (did it work?)
     """
+
     name: str = "base"
     supported_categories: list[str] = []
     min_severity: int = 0  # 0=LOW, 1=MEDIUM, 2=HIGH, 3=CRITICAL
@@ -73,6 +71,7 @@ class ResourceExhaustionRepair(BaseRepairStrategy):
         - VRAM usage above warning/critical thresholds
         - Token burn rate issues
     """
+
     name = "resource_exhaustion"
     supported_categories = ["resource_exhaustion", "vram_oom", "token_burn"]
     min_severity = 1  # MEDIUM and above
@@ -153,6 +152,7 @@ class ContextOverflowRepair(BaseRepairStrategy):
         - Unbounded message accumulation
         - Constraint loss from context bloat
     """
+
     name = "context_overflow"
     supported_categories = ["context_collapse", "context_overflow"]
     min_severity = 1
@@ -174,7 +174,9 @@ class ContextOverflowRepair(BaseRepairStrategy):
         if max_tokens > 0:
             pct = tokens / max_tokens
             if pct >= 0.95:
-                actions.append("Emergency context compression — keeping only system prompt + last 10 messages")
+                actions.append(
+                    "Emergency context compression — keeping only system prompt + last 10 messages"
+                )
                 ctx["compress_aggressive"] = True
                 ctx["keep_last_n"] = 10
             elif pct >= 0.85:
@@ -205,7 +207,7 @@ class ContextOverflowRepair(BaseRepairStrategy):
             pct = tokens / max_tokens
             if pct < 0.80:
                 return True, f"Context reduced to {pct:.0%} capacity"
-        return False, f"Context still at {tokens/max_tokens:.0%} capacity"
+        return False, f"Context still at {tokens / max_tokens:.0%} capacity"
 
 
 class LoopDetectionRepair(BaseRepairStrategy):
@@ -216,6 +218,7 @@ class LoopDetectionRepair(BaseRepairStrategy):
         - Repetitive patterns
         - Stuck execution
     """
+
     name = "loop_detection"
     supported_categories = ["loop_detected", "repetition"]
     min_severity = 1
@@ -270,6 +273,7 @@ class PromptInjectionRepair(BaseRepairStrategy):
         - Identity override
         - Data exfiltration
     """
+
     name = "prompt_injection"
     supported_categories = ["prompt_injection", "secret_exposure"]
     min_severity = 1
@@ -318,6 +322,7 @@ class InfrastructureFailureRepair(BaseRepairStrategy):
         - Embedder unavailable
         - Service crashes
     """
+
     name = "infrastructure_failure"
     supported_categories = ["infrastructure_failure", "model_unavailable", "embedder_unavailable"]
     min_severity = 1
@@ -378,6 +383,7 @@ class PerformanceDegradationRepair(BaseRepairStrategy):
         - Decreasing throughput
         - Increasing wall time per task
     """
+
     name = "performance_degradation"
     supported_categories = ["performance_degradation", "throughput_drop"]
     min_severity = 1
@@ -431,6 +437,7 @@ class SelfDegradationRepair(BaseRepairStrategy):
         - Bad axiom changes
         - Corrupted memory entries
     """
+
     name = "self_degradation"
     supported_categories = ["self_degradation"]
     min_severity = 2  # HIGH and above — self-degradation is serious
@@ -474,6 +481,7 @@ class GuardrailViolationRepair(BaseRepairStrategy):
         - Safety boundary breaches
         - Policy violations
     """
+
     name = "guardrail_violation"
     supported_categories = ["guardrail_violation"]
     min_severity = 2
@@ -536,7 +544,11 @@ class RepairStrategyRegistry:
     def register(self, strategy: BaseRepairStrategy) -> None:
         """Register a repair strategy."""
         self._strategies.append(strategy)
-        log.info("[RepairStrategyRegistry] Registered strategy: %s (%s)", strategy.name, strategy.supported_categories)
+        log.info(
+            "[RepairStrategyRegistry] Registered strategy: %s (%s)",
+            strategy.name,
+            strategy.supported_categories,
+        )
 
     def unregister(self, name: str) -> None:
         """Unregister a strategy by name."""
@@ -575,7 +587,9 @@ class RepairStrategyRegistry:
 
         log.info(
             "[RepairStrategyRegistry] Using strategy '%s' for %s (severity=%s)",
-            strategy.name, threat_category, threat_severity,
+            strategy.name,
+            threat_category,
+            threat_severity,
         )
 
         # Diagnose

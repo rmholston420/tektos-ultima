@@ -12,9 +12,8 @@ This allows the agent to maintain deep context while staying within token limits
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -164,7 +163,7 @@ class ContextCompactor:
             compressed_token_count=total_compressed,
             compression_ratio=total_compressed / current_tokens if current_tokens > 0 else 0,
             tiers=list(self.tiers.values()),
-            summary=f"Compressed from {current_tokens} to {total_compressed} tokens ({total_compressed/current_tokens*100:.1f}% of original)",
+            summary=f"Compressed from {current_tokens} to {total_compressed} tokens ({total_compressed / current_tokens * 100:.1f}% of original)",
         )
 
         self.compaction_history.append(result)
@@ -181,8 +180,8 @@ class ContextCompactor:
         """
         lines = []
         for msg in messages:
-            role = msg.get('role', 'unknown')
-            content = msg.get('content', '')
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
             lines.append(f"[{role.upper()}]: {content[:500]}")  # Limit length
         return "\n".join(lines)
 
@@ -199,21 +198,21 @@ class ContextCompactor:
             return "No older messages to summarize"
 
         # Group by role and summarize
-        user_messages = [m for m in messages if m.get('role') == 'user']
-        assistant_messages = [m for m in messages if m.get('role') == 'assistant']
+        user_messages = [m for m in messages if m.get("role") == "user"]
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
 
         summary_parts = []
 
         if user_messages:
             summary_parts.append(f"User asked {len(user_messages)} questions:")
             for msg in user_messages[:5]:  # Limit to 5
-                content = msg.get('content', '')[:200]
+                content = msg.get("content", "")[:200]
                 summary_parts.append(f"- {content}")
 
         if assistant_messages:
             summary_parts.append(f"\nAssistant provided {len(assistant_messages)} responses:")
             for msg in assistant_messages[:5]:  # Limit to 5
-                content = msg.get('content', '')[:200]
+                content = msg.get("content", "")[:200]
                 summary_parts.append(f"- {content}")
 
         return "\n".join(summary_parts)
@@ -235,16 +234,16 @@ class ContextCompactor:
         decisions = []
 
         for msg in messages:
-            content = msg.get('content', '').lower()
+            content = msg.get("content", "").lower()
             # Simple topic extraction
-            if 'error' in content or 'fix' in content:
-                topics.add('error_handling')
-            if 'test' in content or 'verify' in content:
-                topics.add('testing')
-            if 'implement' in content or 'build' in content:
-                topics.add('implementation')
-            if 'plan' in content or 'design' in content:
-                topics.add('planning')
+            if "error" in content or "fix" in content:
+                topics.add("error_handling")
+            if "test" in content or "verify" in content:
+                topics.add("testing")
+            if "implement" in content or "build" in content:
+                topics.add("implementation")
+            if "plan" in content or "design" in content:
+                topics.add("planning")
 
         return (
             f"Conversation topics: {', '.join(topics) if topics else 'general'}\n"
@@ -269,10 +268,10 @@ class ContextCompactor:
         corrections = []
 
         for msg in messages:
-            content = msg.get('content', '')
-            if 'remember' in content.lower() or 'prefer' in content.lower():
+            content = msg.get("content", "")
+            if "remember" in content.lower() or "prefer" in content.lower():
                 preferences.append(content[:200])
-            if 'fix' in content.lower() or 'correct' in content.lower():
+            if "fix" in content.lower() or "correct" in content.lower():
                 corrections.append(content[:200])
 
         memory_parts = ["# Persistent Memory\n"]
@@ -373,8 +372,8 @@ class ContextCompactor:
         # Build text representations
         texts: list[str] = []
         for msg in messages:
-            role = msg.get('role', 'unknown')
-            content = msg.get('content', '')
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
             texts.append(f"[{role}] {content[:500]}")
 
         if not texts:
@@ -396,6 +395,7 @@ class ContextCompactor:
 
         # Compute similarities
         from tektos.runtime.embedder import cosine_similarity
+
         scored: list[tuple[float, int]] = []
         for i, vec in enumerate(msg_vecs):
             sim = cosine_similarity(query_vec, vec)

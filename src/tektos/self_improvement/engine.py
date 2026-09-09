@@ -23,9 +23,11 @@ logger = logging.getLogger(__name__)
 
 # ── Tektos Experience Record ───────────────────────────────────────────────
 
+
 @dataclass
 class ExperienceRecord:
     """Tektos-native experience record (subset of openhands-ext TaskRecord)."""
+
     session_id: str
     task: str
     model_used: str
@@ -58,6 +60,7 @@ class ExperienceRecord:
 
 # ── Self-Improvement Engine Adapter ────────────────────────────────────────
 
+
 class SelfImprovementAdapter:
     """
     Adapters openhands-ext-v1's SelfImprovementEngine into Tektos's event system.
@@ -81,7 +84,9 @@ class SelfImprovementAdapter:
         skill_manager=None,  # SkillManager instance for skill creation
     ) -> None:
         self.experience_db = Path(experience_db or str(Path.home() / ".tektos/experience.jsonl"))
-        self.meta_learning_db = Path(meta_learning_db or str(Path.home() / ".tektos/meta_learning.json"))
+        self.meta_learning_db = Path(
+            meta_learning_db or str(Path.home() / ".tektos/meta_learning.json")
+        )
         self.benchmark_dir = Path(benchmark_dir or str(Path.home() / ".tektos/benchmarks"))
         self.skill_dir = Path(skill_dir or str(Path.home() / ".hermes/skills/"))
 
@@ -98,6 +103,7 @@ class SelfImprovementAdapter:
             from openhands_ext.self_improvement.engine import (
                 SelfImprovementEngine,
             )
+
             self._oh_engine = SelfImprovementEngine(
                 experience_db=str(self.experience_db),
                 meta_learning_db=str(self.meta_learning_db),
@@ -131,7 +137,9 @@ class SelfImprovementAdapter:
         """
         logger.info(
             "[SELF-IMPROVEMENT] session=%s success=%s model=%s",
-            session_id, success, model_used,
+            session_id,
+            success,
+            model_used,
         )
 
         # Emit self_improvement.tick event to WebSocket clients
@@ -143,14 +151,21 @@ class SelfImprovementAdapter:
 
         # Run evaluation
         evaluation = self._evaluate(
-            session_id, task, spec, output_files or [],
-            tests_passed, tests_total,
+            session_id,
+            task,
+            spec,
+            output_files or [],
+            tests_passed,
+            tests_total,
         )
 
         await self._emit_tick(
             session_id,
             "evaluation.complete",
-            data={"score": evaluation["overall_score"], "violations": evaluation.get("spec_violations", [])},
+            data={
+                "score": evaluation["overall_score"],
+                "violations": evaluation.get("spec_violations", []),
+            },
         )
 
         # Run reflection if openhands-ext available
@@ -185,19 +200,27 @@ class SelfImprovementAdapter:
                 created_skill_names = [s.name for s in new_skills]
                 logger.info(
                     "[SELF-IMPROVEMENT] Created %d skills from session %s",
-                    len(created_skill_names), session_id,
+                    len(created_skill_names),
+                    session_id,
                 )
             except Exception:
                 logger.exception("[SELF-IMPROVEMENT] Skill creation failed")
 
         # Record meta-learning
         await self._record_meta_learning(
-            model_used, task, success, evaluation["overall_score"],
+            model_used,
+            task,
+            success,
+            evaluation["overall_score"],
         )
 
         # Record benchmark
         await self._record_benchmark(
-            session_id, model_used, success, tests_passed, tests_total,
+            session_id,
+            model_used,
+            success,
+            tests_passed,
+            tests_total,
             wall_time_seconds,
         )
 
@@ -237,7 +260,9 @@ class SelfImprovementAdapter:
 
         logger.info(
             "[SELF-IMPROVEMENT] session=%s recorded score=%.2f lessons=%d",
-            session_id, record.evaluation_score, len(record.lessons),
+            session_id,
+            record.evaluation_score,
+            len(record.lessons),
         )
 
         return record
@@ -253,7 +278,9 @@ class SelfImprovementAdapter:
     ) -> ExperienceRecord:
         """Handle failed sessions — trigger auto-evaluation and reflection."""
         logger.warning(
-            "[SELF-IMPROVEMENT] session=%s failed: %s", session_id, error,
+            "[SELF-IMPROVEMENT] session=%s failed: %s",
+            session_id,
+            error,
         )
 
         await self._emit_tick(
@@ -272,7 +299,10 @@ class SelfImprovementAdapter:
 
         # Record failure in meta-learning
         await self._record_meta_learning(
-            model_used, task, False, 0.0,
+            model_used,
+            task,
+            False,
+            0.0,
         )
 
         record = ExperienceRecord(
@@ -303,20 +333,20 @@ class SelfImprovementAdapter:
 
     def _save_experience(self, record: ExperienceRecord) -> None:
         """Append experience record to JSONL file and Hindsight.
-        
+
         Dual persistence: local JSONL for fast access + Hindsight for
         cross-session semantic search.
         """
         # 1. Save to local JSONL file (fast, always available)
         with open(self.experience_db, "a") as f:
             f.write(record.to_json() + "\n")
-        
+
         # 2. Persist to Hindsight for cross-session persistence
         self._save_to_hindsight(record)
 
     def _save_to_hindsight(self, record: ExperienceRecord) -> None:
         """Persist experience record to Hindsight for cross-session memory.
-        
+
         Creates a searchable, semantically indexed fact from the experience
         that can be recalled by query across sessions.
         """
@@ -325,7 +355,7 @@ class SelfImprovementAdapter:
                 HindsightClient,
                 HindsightConfig,
             )
-            
+
             # Build searchable text from the experience record
             parts = [
                 f"Session {record.session_id}: {record.task}",
@@ -335,7 +365,7 @@ class SelfImprovementAdapter:
                 f"Score: {record.evaluation_score:.2f}",
                 f"Time: {record.wall_time_seconds:.0f}s",
             ]
-            
+
             if record.lessons:
                 parts.append(f"Lessons: {'; '.join(record.lessons[:3])}")
             if record.what_worked:
@@ -346,18 +376,24 @@ class SelfImprovementAdapter:
                 parts.append(f"Avoid: {'; '.join(record.what_to_avoid[:3])}")
             if record.recommendations:
                 parts.append(f"Recommendations: {'; '.join(record.recommendations[:3])}")
-            
+
             content = "\n".join(parts)
-            
+
             client = HindsightClient(
-                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"))
+                config=HindsightConfig(
+                    base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000")
+                )
             )
             client.retain(
                 content=content,
                 context=f"self-improvement:{record.model_used}:{record.task[:50]}",
-                tags=["tektos", "self-improvement", "experience", 
-                      "success" if record.success else "failure",
-                      record.model_used],
+                tags=[
+                    "tektos",
+                    "self-improvement",
+                    "experience",
+                    "success" if record.success else "failure",
+                    record.model_used,
+                ],
             )
         except Exception as e:
             logger.warning("Failed to persist experience to Hindsight: %s", e)
@@ -465,7 +501,11 @@ class SelfImprovementAdapter:
             "prompt_patterns": {},
             "model_performance": {},
             "failure_modes": {},
-            "learning_metrics": {"total_tasks": 0, "total_improvements": 0, "improvement_history": []},
+            "learning_metrics": {
+                "total_tasks": 0,
+                "total_improvements": 0,
+                "improvement_history": [],
+            },
         }
 
         if self.meta_learning_db.exists():
@@ -478,7 +518,9 @@ class SelfImprovementAdapter:
 
         if task_type not in meta["model_performance"][model]["task_types"]:
             meta["model_performance"][model]["task_types"][task_type] = {
-                "tasks": 0, "successes": 0, "total_quality": 0.0,
+                "tasks": 0,
+                "successes": 0,
+                "total_quality": 0.0,
             }
 
         type_data = meta["model_performance"][model]["task_types"][task_type]
@@ -497,11 +539,13 @@ class SelfImprovementAdapter:
         meta["learning_metrics"]["total_tasks"] += 1
         if quality_score > 0.5:
             meta["learning_metrics"]["total_improvements"] += 1
-            meta["learning_metrics"]["improvement_history"].append({
-                "timestamp": datetime.now(_tz.utc).isoformat(),
-                "task_type": task_type,
-                "improvement": quality_score - 0.5,
-            })
+            meta["learning_metrics"]["improvement_history"].append(
+                {
+                    "timestamp": datetime.now(_tz.utc).isoformat(),
+                    "task_type": task_type,
+                    "improvement": quality_score - 0.5,
+                }
+            )
 
         self.meta_learning_db.write_text(_json.dumps(meta, indent=2))
 
@@ -575,13 +619,15 @@ class SelfImprovementAdapter:
         for model, data in model_perf.items():
             for task_type, tdata in data.get("task_types", {}).items():
                 avg_quality = tdata["total_quality"] / tdata["tasks"] if tdata["tasks"] > 0 else 0
-                rankings.append({
-                    "model": model,
-                    "task_type": task_type,
-                    "tasks": tdata["tasks"],
-                    "successes": tdata["successes"],
-                    "avg_quality": round(avg_quality, 3),
-                })
+                rankings.append(
+                    {
+                        "model": model,
+                        "task_type": task_type,
+                        "tasks": tdata["tasks"],
+                        "successes": tdata["successes"],
+                        "avg_quality": round(avg_quality, 3),
+                    }
+                )
         rankings.sort(key=lambda x: x["avg_quality"], reverse=True)
 
         return {
@@ -589,9 +635,7 @@ class SelfImprovementAdapter:
             "total_improvements": improvements,
             "learning_velocity": round(improvements / total, 3) if total > 0 else 0.0,
             "model_rankings": rankings[:10],
-            "best_model_for_coding": (
-                rankings[0]["model"] if rankings else None
-            ),
+            "best_model_for_coding": (rankings[0]["model"] if rankings else None),
         }
 
     def get_report(self) -> str:
@@ -620,9 +664,7 @@ class SelfImprovementAdapter:
         lines.append("## Recommendations")
 
         if metrics["best_model_for_coding"]:
-            lines.append(
-                f"- Use {metrics['best_model_for_coding']} for coding tasks"
-            )
+            lines.append(f"- Use {metrics['best_model_for_coding']} for coding tasks")
 
         if metrics["learning_velocity"] < 0.1:
             lines.append("- Learning velocity is low — consider more diverse task types")

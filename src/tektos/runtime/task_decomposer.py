@@ -16,9 +16,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
-from typing import Any
 
 log = logging.getLogger("tektos.task_decomposer")
 
@@ -26,6 +24,7 @@ log = logging.getLogger("tektos.task_decomposer")
 @dataclass
 class SubTask:
     """A single decomposed sub-task."""
+
     step_number: int
     description: str
     expected_output: str
@@ -36,6 +35,7 @@ class SubTask:
 @dataclass
 class DecompositionPlan:
     """A complete task decomposition plan."""
+
     original_task: str
     sub_tasks: list[SubTask] = field(default_factory=list)
     phase: str = "research"  # research | scaffold | implement | verify
@@ -99,7 +99,9 @@ class TaskDecomposer:
         return any(kw in task for kw in ["regex", "pattern", "chess", "fen", "re.json"])
 
     def _is_download_build_task(self, task: str) -> bool:
-        return any(kw in task for kw in ["download", "fetch", "clone", "git clone", "tar", "tarball"])
+        return any(
+            kw in task for kw in ["download", "fetch", "clone", "git clone", "tar", "tarball"]
+        )
 
     def _decompose_build_task(self, task: str) -> DecompositionPlan:
         """Decompose: check tools → download → configure → build → verify."""
@@ -293,15 +295,23 @@ class TaskDecomposer:
         ]
 
         for i, sub_task in enumerate(plan.sub_tasks, 1):
-            tools = ", ".join(sub_task.tools_needed) if sub_task.tools_needed else "bash, file_write"
+            tools = (
+                ", ".join(sub_task.tools_needed) if sub_task.tools_needed else "bash, file_write"
+            )
             lines.append(f"### Step {i}: {sub_task.description}")
             lines.append(f"- Expected output: {sub_task.expected_output}")
             lines.append(f"- Recommended tools: {tools}")
-            lines.append(f"- DO NOT skip this step. DO NOT proceed to the next step until this one is complete.")
+            lines.append(
+                "- DO NOT skip this step. DO NOT proceed to the next step until this one is complete."
+            )
             # Add explicit stop-researching directive for research steps
             if i == 1 and any(t in tools for t in ["web_search", "web_extract"]):
-                lines.append("- ⚠️  THIS IS YOUR ONLY RESEARCH STEP. Search ONCE, then move to Step 2 immediately.")
-                lines.append("- ⚠️  DO NOT call web_search again after this step. DO NOT go back to research.")
+                lines.append(
+                    "- ⚠️  THIS IS YOUR ONLY RESEARCH STEP. Search ONCE, then move to Step 2 immediately."
+                )
+                lines.append(
+                    "- ⚠️  DO NOT call web_search again after this step. DO NOT go back to research."
+                )
             lines.append("")
 
         lines.append("## IMPORTANT RULES")

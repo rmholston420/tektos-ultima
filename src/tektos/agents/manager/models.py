@@ -25,10 +25,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # ── Manager Feedback ──────────────────────────────────────────────────────
 
@@ -36,7 +34,9 @@ from pydantic import BaseModel, Field
 class FeedbackType(str, Enum):
     """Types of Manager feedback."""
 
-    RE_DIRECTION = "re_direction"  # "Here's what happened. Here's what should happen. Here's why. Try this."
+    RE_DIRECTION = (
+        "re_direction"  # "Here's what happened. Here's what should happen. Here's why. Try this."
+    )
     GUARDRAIL_TRIGGERED = "guardrail_triggered"  # Non-negotiable constraint violated
     ARCHETYPE_RECOGNIZED = "archetype_recognized"  # Repeated pattern detected
     VARIETY_ADJUSTED = "variety_adjusted"  # Resource/regulation change

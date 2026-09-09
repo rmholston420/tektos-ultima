@@ -5,9 +5,10 @@ Configurable rate limiting via slowapi. Disabled by default for local-first use.
 
 try:
     from slowapi import Limiter  # noqa: F401
-    from slowapi.util import get_remote_address  # noqa: F401
     from slowapi.errors import RateLimitExceeded  # noqa: F401
+    from slowapi.util import get_remote_address  # noqa: F401
     from starlette.requests import Request  # noqa: F401
+
     _SLOWAPI_AVAILABLE = True
 except ImportError:
     Limiter = None  # type: ignore

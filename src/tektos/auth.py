@@ -13,13 +13,12 @@ Usage:
     - Query param: ?api_key=your-secret-key
 """
 
+import logging
 import os
-from fastapi import Request, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +54,7 @@ async def verify_api_key(request: Request) -> str | None:
 class APIKeyMiddleware(BaseHTTPMiddleware):
     """FastAPI middleware for optional API key authentication."""
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """Process request — verify API key if auth is enabled."""
         if not _API_KEY_ENABLED:
             return await call_next(request)

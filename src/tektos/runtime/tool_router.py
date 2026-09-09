@@ -12,7 +12,6 @@ mechanisms inspired by Claude Code's approach. Key features:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -27,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 class ToolCategory(Enum):
     """Categories of tools available to the agent."""
+
     FILE_OPERATIONS = "file_operations"
     TERMINAL = "terminal"
     BROWSER = "browser"
@@ -38,6 +38,7 @@ class ToolCategory(Enum):
 
 class ErrorType(Enum):
     """Types of errors that can occur during tool execution."""
+
     TIMEOUT = "timeout"
     PERMISSION = "permission"
     NETWORK = "network"
@@ -197,42 +198,42 @@ class ToolRouter:
         task_lower = task_description.lower()
 
         # Simple heuristic-based routing
-        if any(keyword in task_lower for keyword in ['shell', 'command', 'execute', 'run']):
+        if any(keyword in task_lower for keyword in ["shell", "command", "execute", "run"]):
             return ToolRoute(
                 primary_tool="terminal",
                 fallback_tools=["execute_code"],
                 category=ToolCategory.TERMINAL,
                 reason="Task involves shell command execution",
             )
-        elif any(keyword in task_lower for keyword in ['read', 'open', 'view', 'inspect']):
+        elif any(keyword in task_lower for keyword in ["read", "open", "view", "inspect"]):
             return ToolRoute(
                 primary_tool="read_file",
                 fallback_tools=["terminal"],
                 category=ToolCategory.FILE_OPERATIONS,
                 reason="Task involves reading file contents",
             )
-        elif any(keyword in task_lower for keyword in ['write', 'create', 'save', 'edit']):
+        elif any(keyword in task_lower for keyword in ["write", "create", "save", "edit"]):
             return ToolRoute(
                 primary_tool="write_file",
                 fallback_tools=["terminal"],
                 category=ToolCategory.FILE_OPERATIONS,
                 reason="Task involves writing file contents",
             )
-        elif any(keyword in task_lower for keyword in ['search', 'find', 'grep']):
+        elif any(keyword in task_lower for keyword in ["search", "find", "grep"]):
             return ToolRoute(
                 primary_tool="search_files",
                 fallback_tools=["terminal"],
                 category=ToolCategory.SEARCH,
                 reason="Task involves searching files",
             )
-        elif any(keyword in task_lower for keyword in ['web', 'internet', 'online']):
+        elif any(keyword in task_lower for keyword in ["web", "internet", "online"]):
             return ToolRoute(
                 primary_tool="web_search",
                 fallback_tools=["web_extract"],
                 category=ToolCategory.SEARCH,
                 reason="Task involves web search",
             )
-        elif any(keyword in task_lower for keyword in ['delegate', 'subagent', 'parallel']):
+        elif any(keyword in task_lower for keyword in ["delegate", "subagent", "parallel"]):
             return ToolRoute(
                 primary_tool="delegate_task",
                 fallback_tools=["terminal"],
@@ -344,20 +345,22 @@ class ToolRouter:
         """
         error_str = str(error).lower()
 
-        if 'timeout' in error_str or 'timed out' in error_str:
+        if "timeout" in error_str or "timed out" in error_str:
             return ErrorType.TIMEOUT
-        elif 'permission' in error_str or 'access denied' in error_str:
+        elif "permission" in error_str or "access denied" in error_str:
             return ErrorType.PERMISSION
-        elif 'network' in error_str or 'connection' in error_str:
+        elif "network" in error_str or "connection" in error_str:
             return ErrorType.NETWORK
-        elif 'syntax' in error_str or 'invalid' in error_str:
+        elif "syntax" in error_str or "invalid" in error_str:
             return ErrorType.SYNTAX
-        elif 'resource' in error_str or 'memory' in error_str or 'disk' in error_str:
+        elif "resource" in error_str or "memory" in error_str or "disk" in error_str:
             return ErrorType.RESOURCE
         else:
             return ErrorType.UNKNOWN
 
-    def _apply_recovery_strategy(self, error_type: ErrorType, tool_name: str, args: dict[str, Any]) -> None:
+    def _apply_recovery_strategy(
+        self, error_type: ErrorType, tool_name: str, args: dict[str, Any]
+    ) -> None:
         """Apply recovery strategy for an error type.
 
         Args:
@@ -482,6 +485,7 @@ class ToolRouter:
 
         # Compute similarities
         from tektos.runtime.embedder import cosine_similarity
+
         scored: list[tuple[float, str]] = []
         for t_name, t_vec in tool_vecs:
             sim = cosine_similarity(task_vec.embeddings[0], t_vec)

@@ -6,7 +6,6 @@ import importlib
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Optional
 
 from tektos.plugin import Plugin, PluginRegistry
 
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Plugin directories to scan (in order of priority)
 PLUGIN_DIRS = [
     Path(__file__).parent.parent.parent / "plugins",  # /plugins/
-    Path.home() / ".tektos" / "plugins",              # ~/.tektos/plugins/
+    Path.home() / ".tektos" / "plugins",  # ~/.tektos/plugins/
 ]
 
 
@@ -28,8 +27,8 @@ class PluginLoader:
 
     def load_plugins(
         self,
-        plugin_names: Optional[list[str]] = None,
-        scan_dirs: Optional[list[Path]] = None,
+        plugin_names: list[str] | None = None,
+        scan_dirs: list[Path] | None = None,
     ) -> list[Plugin]:
         """Load plugins by name or discover from directories.
 
@@ -82,35 +81,27 @@ class PluginLoader:
                         self._loaded.append(plugin_name)
                         logger.info("Discovered and loaded plugin: %s", plugin_name)
                 except Exception as e:
-                    logger.error(
-                        "Failed to discover plugin %s: %s", plugin_name, e
-                    )
+                    logger.error("Failed to discover plugin %s: %s", plugin_name, e)
         return loaded
 
-    def _import_plugin(self, name: str) -> Optional[Plugin]:
+    def _import_plugin(self, name: str) -> Plugin | None:
         """Import a plugin by module name."""
         try:
             module = importlib.import_module(f"plugins.{name}.{name}")
             # Look for a class that inherits from Plugin
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
-                if (
-                    isinstance(attr, type)
-                    and issubclass(attr, Plugin)
-                    and attr is not Plugin
-                ):
+                if isinstance(attr, type) and issubclass(attr, Plugin) and attr is not Plugin:
                     return attr()
         except ImportError as e:
-            logger.warning(
-                "Plugin %s not found: %s", name, e
-            )
+            logger.warning("Plugin %s not found: %s", name, e)
         return None
 
     def get_loaded_plugins(self) -> list[Plugin]:
         """Return list of currently loaded plugins."""
         return list(self.registry.list_plugins())
 
-    def reload_plugin(self, name: str) -> Optional[Plugin]:
+    def reload_plugin(self, name: str) -> Plugin | None:
         """Hot-reload a plugin (development use only)."""
         if name not in self._loaded:
             logger.warning("Plugin %s not loaded, cannot reload", name)

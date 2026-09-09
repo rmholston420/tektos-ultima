@@ -6,7 +6,6 @@ Gathers all GPU and CPU telemetry via NVML and psutil.
 from __future__ import annotations
 
 import logging
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -22,10 +21,12 @@ def _get_pynvml():
     if _pynvml is None:
         try:
             import pynvml as _mod
+
             _pynvml = _mod
         except ImportError:
             _pynvml = None
     return _pynvml
+
 
 # ── Data Models ──────────────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ def _get_pynvml():
 @dataclass
 class GPUTelemetry:
     """Snapshot of GPU hardware state."""
+
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     temperature_gpu: float = 0.0
     power_draw: float = 0.0
@@ -51,6 +53,7 @@ class GPUTelemetry:
 @dataclass
 class CPUTelemetry:
     """Snapshot of CPU thermal state."""
+
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     temperature_cpu: float = 0.0
     utilization: float = 0.0
@@ -62,12 +65,14 @@ class CPUTelemetry:
 @dataclass
 class ThermalSnapshot:
     """Combined GPU + CPU telemetry snapshot."""
+
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     gpu: GPUTelemetry = field(default_factory=GPUTelemetry)
     cpu: CPUTelemetry = field(default_factory=CPUTelemetry)
 
 
 # ── NVML GPU Collector ──────────────────────────────────────────────────────
+
 
 class NVMLCollector:
     """Collect GPU metrics via pynvml."""
@@ -102,18 +107,17 @@ class NVMLCollector:
         try:
             return GPUTelemetry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
-                temperature_gpu=float(nvml.nvmlDeviceGetTemperature(
-                    handle, nvml.NVML_TEMPERATURE_GPU)),
+                temperature_gpu=float(
+                    nvml.nvmlDeviceGetTemperature(handle, nvml.NVML_TEMPERATURE_GPU)
+                ),
                 power_draw=float(nvml.nvmlDeviceGetPowerUsage(handle)) / 1000.0,
                 power_limit=float(nvml.nvmlDeviceGetPowerManagementLimit(handle)) / 1000.0,
                 utilization=float(nvml.nvmlDeviceGetUtilizationRates(handle).gpu),
                 fan_speed=int(nvml.nvmlDeviceGetFanSpeed(handle)),
-                clocks_graphics=nvml.nvmlDeviceGetClockInfo(
-                    handle, nvml.NVML_CLOCK_GRAPHICS),
-                clocks_memory=nvml.nvmlDeviceGetClockInfo(
-                    handle, nvml.NVML_CLOCK_MEM),
-                memory_used=int(nvml.nvmlDeviceGetMemoryInfo(handle).used) // (1024 ** 2),
-                memory_total=int(nvml.nvmlDeviceGetMemoryInfo(handle).total) // (1024 ** 2),
+                clocks_graphics=nvml.nvmlDeviceGetClockInfo(handle, nvml.NVML_CLOCK_GRAPHICS),
+                clocks_memory=nvml.nvmlDeviceGetClockInfo(handle, nvml.NVML_CLOCK_MEM),
+                memory_used=int(nvml.nvmlDeviceGetMemoryInfo(handle).used) // (1024**2),
+                memory_total=int(nvml.nvmlDeviceGetMemoryInfo(handle).total) // (1024**2),
                 memory_temperature=0.0,  # NVML_TEMPERATURE_MEMORY not available on all GPUs
                 power_state=f"P{nvml.nvmlDeviceGetPerformanceState(handle)}",
                 clocks_event_reasons={
@@ -135,6 +139,7 @@ class NVMLCollector:
 
 # ── CPU Collector ────────────────────────────────────────────────────────────
 
+
 class CPUCollector:
     """Collect CPU thermal metrics via /sys/class/thermal and psutil."""
 
@@ -149,6 +154,7 @@ class CPUCollector:
             # CPU utilization via psutil
             try:
                 import psutil
+
                 util = psutil.cpu_percent(interval=0.5)
                 freq = psutil.cpu_freq()
                 freq_mhz = freq.current if freq else 0.0
@@ -176,6 +182,7 @@ class CPUCollector:
         temps: list[float] = []
         try:
             import os
+
             thermal_dir = "/sys/class/thermal"
             if not os.path.isdir(thermal_dir):
                 return temps
@@ -183,12 +190,12 @@ class CPUCollector:
                 if entry.startswith("thermal_zone"):
                     zone_path = os.path.join(thermal_dir, entry, "temp")
                     try:
-                        with open(zone_path, "r") as f:
+                        with open(zone_path) as f:
                             raw = f.read().strip()
                             # Thermal zones report in millidegrees
                             temp = int(raw) / 1000.0
                             temps.append(temp)
-                    except (IOError, ValueError):
+                    except (OSError, ValueError):
                         continue
         except Exception:
             pass
@@ -199,9 +206,10 @@ class CPUCollector:
         """Read CPU power draw from /sys/class/powercap/intel-rapl."""
         try:
             import os
+
             rapl_path = "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
             if os.path.exists(rapl_path):
-                with open(rapl_path, "r") as f:
+                with open(rapl_path) as f:
                     return float(f.read().strip()) / 1e6  # convert uJ to J
         except Exception:
             pass
@@ -211,11 +219,11 @@ class CPUCollector:
     def _cpu_percent_via_load() -> float:
         """Fallback CPU utilization via /proc/loadavg."""
         try:
-            import os
-            with open("/proc/loadavg", "r") as f:
+            with open("/proc/loadavg") as f:
                 load_1min = float(f.read().split()[0])
             # Estimate: load / num_cores * 100
             import multiprocessing
+
             cores = multiprocessing.cpu_count() or 1
             return min(load_1min / cores * 100.0, 100.0)
         except Exception:
@@ -223,6 +231,7 @@ class CPUCollector:
 
 
 # ── Unified Collector ────────────────────────────────────────────────────────
+
 
 class MetricsCollector:
     """Unified collector for GPU + CPU telemetry."""

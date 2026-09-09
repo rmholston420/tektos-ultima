@@ -20,29 +20,23 @@ import asyncio as _asyncio
 import json as _json
 import logging as _log
 import os as _os
-from typing import Any, Awaitable, Callable
+from collections.abc import Callable
+from typing import Any
 
 try:
-    from aiogram import Bot, Dispatcher, types
+    from aiogram import Bot, Dispatcher
+    from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
     from aiogram.filters import Command, CommandStart
-    from aiogram.methods import (
-        AnswerCallbackQuery,
-        SendMessage,
-        SendPhoto,
-        SendDocument,
-        DeleteMessage,
-    )
-    from aiogram.types import (
-        Message,
-        InlineKeyboardMarkup,
-        InlineKeyboardButton,
-        CallbackQuery,
-        WebAppInfo,
-    )
     from aiogram.fsm.context import FSMContext
-    from aiogram.fsm.storage.memory import MemoryStorage
     from aiogram.fsm.state import State, StatesGroup
-    from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
+    from aiogram.fsm.storage.memory import MemoryStorage
+    from aiogram.types import (
+        CallbackQuery,
+        InlineKeyboardButton,
+        InlineKeyboardMarkup,
+        Message,
+    )
+
     # BotBlocked was added in aiogram 3.14+
     try:
         from aiogram.exceptions import BotBlocked as _BotBlocked
@@ -50,10 +44,7 @@ try:
         # Fallback: use TelegramForbiddenError which covers "bot was blocked by user"
         _BotBlocked = TelegramForbiddenError
 except ImportError:
-    raise ImportError(
-        "aiogram is required for Telegram gateway. "
-        "Install with: pip install aiogram"
-    )
+    raise ImportError("aiogram is required for Telegram gateway. Install with: pip install aiogram")
 
 log = _log.getLogger("tektos.telegram")
 
@@ -61,8 +52,10 @@ log = _log.getLogger("tektos.telegram")
 # State machine for multi-turn Telegram conversations
 # ---------------------------------------------------------------------------
 
+
 class TektosStates(StatesGroup):
     """FSM states for Telegram bot interactions."""
+
     WAITING_FOR_PROMPT = State()
     WAITING_FOR_PERMISSION = State()
     WAITING_FOR_RENAME = State()
@@ -71,6 +64,7 @@ class TektosStates(StatesGroup):
 # ---------------------------------------------------------------------------
 # Telegram Bot Gateway
 # ---------------------------------------------------------------------------
+
 
 class TelegramGateway:
     """Telegram bot gateway for Tektos agent communication.
@@ -186,7 +180,6 @@ class TelegramGateway:
 
         try:
             sessions = await self.session_manager.list_sessions()
-            user_id = message.from_user.id
             my_sessions = [s for s in sessions if not s.is_archived]
 
             if not my_sessions:
@@ -195,7 +188,12 @@ class TelegramGateway:
 
             text = "📋 *Your Sessions*\n\n"
             for i, session in enumerate(my_sessions[:10], 1):  # Limit to 10
-                status_emoji = {"ready": "✅", "running": "⏳", "failed": "❌", "interrupted": "⏸️"}.get(session.status, "🔵")
+                status_emoji = {
+                    "ready": "✅",
+                    "running": "⏳",
+                    "failed": "❌",
+                    "interrupted": "⏸️",
+                }.get(session.status, "🔵")
                 text += f"{i}. {status_emoji} `{session.id[:8]}` — {session.status}\n"
                 text += f"   Model: {session.model}\n"
                 text += f"   Updated: {session.updated_at:.0f}s ago\n\n"
@@ -333,7 +331,9 @@ class TelegramGateway:
         try:
             # Gather system info
             health_data = {
-                "sessions_active": len(self.session_manager._sessions) if self.session_manager else 0,
+                "sessions_active": len(self.session_manager._sessions)
+                if self.session_manager
+                else 0,
                 "users_connected": len(self._user_sessions),
                 "bot_token_set": bool(self.bot_token),
                 "webhook_url": self.webhook_url or "Polling",
@@ -536,7 +536,9 @@ class TelegramGateway:
         user_id = message.from_user.id
 
         # Send initial "thinking" message
-        thinking_msg = await message.answer("🤔 Thinking...", reply_to_message_id=message.message_id)
+        thinking_msg = await message.answer(
+            "🤔 Thinking...", reply_to_message_id=message.message_id
+        )
 
         try:
             # Build on_event callback for streaming
@@ -565,7 +567,9 @@ class TelegramGateway:
 
                     elif event_type == "assistant.completed":
                         reason = event.get("payload", {}).get("reason", "")
-                        await self._send_message(user_id, f"✅ *Completed* ({reason})\n\nTask finished successfully.")
+                        await self._send_message(
+                            user_id, f"✅ *Completed* ({reason})\n\nTask finished successfully."
+                        )
 
                     elif event_type == "tool.started":
                         tool_name = event.get("payload", {}).get("tool_name", "")
@@ -596,7 +600,9 @@ class TelegramGateway:
             # Submit prompt to Tektos
             if self.runtime_sdk:
                 await self.runtime_sdk.submit_prompt(
-                    session=await self.session_manager.get_session(session_id) if self.session_manager else None,
+                    session=await self.session_manager.get_session(session_id)
+                    if self.session_manager
+                    else None,
                     prompt=prompt,
                     on_event=on_event,
                 )
@@ -650,12 +656,14 @@ class TelegramGateway:
         tool_input = event.get("payload", {}).get("tool_input", {})
         tool_id = event.get("payload", {}).get("tool_id", "")
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Approve", callback_data=f"approve:{tool_id}"),
-                InlineKeyboardButton(text="❌ Reject", callback_data=f"reject:{tool_id}"),
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Approve", callback_data=f"approve:{tool_id}"),
+                    InlineKeyboardButton(text="❌ Reject", callback_data=f"reject:{tool_id}"),
+                ]
             ]
-        ])
+        )
 
         await self.bot.send_message(
             chat_id=user_id,
@@ -752,6 +760,7 @@ class TelegramGateway:
 # ---------------------------------------------------------------------------
 # Factory and utilities
 # ---------------------------------------------------------------------------
+
 
 def create_telegram_gateway(
     bot_token: str | None = None,

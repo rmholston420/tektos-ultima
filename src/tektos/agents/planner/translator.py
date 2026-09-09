@@ -16,7 +16,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 # Fillers and hedging language to strip
 _FILLERS = {
     "i think": "",
@@ -192,21 +191,21 @@ def translate_to_technical_english(text: str) -> str:
 
     # Strip fillers and hedging language
     for filler, replacement in _FILLERS.items():
-        result = re.sub(rf'\b{re.escape(filler)}\b', replacement, result, flags=re.IGNORECASE)
+        result = re.sub(rf"\b{re.escape(filler)}\b", replacement, result, flags=re.IGNORECASE)
 
     # Replace vague terms with precise ones
     for vague, precise in _VAGUE_TO_PRECISE.items():
-        result = re.sub(rf'\b{re.escape(vague)}\b', precise, result, flags=re.IGNORECASE)
+        result = re.sub(rf"\b{re.escape(vague)}\b", precise, result, flags=re.IGNORECASE)
 
     # Replace common phrases
     for phrase, replacement in _PHRASE_REPLACEMENTS.items():
-        result = re.sub(rf'\b{re.escape(phrase)}\b', replacement, result, flags=re.IGNORECASE)
+        result = re.sub(rf"\b{re.escape(phrase)}\b", replacement, result, flags=re.IGNORECASE)
 
     # Clean up multiple spaces
-    result = re.sub(r'\s+', ' ', result).strip()
+    result = re.sub(r"\s+", " ", result).strip()
 
     # Remove trailing punctuation for spec format (will be added by spec generator)
-    result = result.rstrip('.!,;')
+    result = result.rstrip(".!,;")
 
     return result
 

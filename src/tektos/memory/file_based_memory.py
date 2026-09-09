@@ -12,9 +12,7 @@ CLAUDE.md approach. It provides:
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -120,7 +118,7 @@ class FileBasedMemory:
             MemoryFile with loaded entries.
         """
         try:
-            content = file_path.read_text(encoding='utf-8')
+            content = file_path.read_text(encoding="utf-8")
             entries = self._parse_memory_file(content)
             return MemoryFile(
                 path=str(file_path),
@@ -144,29 +142,33 @@ class FileBasedMemory:
         current_category = "context"
         current_content = []
 
-        for line in content.split('\n'):
-            if line.startswith('## '):
+        for line in content.split("\n"):
+            if line.startswith("## "):
                 # Save previous entry
                 if current_content:
-                    entries.append(MemoryEntry(
-                        category=current_category,
-                        content='\n'.join(current_content),
-                    ))
+                    entries.append(
+                        MemoryEntry(
+                            category=current_category,
+                            content="\n".join(current_content),
+                        )
+                    )
                     current_content = []
 
                 # Extract category from heading
                 current_category = line[3:].strip().lower()
-            elif line.startswith('- '):
+            elif line.startswith("- "):
                 current_content.append(line[2:])
-            elif line.strip() and not line.startswith('#'):
+            elif line.strip() and not line.startswith("#"):
                 current_content.append(line)
 
         # Save last entry
         if current_content:
-            entries.append(MemoryEntry(
-                category=current_category,
-                content='\n'.join(current_content),
-            ))
+            entries.append(
+                MemoryEntry(
+                    category=current_category,
+                    content="\n".join(current_content),
+                )
+            )
 
         return entries
 
@@ -207,7 +209,7 @@ class FileBasedMemory:
         try:
             content = self._format_memory_file(memory_file)
             Path(memory_file.path).parent.mkdir(parents=True, exist_ok=True)
-            Path(memory_file.path).write_text(content, encoding='utf-8')
+            Path(memory_file.path).write_text(content, encoding="utf-8")
         except OSError as e:
             logger.warning(f"Failed to save memory file {memory_file.path}: {e}")
 
@@ -373,6 +375,7 @@ class FileBasedMemory:
 
         # Compute cosine similarity
         from tektos.runtime.embedder import cosine_similarity
+
         scored: list[tuple[float, MemoryEntry]] = []
         for i, vec in enumerate(entry_vecs):
             sim = cosine_similarity(query_vec, vec)

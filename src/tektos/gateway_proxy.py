@@ -13,16 +13,16 @@ The Hermes Desktop frontend connects to ws://localhost:8765/ instead of the
 Hermes gateway, and everything else works the same.
 """
 
+import argparse
 import asyncio
+import contextlib
 import json
+import logging
 import os
 import sys
-import uuid
 import time
-import logging
-import argparse
-import httpx
 
+import httpx
 import websockets  # type: ignore[import-untyped]
 from websockets.server import serve  # type: ignore[import-untyped]
 
@@ -75,6 +75,7 @@ async def _get_http_client():
 
 # ── Session management ───────────────────────────────────────────────────
 
+
 async def handle_session_create(params, rid):
     """session.create → POST /api/sessions"""
     cwd = params.get("cwd", "")
@@ -93,23 +94,26 @@ async def handle_session_create(params, rid):
     tektos_session = resp.json()
     tektos_id = tektos_session["id"]
 
-    return _ok(rid, {
-        "session_id": tektos_id,
-        "stored_session_id": tektos_id,
-        "message_count": 0,
-        "messages": [],
-        "info": {
-            "model": tektos_session.get("model", ""),
-            "tools": {},
-            "skills": {},
-            "cwd": tektos_session.get("cwd", ""),
-            "branch": "",
-            "project": {},
-            "lazy": False,
-            "desktop_contract": "tektos",
-            "profile_name": "",
+    return _ok(
+        rid,
+        {
+            "session_id": tektos_id,
+            "stored_session_id": tektos_id,
+            "message_count": 0,
+            "messages": [],
+            "info": {
+                "model": tektos_session.get("model", ""),
+                "tools": {},
+                "skills": {},
+                "cwd": tektos_session.get("cwd", ""),
+                "branch": "",
+                "project": {},
+                "lazy": False,
+                "desktop_contract": "tektos",
+                "profile_name": "",
+            },
         },
-    })
+    )
 
 
 async def handle_session_list(params, rid):
@@ -121,14 +125,16 @@ async def handle_session_list(params, rid):
 
     result = []
     for s in sessions:
-        result.append({
-            "id": s["id"],
-            "title": s.get("title", ""),
-            "preview": s.get("preview", ""),
-            "started_at": s.get("created_at", 0),
-            "message_count": s.get("message_count", 0),
-            "source": "tektos",
-        })
+        result.append(
+            {
+                "id": s["id"],
+                "title": s.get("title", ""),
+                "preview": s.get("preview", ""),
+                "started_at": s.get("created_at", 0),
+                "message_count": s.get("message_count", 0),
+                "source": "tektos",
+            }
+        )
 
     return _ok(rid, {"sessions": result})
 
@@ -154,24 +160,27 @@ async def handle_session_resume(params, rid):
         if text:
             messages.append({"role": role, "text": text})
 
-    return _ok(rid, {
-        "session_id": target,
-        "stored_session_id": target,
-        "message_count": len(messages),
-        "messages": messages,
-        "info": {
-            "model": tektos_session.get("model", ""),
-            "tools": {},
-            "skills": {},
-            "cwd": tektos_session.get("cwd", ""),
-            "branch": "",
-            "project": {},
-            "lazy": False,
-            "desktop_contract": "tektos",
-            "profile_name": "",
+    return _ok(
+        rid,
+        {
+            "session_id": target,
+            "stored_session_id": target,
+            "message_count": len(messages),
+            "messages": messages,
+            "info": {
+                "model": tektos_session.get("model", ""),
+                "tools": {},
+                "skills": {},
+                "cwd": tektos_session.get("cwd", ""),
+                "branch": "",
+                "project": {},
+                "lazy": False,
+                "desktop_contract": "tektos",
+                "profile_name": "",
+            },
+            "running": tektos_session.get("status") == "running",
         },
-        "running": tektos_session.get("status") == "running",
-    })
+    )
 
 
 async def handle_session_close(params, rid):
@@ -183,20 +192,16 @@ async def handle_session_close(params, rid):
     # Close WS if active
     ws = _tektos_ws.get(target)
     if ws and ws.close_code is None:
-        try:
+        with contextlib.suppress(Exception):
             await ws.close()
-        except Exception:
-            pass
         del _tektos_ws[target]
 
     # Cancel reader
     reader = _tektos_readers.get(target)
     if reader and not reader.done():
         reader.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await reader
-        except asyncio.CancelledError:
-            pass
         del _tektos_readers[target]
 
     # Delete via REST
@@ -246,16 +251,20 @@ async def handle_session_most_recent(params, rid):
 
     if sessions:
         s = sessions[0]
-        return _ok(rid, {
-            "session_id": s["id"],
-            "title": s.get("title", ""),
-            "started_at": s.get("created_at", 0),
-            "source": "tektos",
-        })
+        return _ok(
+            rid,
+            {
+                "session_id": s["id"],
+                "title": s.get("title", ""),
+                "started_at": s.get("created_at", 0),
+                "source": "tektos",
+            },
+        )
     return _ok(rid, {"session_id": None})
 
 
 # ── Prompt / submission ──────────────────────────────────────────────────
+
 
 async def handle_prompt_submit(params, rid):
     """prompt.submit → send prompt via Tektos WS (sequentially per session)."""
@@ -285,17 +294,22 @@ async def handle_prompt_submit(params, rid):
         _tektos_readers[sid] = task
 
     # Send prompt — Tektos backend processes prompts sequentially per session
-    await ws.send(json.dumps({
-        "type": "prompt",
-        "session_id": sid,
-        "prompt": text,
-    }))
+    await ws.send(
+        json.dumps(
+            {
+                "type": "prompt",
+                "session_id": sid,
+                "prompt": text,
+            }
+        )
+    )
     log.info(f"Prompt sent to {sid[:8]}: {text[:100]}")
 
     return _ok(rid, {"ok": True})
 
 
 # ── Model / config ───────────────────────────────────────────────────────
+
 
 async def handle_model_options(params, rid):
     """model.options → GET /v1/models"""
@@ -307,15 +321,20 @@ async def handle_model_options(params, rid):
     data = resp.json()
 
     models = [m.get("id", "") for m in data.get("data", [])]
-    return _ok(rid, {
-        "model": models[0] if models else "",
-        "providers": [{
-            "name": "tektos",
-            "slug": "tektos",
-            "models": models,
-            "authenticated": False,
-        }],
-    })
+    return _ok(
+        rid,
+        {
+            "model": models[0] if models else "",
+            "providers": [
+                {
+                    "name": "tektos",
+                    "slug": "tektos",
+                    "models": models,
+                    "authenticated": False,
+                }
+            ],
+        },
+    )
 
 
 async def handle_config_get_value(params, rid):
@@ -335,9 +354,10 @@ async def handle_config_set(params, rid):
 
 # ── WebSocket reader loop ────────────────────────────────────────────────
 
+
 async def _ws_reader_loop(sid, ws):
     """Read Tektos WS events and forward as JSON-RPC notifications to all connected clients.
-    
+
     Reconnects automatically when the Tektos WS closes (e.g., after assistant.completed),
     so subsequent prompts in the same session continue to work.
     """
@@ -354,91 +374,131 @@ async def _ws_reader_loop(sid, ws):
 
                 # Map Tektos events to gateway events
                 if event_type == "session.ready":
-                    event = _notification("event", {
-                        "type": "gateway.ready",
-                        "payload": {"skin": {}, "change_events": True, "replay_epoch": int(time.time())},
-                    })
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "gateway.ready",
+                            "payload": {
+                                "skin": {},
+                                "change_events": True,
+                                "replay_epoch": int(time.time()),
+                            },
+                        },
+                    )
                     await _broadcast_to_clients(event)
 
                 elif event_type == "assistant.delta":
                     text = payload.get("text", "") or payload.get("delta", "")
                     if text:
-                        event = _notification("event", {
-                            "type": "assistant.delta",
-                            "payload": {"session_id": sid, "text": text},
-                        })
+                        event = _notification(
+                            "event",
+                            {
+                                "type": "assistant.delta",
+                                "payload": {"session_id": sid, "text": text},
+                            },
+                        )
                         await _broadcast_to_clients(event)
 
                 elif event_type == "assistant.completed":
-                    event = _notification("event", {
-                        "type": "assistant.completed",
-                        "payload": {"session_id": sid, "stop_reason": payload.get("stop_reason", "end_turn")},
-                    })
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "assistant.completed",
+                            "payload": {
+                                "session_id": sid,
+                                "stop_reason": payload.get("stop_reason", "end_turn"),
+                            },
+                        },
+                    )
                     await _broadcast_to_clients(event)
 
                 elif event_type == "tool.started":
-                    event = _notification("event", {
-                        "type": "tool.started",
-                        "payload": {
-                            "session_id": sid,
-                            "tool_name": payload.get("tool_name", ""),
-                            "tool_input": payload.get("tool_input", {}),
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "tool.started",
+                            "payload": {
+                                "session_id": sid,
+                                "tool_name": payload.get("tool_name", ""),
+                                "tool_input": payload.get("tool_input", {}),
+                            },
                         },
-                    })
+                    )
                     await _broadcast_to_clients(event)
 
                 elif event_type == "tool.completed":
-                    event = _notification("event", {
-                        "type": "tool.completed",
-                        "payload": {
-                            "session_id": sid,
-                            "tool_name": payload.get("tool_name", ""),
-                            "result": payload.get("output", ""),
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "tool.completed",
+                            "payload": {
+                                "session_id": sid,
+                                "tool_name": payload.get("tool_name", ""),
+                                "result": payload.get("output", ""),
+                            },
                         },
-                    })
+                    )
                     await _broadcast_to_clients(event)
 
                 elif event_type == "system.message":
-                    event = _notification("event", {
-                        "type": "system.message",
-                        "payload": {
-                            "session_id": sid,
-                            "text": payload.get("message", ""),
-                            "level": payload.get("level", "info"),
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "system.message",
+                            "payload": {
+                                "session_id": sid,
+                                "text": payload.get("message", ""),
+                                "level": payload.get("level", "info"),
+                            },
                         },
-                    })
+                    )
                     await _broadcast_to_clients(event)
 
                 elif event_type == "session.interrupted":
-                    event = _notification("event", {
-                        "type": "session.interrupted",
-                        "payload": {"session_id": sid},
-                    })
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "session.interrupted",
+                            "payload": {"session_id": sid},
+                        },
+                    )
                     await _broadcast_to_clients(event)
 
                 elif event_type == "session.failed":
-                    event = _notification("event", {
-                        "type": "session.failed",
-                        "payload": {"session_id": sid, "error": payload.get("error", "Unknown")},
-                    })
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "session.failed",
+                            "payload": {
+                                "session_id": sid,
+                                "error": payload.get("error", "Unknown"),
+                            },
+                        },
+                    )
                     await _broadcast_to_clients(event)
 
                 elif event_type == "tool.permission_required":
-                    event = _notification("event", {
-                        "type": "tool.permission.required",
-                        "payload": {
-                            "session_id": sid,
-                            "tool_name": payload.get("tool_name", ""),
-                            "tool_input": payload.get("tool_input", {}),
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "tool.permission.required",
+                            "payload": {
+                                "session_id": sid,
+                                "tool_name": payload.get("tool_name", ""),
+                                "tool_input": payload.get("tool_input", {}),
+                            },
                         },
-                    })
+                    )
                     await _broadcast_to_clients(event)
 
                 else:
-                    event = _notification("event", {
-                        "type": event_type,
-                        "payload": data,
-                    })
+                    event = _notification(
+                        "event",
+                        {
+                            "type": event_type,
+                            "payload": data,
+                        },
+                    )
                     await _broadcast_to_clients(event)
 
         except websockets.ConnectionClosed:
@@ -494,14 +554,15 @@ async def handle_client(ws):
     _client_to_session[ws] = None
 
     # Send gateway.ready notification (matches Hermes gateway behavior)
-    ready = _notification("event", {
-        "type": "gateway.ready",
-        "payload": {"skin": {}, "change_events": True, "replay_epoch": int(time.time())},
-    })
-    try:
+    ready = _notification(
+        "event",
+        {
+            "type": "gateway.ready",
+            "payload": {"skin": {}, "change_events": True, "replay_epoch": int(time.time())},
+        },
+    )
+    with contextlib.suppress(Exception):
         await ws.send(json.dumps(ready, ensure_ascii=False))
-    except Exception:
-        pass
 
     try:
         async for raw in ws:
@@ -516,7 +577,9 @@ async def handle_client(ws):
 
             # Handle heartbeat pings
             if method == "ping":
-                await ws.send(json.dumps({"jsonrpc": "2.0", "result": "pong", "id": rid}, ensure_ascii=False))
+                await ws.send(
+                    json.dumps({"jsonrpc": "2.0", "result": "pong", "id": rid}, ensure_ascii=False)
+                )
                 continue
 
             handler = METHODS.get(method)
@@ -546,12 +609,14 @@ async def main():
     global _http_client
 
     parser = argparse.ArgumentParser(description="Tektos Gateway WebSocket Proxy")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("TEKTOS_GATEWAY_PORT", "8765")))
+    parser.add_argument(
+        "--port", type=int, default=int(os.environ.get("TEKTOS_GATEWAY_PORT", "8765"))
+    )
     parser.add_argument("--tektos-url", default=None)
     args = parser.parse_args()
 
     base_url = args.tektos_url or TEKTOS_BASE_URL
-    ws_base = base_url.replace("http://", "ws://").replace("https://", "wss://")
+    base_url.replace("http://", "ws://").replace("https://", "wss://")
 
     log.info(f"Tektos Gateway Proxy starting on port {args.port}")
     log.info(f"Tektos backend: {TEKTOS_BASE_URL}")

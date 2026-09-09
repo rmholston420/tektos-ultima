@@ -24,12 +24,12 @@ Adapted from:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 log = logging.getLogger("tektos.event_bus")
 
@@ -37,6 +37,7 @@ log = logging.getLogger("tektos.event_bus")
 @dataclass
 class EventBusEvent:
     """Internal event representation."""
+
     event_type: str
     session_id: str
     payload: dict[str, Any]
@@ -140,7 +141,8 @@ class EventBus:
         filters_to_check = [
             event_type_filter
             for event_type_filter in self._subscriptions
-            if event_type_filter == event_type or event_type_filter.endswith(".*")
+            if event_type_filter == event_type
+            or event_type_filter.endswith(".*")
             and event_type.startswith(event_type_filter.rsplit(".", 1)[0])
         ]
 
@@ -156,9 +158,8 @@ class EventBus:
         return {
             "published": self._published_count,
             "dropped": self._dropped_count,
-            "subscriptions": len(self._all_subscribers) + sum(
-                len(s) for s in self._subscriptions.values()
-            ),
+            "subscriptions": len(self._all_subscribers)
+            + sum(len(s) for s in self._subscriptions.values()),
             "event_types_subscribed": list(self._subscriptions.keys()),
         }
 

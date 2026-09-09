@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PlanStep:
     """A single step in a plan."""
+
     step_id: str
     description: str
     status: str = "pending"  # pending, running, completed, failed
@@ -30,6 +31,7 @@ class PlanStep:
 @dataclass
 class Plan:
     """A plan with steps."""
+
     plan_id: str
     description: str
     steps: list[PlanStep] = field(default_factory=list)
@@ -58,7 +60,7 @@ class PlannerOrchestrator:
         """Create a new plan from a description and optional steps."""
         plan_id = f"plan_{len(self._plans) + 1}"
         plan_steps = [
-            PlanStep(step_id=f"step_{i+1}", description=desc)
+            PlanStep(step_id=f"step_{i + 1}", description=desc)
             for i, desc in enumerate(steps or [description])
         ]
         plan = Plan(plan_id=plan_id, description=description, steps=plan_steps)

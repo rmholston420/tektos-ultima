@@ -126,8 +126,7 @@ class SelfImprovementLoop:
         """
         if len(self._cycles) >= self._max_cycles:
             raise RuntimeError(
-                f"Maximum cycles ({self._max_cycles}) reached. "
-                "Clear cycles or increase max_cycles."
+                f"Maximum cycles ({self._max_cycles}) reached. Clear cycles or increase max_cycles."
             )
 
         cycle_id = cycle_id or f"cycle-{uuid.uuid4().hex[:8]}"
@@ -184,12 +183,7 @@ class SelfImprovementLoop:
             # PHASE 4: Synthesis — Reflection
             cycle.status = "synthesizing"
             test_results = list(record.test_results)
-            test_status = (
-                "passed"
-                if all(t.status == "passed" for t in test_results)
-                else "mixed"
-            )
-            status = record.status.value
+            "passed" if all(t.status == "passed" for t in test_results) else "mixed"
 
             # ReflectionEngine requires MemorySystem in __init__ and uses run_reflection()
             reflection_state = self._reflection.run_reflection(
@@ -239,7 +233,7 @@ class SelfImprovementLoop:
         for i, prompt in enumerate(prompts):
             cycle = self.run(
                 prompt=prompt,
-                cycle_id=f"cycle-{i+1:03d}",
+                cycle_id=f"cycle-{i + 1:03d}",
             )
             results.append(cycle)
         return results

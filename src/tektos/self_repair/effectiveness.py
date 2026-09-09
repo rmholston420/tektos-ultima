@@ -27,7 +27,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from .models import RepairRecord, RepairStatus
+from .models import RepairRecord
 
 log = logging.getLogger(__name__)
 
@@ -76,8 +76,12 @@ class RepairEffectivenessTracker:
         self._total_time[cat] += record.total_time_seconds
         self._total_count[cat] += 1
 
-        log.info("[RepairEffectiveness] Success: %s (%s) in %.1fs",
-                 record.threat_category, record.strategy_used, record.total_time_seconds)
+        log.info(
+            "[RepairEffectiveness] Success: %s (%s) in %.1fs",
+            record.threat_category,
+            record.strategy_used,
+            record.total_time_seconds,
+        )
 
     def record_failure(self, record: RepairRecord) -> None:
         """Record a failed repair."""
@@ -94,8 +98,12 @@ class RepairEffectivenessTracker:
         self._total_time[cat] += record.total_time_seconds
         self._total_count[cat] += 1
 
-        log.warning("[RepairEffectiveness] Failed: %s (%s): %s",
-                    record.threat_category, record.strategy_used, record.error)
+        log.warning(
+            "[RepairEffectiveness] Failed: %s (%s): %s",
+            record.threat_category,
+            record.strategy_used,
+            record.error,
+        )
 
     def record_rollback(self, record: RepairRecord) -> None:
         """Record a rolled-back repair."""
@@ -113,8 +121,11 @@ class RepairEffectivenessTracker:
         self._by_category[cat]["degraded"] += 1
         self._by_category[cat]["total"] += 1
 
-        log.info("[RepairEffectiveness] Degraded: %s → %s",
-                 record.threat_category, record.degradation_applied.value)
+        log.info(
+            "[RepairEffectiveness] Degraded: %s → %s",
+            record.threat_category,
+            record.degradation_applied.value,
+        )
 
     def get_success_rate(self, category: str | None = None) -> float:
         """Get overall or per-category success rate."""
@@ -190,8 +201,7 @@ class RepairEffectivenessTracker:
         avg_time = self.get_average_time()
         if avg_time > 60:
             recommendations.append(
-                f"Average repair time is {avg_time:.0f}s. "
-                f"Consider optimizing repair strategies."
+                f"Average repair time is {avg_time:.0f}s. Consider optimizing repair strategies."
             )
 
         return recommendations

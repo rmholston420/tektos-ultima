@@ -9,6 +9,11 @@ Tiers:
 Backup scheduler covers all databases with retention policy.
 """
 
+from .backup_scheduler import (
+    BackupConfig,
+    BackupRecord,
+    BackupScheduler,
+)
 from .memory_system import (
     DreamResult,
     DreamState,
@@ -19,17 +24,12 @@ from .memory_system import (
     MemoryTier,
     TierConfig,
 )
-from .redis_memory import RedisMemoryConfig, RedisSensoryMemory, RedisWorkingMemory
+from .neo4j_memory import Neo4jMemoryConfig, Neo4jProceduralMemory
 from .postgres_memory import (
     PostgresLongTermMemory,
     PostgresMemoryConfig,
 )
-from .neo4j_memory import Neo4jMemoryConfig, Neo4jProceduralMemory
-from .backup_scheduler import (
-    BackupConfig,
-    BackupRecord,
-    BackupScheduler,
-)
+from .redis_memory import RedisMemoryConfig, RedisSensoryMemory, RedisWorkingMemory
 
 __all__ = [
     # Memory system

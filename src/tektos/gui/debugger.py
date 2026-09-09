@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 
 class ChromeDebuggerConfig(BaseModel):
     """Configuration for Chrome debugger integration."""
@@ -66,6 +67,7 @@ class ChromeDebuggerConfig(BaseModel):
 # Data models
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ConsoleEntry:
     """Single console log entry."""
@@ -73,8 +75,8 @@ class ConsoleEntry:
     level: str  # log, warn, error, info
     text: str
     timestamp: str
-    url: Optional[str] = None
-    stack: Optional[str] = None
+    url: str | None = None
+    stack: str | None = None
 
 
 @dataclass
@@ -83,14 +85,14 @@ class NetworkRequest:
 
     url: str
     method: str
-    status: Optional[int] = None
-    status_text: Optional[str] = None
-    resource_type: Optional[str] = None
-    initiator: Optional[str] = None
-    response_time_ms: Optional[float] = None
-    size_bytes: Optional[int] = None
+    status: int | None = None
+    status_text: str | None = None
+    resource_type: str | None = None
+    initiator: str | None = None
+    response_time_ms: float | None = None
+    size_bytes: int | None = None
     cached: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     timestamp: str = ""
 
 
@@ -110,13 +112,13 @@ class PerformanceMetrics:
     """Performance metrics from Chrome DevTools Protocol."""
 
     timestamp: str
-    domContentLoaded_ms: Optional[float] = None
-    loadComplete_ms: Optional[float] = None
-    firstPaint_ms: Optional[float] = None
-    firstContentfulPaint_ms: Optional[float] = None
-    totalBlockingTime: Optional[float] = None
-    cumulativeLayoutShift: Optional[float] = None
-    mainThreadTime_ms: Optional[float] = None
+    domContentLoaded_ms: float | None = None
+    loadComplete_ms: float | None = None
+    firstPaint_ms: float | None = None
+    firstContentfulPaint_ms: float | None = None
+    totalBlockingTime: float | None = None
+    cumulativeLayoutShift: float | None = None
+    mainThreadTime_ms: float | None = None
 
 
 @dataclass
@@ -131,7 +133,7 @@ class DebugSession:
     screenshots: list[ScreenshotResult] = field(default_factory=list)
     console_entries: list[ConsoleEntry] = field(default_factory=list)
     network_requests: list[NetworkRequest] = field(default_factory=list)
-    performance: Optional[PerformanceMetrics] = None
+    performance: PerformanceMetrics | None = None
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -151,6 +153,7 @@ class DebugSession:
 # ---------------------------------------------------------------------------
 # CDP Session Manager
 # ---------------------------------------------------------------------------
+
 
 class CDPSessionManager:
     """Manages CDP sessions for DOM, Network, Performance, and Console."""
@@ -176,7 +179,7 @@ class CDPSessionManager:
 
     async def get_console_log(self) -> list[ConsoleEntry]:
         """Get console log entries from the page."""
-        entries = await self._page.evaluate("""() => {
+        await self._page.evaluate("""() => {
             return Array.from(console.__proto__.constructor.name === '' ? [] : []);
         }""")
         # Use Playwright's built-in console event listener
@@ -216,9 +219,7 @@ class CDPSessionManager:
             )
         except Exception as e:
             logger.warning("Performance metrics failed: %s", e)
-            return PerformanceMetrics(
-                timestamp=datetime.now(timezone.utc).isoformat()
-            )
+            return PerformanceMetrics(timestamp=datetime.now(timezone.utc).isoformat())
 
     async def execute_js(self, expression: str) -> Any:
         """Execute JavaScript in the browser context."""
@@ -231,13 +232,15 @@ class CDPSessionManager:
         for elem in elements:
             box = await elem.bounding_box()
             text = await elem.inner_text()
-            result.append({
-                "tag": await elem.evaluate("el => el.tagName"),
-                "text": text.strip()[:200],
-                "bounds": box,
-                "visible": await elem.is_visible(),
-                "enabled": await elem.is_enabled(),
-            })
+            result.append(
+                {
+                    "tag": await elem.evaluate("el => el.tagName"),
+                    "text": text.strip()[:200],
+                    "bounds": box,
+                    "visible": await elem.is_visible(),
+                    "enabled": await elem.is_enabled(),
+                }
+            )
         return result
 
     async def click_element(self, selector: str) -> bool:
@@ -264,6 +267,7 @@ class CDPSessionManager:
 # ---------------------------------------------------------------------------
 # GUI Test Recorder (not a pytest test class — renamed to avoid collection)
 # ---------------------------------------------------------------------------
+
 
 class GuiTestRecorder:
     """Records test sessions with screenshots and traces."""
@@ -324,6 +328,7 @@ class GuiTestRecorder:
 # Chrome Debugger
 # ---------------------------------------------------------------------------
 
+
 class ChromeDebugger:
     """Main Chrome debugger for GUI testing.
 
@@ -344,21 +349,21 @@ class ChromeDebugger:
             report = await debugger.end_session()
     """
 
-    def __init__(self, config: Optional[ChromeDebuggerConfig] = None):
+    def __init__(self, config: ChromeDebuggerConfig | None = None):
         self.config = config or ChromeDebuggerConfig()
         self._browser: Any = None
         self._page: Any = None
         self._cdp = None
         self._console_entries: list[ConsoleEntry] = []
         self._network_requests: list[NetworkRequest] = []
-        self._session_start: Optional[float] = None
-        self._current_session: Optional[DebugSession] = None
+        self._session_start: float | None = None
+        self._current_session: DebugSession | None = None
         self._recorder = GuiTestRecorder(
             output_dir=self.config.trace_dir,
             screenshot_dir=self.config.screenshot_dir,
         )
 
-    async def __aenter__(self) -> "ChromeDebugger":
+    async def __aenter__(self) -> ChromeDebugger:
         await self.start()
         return self
 
@@ -377,7 +382,10 @@ class ChromeDebugger:
             )
 
             self._page = await self._browser.new_page(
-                viewport={"width": self.config.viewport_width, "height": self.config.viewport_height},
+                viewport={
+                    "width": self.config.viewport_width,
+                    "height": self.config.viewport_height,
+                },
             )
 
             # Set up console, request, response listeners
@@ -389,7 +397,7 @@ class ChromeDebugger:
                     level=msg.type,
                     text=msg.text,
                     timestamp=datetime.now(timezone.utc).isoformat(),
-                    url=msg.location.get("url") if hasattr(msg, 'location') else None,
+                    url=msg.location.get("url") if hasattr(msg, "location") else None,
                 )
                 self._console_entries.append(entry)
                 logger.debug("Console [%s]: %s", entry.level, entry.text[:200])
@@ -420,9 +428,11 @@ class ChromeDebugger:
 
             # Start recording console events
             await self._page.route("**/*", lambda route: route.continue_())
-            await self._page.set_extra_http_headers({
-                "X-Debug-Session": "true",
-            })
+            await self._page.set_extra_http_headers(
+                {
+                    "X-Debug-Session": "true",
+                }
+            )
 
             logger.info(
                 "Chrome debugger started (headless=%s, url=%s)",
@@ -438,13 +448,13 @@ class ChromeDebugger:
         try:
             if self._browser:
                 await self._browser.close()
-            if hasattr(self, '_playwright') and self._playwright:
+            if hasattr(self, "_playwright") and self._playwright:
                 await self._playwright.stop()
             logger.info("Chrome debugger stopped")
         except Exception as e:
             logger.warning("Error stopping debugger: %s", e)
 
-    async def navigate(self, url: Optional[str] = None) -> None:
+    async def navigate(self, url: str | None = None) -> None:
         """Navigate to a URL."""
         target = url or self.config.base_url
         if not self._page:
@@ -477,9 +487,7 @@ class ChromeDebugger:
             full_page=full_page,
         )
 
-        size = await self._page.evaluate(
-            "() => ({ w: window.innerWidth, h: window.innerHeight })"
-        )
+        size = await self._page.evaluate("() => ({ w: window.innerWidth, h: window.innerHeight })")
         width = size["w"]
         height = size["h"]
 
@@ -563,8 +571,8 @@ class ChromeDebugger:
 
     async def run_gui_test(
         self,
-        url: Optional[str] = None,
-        screenshots: Optional[list[tuple[str, str]]] = None,
+        url: str | None = None,
+        screenshots: list[tuple[str, str]] | None = None,
     ) -> DebugSession:
         """Run a complete GUI test: navigate, take screenshots, collect metrics.
 
@@ -615,6 +623,7 @@ class ChromeDebugger:
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+
 
 def main():
     """CLI entry point for running GUI tests."""

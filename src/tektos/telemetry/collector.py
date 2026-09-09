@@ -11,9 +11,9 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class MetricPoint:
     """A single metric data point."""
+
     name: str
     value: float
     timestamp: str = ""
@@ -78,7 +79,9 @@ class TelemetryCollector:
         self._running = False
         self._collect_task: asyncio.Task | None = None
 
-    def record_gauge(self, name: str, value: float, labels: dict | None = None, unit: str = "") -> None:
+    def record_gauge(
+        self, name: str, value: float, labels: dict | None = None, unit: str = ""
+    ) -> None:
         """Record a gauge metric (current value).
 
         Args:
@@ -96,7 +99,7 @@ class TelemetryCollector:
         )
         self._metrics.append(point)
         if len(self._metrics) > self.max_buffer_size:
-            self._metrics = self._metrics[-self.max_buffer_size:]
+            self._metrics = self._metrics[-self.max_buffer_size :]
 
     def record_counter(self, name: str, value: float = 1.0, labels: dict | None = None) -> None:
         """Record a counter metric (cumulative value).
@@ -115,7 +118,7 @@ class TelemetryCollector:
         )
         self._metrics.append(point)
         if len(self._metrics) > self.max_buffer_size:
-            self._metrics = self._metrics[-self.max_buffer_size:]
+            self._metrics = self._metrics[-self.max_buffer_size :]
 
     def record_event(self, event_type: str, labels: dict | None = None) -> None:
         """Record a discrete event.
@@ -137,6 +140,7 @@ class TelemetryCollector:
         # CPU usage
         try:
             import psutil
+
             metrics["cpu_percent"] = psutil.cpu_percent(interval=0.1)
             metrics["cpu_count"] = float(psutil.cpu_count() or 0)
         except ImportError:
@@ -146,6 +150,7 @@ class TelemetryCollector:
         # Memory usage
         try:
             import psutil
+
             mem = psutil.virtual_memory()
             metrics["memory_used_percent"] = mem.percent
             metrics["memory_used_bytes"] = float(mem.used)
@@ -158,6 +163,7 @@ class TelemetryCollector:
         # Disk usage
         try:
             import psutil
+
             disk = psutil.disk_usage("/")
             metrics["disk_used_percent"] = disk.percent
             metrics["disk_used_bytes"] = float(disk.used)
@@ -170,6 +176,7 @@ class TelemetryCollector:
         # GPU usage (if available)
         try:
             import pynvml
+
             pynvml.nvmlInit()
             device_count = pynvml.nvmlDeviceGetCount()
             for i in range(device_count):
@@ -193,7 +200,7 @@ class TelemetryCollector:
             Dict of service metrics.
         """
         return {
-            "uptime_seconds": time.time() - self._start_time if hasattr(self, '_start_time') else 0,
+            "uptime_seconds": time.time() - self._start_time if hasattr(self, "_start_time") else 0,
             "metrics_collected": len(self._metrics),
             "counters": dict(self._counters),
             "gauges": dict(self._gauges),
@@ -239,7 +246,7 @@ class TelemetryCollector:
         # Counters
         for key, value in self._counters.items():
             name, labels = key.split(":", 1) if ":" in key else (key, "")
-            labels_str = f'{{{labels}}}' if labels else ""
+            labels_str = f"{{{labels}}}" if labels else ""
             lines.append(f"{name}{labels_str} {value}")
 
         return "\n".join(lines) + "\n"
@@ -259,10 +266,8 @@ class TelemetryCollector:
         self._running = False
         if self._collect_task:
             self._collect_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._collect_task
-            except asyncio.CancelledError:
-                pass
         log.info("Telemetry collection stopped")
 
     async def _collect_loop(self) -> None:
@@ -297,10 +302,7 @@ class TelemetryCollector:
         Returns:
             List of MetricPoint.
         """
-        if name:
-            metrics = [m for m in self._metrics if m.name == name]
-        else:
-            metrics = list(self._metrics)
+        metrics = [m for m in self._metrics if m.name == name] if name else list(self._metrics)
 
         return metrics[-limit:]
 

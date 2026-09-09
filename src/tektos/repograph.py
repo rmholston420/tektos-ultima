@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class GraphNode:
     """A node in the repograph."""
+
     id: str
     label: str
     type: str  # "file", "module", "function", "class", "dependency"
@@ -22,6 +23,7 @@ class GraphNode:
 @dataclass
 class GraphEdge:
     """An edge in the repograph."""
+
     source: str
     target: str
     relation: str  # "imports", "depends_on", "calls", "extends"
@@ -66,14 +68,16 @@ class Repograph:
     def get_dependencies(self, node_id: str) -> list[str]:
         """Get dependencies for a node."""
         return [
-            edge.target for edge in self._edges
+            edge.target
+            for edge in self._edges
             if edge.source == node_id and edge.relation in ("imports", "depends_on")
         ]
 
     def get_dependents(self, node_id: str) -> list[str]:
         """Get nodes that depend on this node."""
         return [
-            edge.source for edge in self._edges
+            edge.source
+            for edge in self._edges
             if edge.target == node_id and edge.relation in ("imports", "depends_on")
         ]
 

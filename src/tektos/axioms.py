@@ -28,21 +28,23 @@ Axiom format (YAML in .axiom files):
 
 from __future__ import annotations
 
-import glob
 import logging
-import yaml
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 log = logging.getLogger(__name__)
 
 # ── Axiom Data Model ────────────────────────────────────────────────────────
 
+
 @dataclass
 class Axiom:
     """Single axiom — self-contained unit of Tektos knowledge."""
+
     id: str  # dot-separated namespace: phase.6.10.complete
     category: str  # milestone, directive, architecture, operation, constraint, lesson
     status: str  # pending, in_progress, verified, deprecated
@@ -68,7 +70,7 @@ class AxiomSystem:
         self.axioms_dir = Path(axioms_dir) if axioms_dir else Path(__file__).parent / "axioms"
         self._axioms: dict[str, Axiom] = {}
 
-    def load(self) -> 'AxiomSystem':
+    def load(self) -> AxiomSystem:
         """Load all .axiom files from axioms directory."""
         if not self.axioms_dir.exists():
             log.warning(f"Axioms directory not found: {self.axioms_dir}")
@@ -83,9 +85,9 @@ class AxiomSystem:
                             continue
                         if isinstance(doc, list):
                             for item in doc:
-                                self._axioms[item['id']] = self._parse_axiom(item)
+                                self._axioms[item["id"]] = self._parse_axiom(item)
                         elif isinstance(doc, dict):
-                            self._axioms[doc['id']] = self._parse_axiom(doc)
+                            self._axioms[doc["id"]] = self._parse_axiom(doc)
             except Exception as e:
                 log.error(f"Failed to load axiom {axiom_file}: {e}")
 
@@ -93,16 +95,16 @@ class AxiomSystem:
 
     def _parse_axiom(self, data: dict) -> Axiom:
         return Axiom(
-            id=data['id'],
-            category=data.get('category', 'misc'),
-            status=data.get('status', 'pending'),
-            date=data.get('date', datetime.now(timezone.utc).strftime('%Y-%m-%d')),
-            content=data.get('content', ''),
-            notes=data.get('notes', ''),
-            metadata=data.get('metadata', {}),
-            prerequisites=data.get('prerequisites', []),
-            blocking=data.get('blocking', []),
-            tags=data.get('tags', []),
+            id=data["id"],
+            category=data.get("category", "misc"),
+            status=data.get("status", "pending"),
+            date=data.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+            content=data.get("content", ""),
+            notes=data.get("notes", ""),
+            metadata=data.get("metadata", {}),
+            prerequisites=data.get("prerequisites", []),
+            blocking=data.get("blocking", []),
+            tags=data.get("tags", []),
         )
 
     def get(self, axiom_id: str) -> Axiom | None:
@@ -135,8 +137,8 @@ class AxiomSystem:
         axiom = Axiom(
             id=id,
             category=category,
-            status='pending',
-            date=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+            status="pending",
+            date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             content=content,
             **kwargs,
         )
@@ -206,7 +208,7 @@ class AxiomSystem:
 
             # One file per category with all axioms
             file_path = category_dir / f"{category}.axiom"
-            with open(file_path, 'w') as f:
+            with open(file_path, "w") as f:
                 yaml.dump_all(
                     [self._serialize(a) for a in axioms],
                     f,
@@ -217,16 +219,16 @@ class AxiomSystem:
 
     def _serialize(self, axiom: Axiom) -> dict[str, Any]:
         return {
-            'id': axiom.id,
-            'category': axiom.category,
-            'status': axiom.status,
-            'date': axiom.date,
-            'content': axiom.content,
-            'notes': axiom.notes,
-            'metadata': axiom.metadata,
-            'prerequisites': axiom.prerequisites,
-            'blocking': axiom.blocking,
-            'tags': axiom.tags,
+            "id": axiom.id,
+            "category": axiom.category,
+            "status": axiom.status,
+            "date": axiom.date,
+            "content": axiom.content,
+            "notes": axiom.notes,
+            "metadata": axiom.metadata,
+            "prerequisites": axiom.prerequisites,
+            "blocking": axiom.blocking,
+            "tags": axiom.tags,
         }
 
 

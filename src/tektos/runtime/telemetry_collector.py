@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class TelemetryPoint:
     """A single telemetry data point."""
+
     metric_name: str
     value: float
     timestamp: float = field(default_factory=time.time)
@@ -36,15 +37,15 @@ class TelemetryCollector:
             tags=tags or {},
         )
         self._points.append(point)
-        
+
         # Also update counters and gauges
         if name in self._counters:
             self._counters[name] += int(value)
         else:
             self._counters[name] = int(value)
-        
+
         self._gauges[name] = value
-        
+
         log.debug(f"TelemetryCollector: Recorded metric {name} = {value}")
 
     def increment_counter(self, name: str, amount: int = 1) -> None:

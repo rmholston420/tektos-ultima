@@ -27,12 +27,9 @@ from .disambiguator import (
     generate_clarifying_questions,
     resolve_ambiguities,
 )
-from .language_game import LanguageGame, classify_language_game, get_language_game_description
+from .language_game import classify_language_game, get_language_game_description
 from .models import (
-    Ambiguity,
     AmbiguityResolution,
-    BuildSpec,
-    ClarifyingQuestion,
     PlannerOutput,
 )
 from .spec_generator import generate_spec

@@ -11,8 +11,8 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 class ServiceStatus(Enum):
     """Status of a monitored service."""
+
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     FAILED = "failed"
@@ -33,6 +34,7 @@ class ServiceStatus(Enum):
 @dataclass
 class ServiceHealth:
     """Health status of a service."""
+
     name: str
     status: ServiceStatus
     last_check: str = ""
@@ -49,6 +51,7 @@ class ServiceHealth:
 @dataclass
 class RecoveryEvent:
     """A recovery event."""
+
     service: str
     action: str
     success: bool
@@ -160,6 +163,7 @@ class AutoRecovery:
     def _check_port(self, port: int) -> bool:
         """Check if a port is listening."""
         import socket
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1)
         result = sock.connect_ex(("127.0.0.1", port))
@@ -178,12 +182,14 @@ class AutoRecovery:
 
         if health.restart_count >= self.max_restarts:
             log.warning(f"Max restarts ({self.max_restarts}) reached for {service_name}")
-            self._recovery_events.append(RecoveryEvent(
-                service=service_name,
-                action="max_restarts_reached",
-                success=False,
-                details=f"Service {service_name} exceeded max restarts",
-            ))
+            self._recovery_events.append(
+                RecoveryEvent(
+                    service=service_name,
+                    action="max_restarts_reached",
+                    success=False,
+                    details=f"Service {service_name} exceeded max restarts",
+                )
+            )
             return
 
         health.status = ServiceStatus.RECOVERING
@@ -201,21 +207,25 @@ class AutoRecovery:
 
         if success:
             health.status = ServiceStatus.HEALTHY
-            self._recovery_events.append(RecoveryEvent(
-                service=service_name,
-                action="restart_success",
-                success=True,
-                details=f"Service {service_name} recovered after {health.restart_count} attempts",
-            ))
+            self._recovery_events.append(
+                RecoveryEvent(
+                    service=service_name,
+                    action="restart_success",
+                    success=True,
+                    details=f"Service {service_name} recovered after {health.restart_count} attempts",
+                )
+            )
             log.info(f"Service {service_name} recovered successfully")
         else:
             health.status = ServiceStatus.FAILED
-            self._recovery_events.append(RecoveryEvent(
-                service=service_name,
-                action="restart_failed",
-                success=False,
-                details=f"Service {service_name} restart failed (attempt {health.restart_count})",
-            ))
+            self._recovery_events.append(
+                RecoveryEvent(
+                    service=service_name,
+                    action="restart_failed",
+                    success=False,
+                    details=f"Service {service_name} restart failed (attempt {health.restart_count})",
+                )
+            )
             log.error(f"Service {service_name} restart failed")
 
     def _simulate_restart(self, service_name: str) -> bool:
@@ -226,6 +236,7 @@ class AutoRecovery:
         """
         # Simulate 80% recovery rate
         import random
+
         return random.random() < 0.8
 
     async def start_monitoring(self) -> None:
@@ -242,10 +253,8 @@ class AutoRecovery:
         self._running = False
         if self._monitor_task:
             self._monitor_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._monitor_task
-            except asyncio.CancelledError:
-                pass
         log.info("Auto-recovery monitoring stopped")
 
     async def _monitor_loop(self) -> None:
@@ -293,8 +302,7 @@ class AutoRecovery:
         return {
             "services_monitored": len(self._services),
             "service_statuses": {
-                name: health.status.value
-                for name, health in self._services.items()
+                name: health.status.value for name, health in self._services.items()
             },
             "total_recovery_events": len(self._recovery_events),
             "monitoring_running": self._running,
@@ -336,11 +344,10 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from tektos.runtime.session import LiveSession, SessionManager
+from tektos.runtime.session import SessionManager
 from tektos.store.event_store import get_events
 
 
@@ -372,7 +379,7 @@ class RecoveryResult:
     recovered: bool = False
     status: str = ""  # recovered, interrupted, archived
     events_count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
     action_taken: str = ""  # restarted, continued, archived
 
 
@@ -447,17 +454,17 @@ class AutoRecoveryManager:
     def __init__(
         self,
         session_manager: SessionManager,
-        config: Optional[RecoveryConfig] = None,
-        state_file: Optional[str] = None,
-        gateway_manager: Optional[Any] = None,
+        config: RecoveryConfig | None = None,
+        state_file: str | None = None,
+        gateway_manager: Any | None = None,
     ):
         self.session_manager = session_manager
         self.config = config or RecoveryConfig()
         self.state_file = Path(state_file) if state_file else None
         self.gateway_manager = gateway_manager
-        self.report: Optional[RecoveryReport] = None
+        self.report: RecoveryReport | None = None
 
-    async def __aenter__(self) -> "AutoRecoveryManager":
+    async def __aenter__(self) -> AutoRecoveryManager:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -561,7 +568,10 @@ class AutoRecoveryManager:
                         result.action_taken = "archived"
                         report.sessions_archived += 1
 
-                elif event_type == "session.interrupted" or payload.get("status") in ("interrupted", "error"):
+                elif event_type == "session.interrupted" or payload.get("status") in (
+                    "interrupted",
+                    "error",
+                ):
                     if self.config.recover_interrupted:
                         await self._restart_session(session_id)
                         result.recovered = True
@@ -617,10 +627,14 @@ class AutoRecoveryManager:
 
             from tektos.store.event_store import append_event
 
-            await append_event(session_id, "session.recovered", {
-                "recovered_at": datetime.now(timezone.utc).isoformat(),
-                "restart_count": len(events),
-            })
+            await append_event(
+                session_id,
+                "session.recovered",
+                {
+                    "recovered_at": datetime.now(timezone.utc).isoformat(),
+                    "restart_count": len(events),
+                },
+            )
 
             if hasattr(self.session_manager, "recover_session"):
                 await self.session_manager.recover_session(session_id)
@@ -641,7 +655,7 @@ class AutoRecoveryManager:
             log.error("Failed to archive session %s: %s", session_id, e)
             raise
 
-    async def _load_state(self) -> Optional[dict[str, Any]]:
+    async def _load_state(self) -> dict[str, Any] | None:
         """Load last known state from file or Hindsight."""
         if self.state_file and self.state_file.exists():
             try:
@@ -652,6 +666,7 @@ class AutoRecoveryManager:
                     return state
                 except json.JSONDecodeError:
                     from tektos.runtime.state_manager import LastKnownState
+
                     state = LastKnownState.from_markdown(state_text, "tektos")
                     return state.to_dict() | {"source": "file"}
             except Exception as e:
@@ -662,20 +677,23 @@ class AutoRecoveryManager:
                 HindsightClient,
                 HindsightConfig,
             )
-            
+
             client = HindsightClient(
-                config=HindsightConfig(base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000"))
+                config=HindsightConfig(
+                    base_url=os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9000")
+                )
             )
             results = client.recall(
                 query="LAST_KNOWN_STATE tektos progress objective",
                 limit=1,
             )
-            
+
             if results.get("results"):
                 latest = results["results"][0]
                 md_text = latest.get("text", "")
                 if md_text and "LAST_KNOWN_STATE" in md_text:
                     from tektos.runtime.state_manager import LastKnownState
+
                     state = LastKnownState.from_markdown(md_text, "tektos")
                     return state.to_dict() | {"source": "hindsight"}
         except Exception as e:
@@ -705,8 +723,8 @@ class GatewayManager:
 
     def __init__(
         self,
-        telegram_gateway: Optional[Any] = None,
-        email_gateway: Optional[Any] = None,
+        telegram_gateway: Any | None = None,
+        email_gateway: Any | None = None,
     ):
         self.telegram = telegram_gateway
         self.email = email_gateway

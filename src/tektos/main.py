@@ -21,6 +21,7 @@ import logging as _log
 import os as _os
 import time as _time
 from contextlib import asynccontextmanager as _asynccontextmanager
+from contextlib import suppress
 from datetime import datetime as _datetime
 from datetime import timezone as _timezone
 from pathlib import Path as _Path
@@ -85,6 +86,7 @@ _rag_retriever: Any = None
 _context_curator: Any = None
 
 from tektos.db_manager import DatabaseManager
+from tektos.event_bus import get_event_bus
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
 from tektos.protocol.envelope import (
     PROTOCOL_VERSION,
@@ -97,16 +99,14 @@ from tektos.runtime.session import LiveSession, SessionManager
 from tektos.runtime.session_state import SessionState, SessionStateManager
 from tektos.runtime.ws_manager import WebSocketManager
 from tektos.self_improvement.engine import SelfImprovementAdapter
-from tektos.thermal import ThermalMonitor
+from tektos.state_machine import get_state_machine
 from tektos.store.event_store import (
     append_event,
     get_events,
     get_replay,
-    search_events,
 )
 from tektos.store.event_store import close as store_close
-from tektos.event_bus import get_event_bus
-from tektos.state_machine import get_state_machine, State
+from tektos.thermal import ThermalMonitor
 
 session_manager: SessionManager
 runtime_sdk: RuntimeSDK
@@ -123,6 +123,7 @@ state_managers: dict[str, SessionStateManager] = {}
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
+
 
 @_asynccontextmanager
 async def lifespan(app: _FastAPI):
@@ -149,6 +150,7 @@ async def lifespan(app: _FastAPI):
 
     # 1. Initialize event store FIRST (provides db_path)
     from tektos.store.event_store import init as init_event_store
+
     db_path = str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db")
     init_event_store(db_path)
 
@@ -173,6 +175,7 @@ async def lifespan(app: _FastAPI):
 
     # 4.5. Initialize context compactor (4-tier compression)
     from tektos.runtime.context_compactor import ContextCompactor
+
     global _context_compactor
     _context_compactor = ContextCompactor(max_tokens=262144)
     log.info("Context compactor initialized (4-tier: raw → summarized → abstracted → persistent)")
@@ -187,7 +190,8 @@ async def lifespan(app: _FastAPI):
     llm_model = _os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M")
     if llm_base_url and llm_model:
         try:
-            from tektos.routing import ModelRouter, ModelProfile, ModelTier
+            from tektos.routing import ModelProfile, ModelRouter, ModelTier
+
             _model_router = ModelRouter()
             _model_router.register_model(
                 ModelProfile(
@@ -210,9 +214,10 @@ async def lifespan(app: _FastAPI):
     ws_manager = WebSocketManager()
 
     # 6b. Initialize skill system (create, select, execute)
-    from tektos.skills.registry import SkillRegistry
-    from tektos.skills.manager import SkillManager
     from tektos.skills.executor import SkillExecutor
+    from tektos.skills.manager import SkillManager
+    from tektos.skills.registry import SkillRegistry
+
     global _skill_manager, _skill_executor
     _skill_registry = SkillRegistry(
         db_path=str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db"),
@@ -252,19 +257,32 @@ async def lifespan(app: _FastAPI):
 
     # Subscribe VSM layers to event bus
     # S3 (Manager) monitors all state changes and warnings
-    _event_bus.subscribe("session.*", lambda e: log.debug(f"VSM S3 saw {e.event_type}"), "vsm_manager")
-    _event_bus.subscribe("resource.*", lambda e: log.info(f"VSM S3 resource warning: {e.payload}"), "vsm_manager")
-    _event_bus.subscribe("loop_safety.*", lambda e: log.warning(f"VSM S3 loop safety: {e.payload}"), "vsm_manager")
+    _event_bus.subscribe(
+        "session.*", lambda e: log.debug(f"VSM S3 saw {e.event_type}"), "vsm_manager"
+    )
+    _event_bus.subscribe(
+        "resource.*", lambda e: log.info(f"VSM S3 resource warning: {e.payload}"), "vsm_manager"
+    )
+    _event_bus.subscribe(
+        "loop_safety.*", lambda e: log.warning(f"VSM S3 loop safety: {e.payload}"), "vsm_manager"
+    )
     # S4 (Planner) monitors self_improvement events
-    _event_bus.subscribe("self_improvement.*", lambda e: log.debug(f"VSM S4 planning tick: {e.payload}"), "vsm_planner")
+    _event_bus.subscribe(
+        "self_improvement.*",
+        lambda e: log.debug(f"VSM S4 planning tick: {e.payload}"),
+        "vsm_planner",
+    )
     # S2 (Event Stream) records all events
-    _event_bus.subscribe("*", lambda e: log.debug(f"VSM S2 recorded {e.event_type}"), "vsm_event_stream")
+    _event_bus.subscribe(
+        "*", lambda e: log.debug(f"VSM S2 recorded {e.event_type}"), "vsm_event_stream"
+    )
 
     log.info("Event bus + state machine initialized (nervous system)")
 
     # 9. Initialize tool registry (replaces hardcoded TOOLS_SCHEMA)
-    from tektos.tools.registry import ToolRegistry, MCPClient, ToolDefinition
     from tektos.providers.sandbox_provider import SandboxProvider
+    from tektos.tools.registry import MCPClient, ToolDefinition, ToolRegistry
+
     global _tool_registry, _mcp_client
     _sandbox = SandboxProvider()
     _tool_registry = ToolRegistry(event_bus=_event_bus)
@@ -285,6 +303,7 @@ async def lifespan(app: _FastAPI):
 
     def _register_db_tools():
         from tektos.db_manager import DatabaseManager as _DBMgr
+
         nonlocal _db_tools_registered
         if _db_tools_registered:
             return
@@ -293,282 +312,516 @@ async def lifespan(app: _FastAPI):
             _db_mgr = _DBMgr(db_path)
 
             # db_introspect — get full schema
-            _tool_registry.register(ToolDefinition(
-                name="db_introspect",
-                description="Get the full database schema: all tables, columns, types, indexes, and row counts. Use this to understand the current database structure before making changes.",
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-                handler=lambda params: _json.dumps(_db_mgr.get_stats(), indent=2, default=str),
-            ))
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_introspect",
+                    description="Get the full database schema: all tables, columns, types, indexes, and row counts. Use this to understand the current database structure before making changes.",
+                    parameters={
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                    handler=lambda params: _json.dumps(_db_mgr.get_stats(), indent=2, default=str),
+                )
+            )
 
             # db_query — execute a SELECT query
-            _tool_registry.register(ToolDefinition(
-                name="db_query",
-                description="Execute a SELECT query on the database. Returns results as a list of dicts. Use for reading data, checking counts, or inspecting records. Only SELECT statements are allowed for safety.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "sql": {"type": "string", "description": "SQL SELECT query"},
-                        "params": {"type": "array", "description": "Query parameters (list)", "default": None},
-                        "limit": {"type": "integer", "description": "Max rows to return", "default": 1000},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_query",
+                    description="Execute a SELECT query on the database. Returns results as a list of dicts. Use for reading data, checking counts, or inspecting records. Only SELECT statements are allowed for safety.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "sql": {"type": "string", "description": "SQL SELECT query"},
+                            "params": {
+                                "type": "array",
+                                "description": "Query parameters (list)",
+                                "default": None,
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Max rows to return",
+                                "default": 1000,
+                            },
+                        },
+                        "required": ["sql"],
                     },
-                    "required": ["sql"],
-                },
-                handler=lambda params: _json.dumps(_db_mgr.execute_query(params["sql"], tuple(params.get("params", [])), params.get("limit", 1000)), indent=2, default=str),
-            ))
+                    handler=lambda params: _json.dumps(
+                        _db_mgr.execute_query(
+                            params["sql"],
+                            tuple(params.get("params", [])),
+                            params.get("limit", 1000),
+                        ),
+                        indent=2,
+                        default=str,
+                    ),
+                )
+            )
 
             # db_dml — execute INSERT/UPDATE/DELETE
-            _tool_registry.register(ToolDefinition(
-                name="db_dml",
-                description="Execute a DML statement (INSERT, UPDATE, or DELETE). For UPDATE/DELETE, a WHERE clause is required by default for safety. Returns the number of rows affected.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "sql": {"type": "string", "description": "SQL DML statement"},
-                        "params": {"type": "array", "description": "Statement parameters (list)", "default": None},
-                        "require_confirmation": {"type": "boolean", "description": "Require WHERE clause for UPDATE/DELETE", "default": True},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_dml",
+                    description="Execute a DML statement (INSERT, UPDATE, or DELETE). For UPDATE/DELETE, a WHERE clause is required by default for safety. Returns the number of rows affected.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "sql": {"type": "string", "description": "SQL DML statement"},
+                            "params": {
+                                "type": "array",
+                                "description": "Statement parameters (list)",
+                                "default": None,
+                            },
+                            "require_confirmation": {
+                                "type": "boolean",
+                                "description": "Require WHERE clause for UPDATE/DELETE",
+                                "default": True,
+                            },
+                        },
+                        "required": ["sql"],
                     },
-                    "required": ["sql"],
-                },
-                handler=lambda params: _json.dumps({"rows_affected": _db_mgr.execute_dml(params["sql"], tuple(params.get("params", [])), params.get("require_confirmation", True))}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "rows_affected": _db_mgr.execute_dml(
+                                params["sql"],
+                                tuple(params.get("params", [])),
+                                params.get("require_confirmation", True),
+                            )
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_create_table — create a new table
-            _tool_registry.register(ToolDefinition(
-                name="db_create_table",
-                description="Create a new table in the database. Specify table name, column definitions as {name: type}, and optionally a primary key column.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "table_name": {"type": "string", "description": "Table name"},
-                        "columns": {"type": "object", "description": "Column definitions: {column_name: column_type}", "additionalProperties": {"type": "string"}},
-                        "primary_key": {"type": "string", "description": "Primary key column name", "default": None},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_create_table",
+                    description="Create a new table in the database. Specify table name, column definitions as {name: type}, and optionally a primary key column.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "table_name": {"type": "string", "description": "Table name"},
+                            "columns": {
+                                "type": "object",
+                                "description": "Column definitions: {column_name: column_type}",
+                                "additionalProperties": {"type": "string"},
+                            },
+                            "primary_key": {
+                                "type": "string",
+                                "description": "Primary key column name",
+                                "default": None,
+                            },
+                        },
+                        "required": ["table_name", "columns"],
                     },
-                    "required": ["table_name", "columns"],
-                },
-                handler=lambda params: _json.dumps({"created": _db_mgr.create_table(params["table_name"], params["columns"], params.get("primary_key"))}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "created": _db_mgr.create_table(
+                                params["table_name"], params["columns"], params.get("primary_key")
+                            )
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_add_column — add a column to an existing table
-            _tool_registry.register(ToolDefinition(
-                name="db_add_column",
-                description="Add a column to an existing table. Specify table name, column name, type, optional default value, and NOT NULL constraint.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "table_name": {"type": "string", "description": "Target table"},
-                        "column_name": {"type": "string", "description": "New column name"},
-                        "column_type": {"type": "string", "description": "Column type (TEXT, INTEGER, REAL, BLOB)"},
-                        "default": {"type": "string", "description": "Default value", "default": None},
-                        "notnull": {"type": "boolean", "description": "NOT NULL constraint", "default": False},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_add_column",
+                    description="Add a column to an existing table. Specify table name, column name, type, optional default value, and NOT NULL constraint.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "table_name": {"type": "string", "description": "Target table"},
+                            "column_name": {"type": "string", "description": "New column name"},
+                            "column_type": {
+                                "type": "string",
+                                "description": "Column type (TEXT, INTEGER, REAL, BLOB)",
+                            },
+                            "default": {
+                                "type": "string",
+                                "description": "Default value",
+                                "default": None,
+                            },
+                            "notnull": {
+                                "type": "boolean",
+                                "description": "NOT NULL constraint",
+                                "default": False,
+                            },
+                        },
+                        "required": ["table_name", "column_name", "column_type"],
                     },
-                    "required": ["table_name", "column_name", "column_type"],
-                },
-                handler=lambda params: _json.dumps({"added": _db_mgr.add_column(params["table_name"], params["column_name"], params["column_type"], params.get("default"), params.get("notnull", False))}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "added": _db_mgr.add_column(
+                                params["table_name"],
+                                params["column_name"],
+                                params["column_type"],
+                                params.get("default"),
+                                params.get("notnull", False),
+                            )
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_drop_column — drop a column from a table
-            _tool_registry.register(ToolDefinition(
-                name="db_drop_column",
-                description="Drop a column from an existing table. Note: SQLite recreates the table internally to drop a column.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "table_name": {"type": "string", "description": "Target table"},
-                        "column_name": {"type": "string", "description": "Column to drop"},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_drop_column",
+                    description="Drop a column from an existing table. Note: SQLite recreates the table internally to drop a column.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "table_name": {"type": "string", "description": "Target table"},
+                            "column_name": {"type": "string", "description": "Column to drop"},
+                        },
+                        "required": ["table_name", "column_name"],
                     },
-                    "required": ["table_name", "column_name"],
-                },
-                handler=lambda params: _json.dumps({"dropped": _db_mgr.drop_column(params["table_name"], params["column_name"])}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "dropped": _db_mgr.drop_column(
+                                params["table_name"], params["column_name"]
+                            )
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_rename_table — rename a table
-            _tool_registry.register(ToolDefinition(
-                name="db_rename_table",
-                description="Rename a table in the database.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "old_name": {"type": "string", "description": "Current table name"},
-                        "new_name": {"type": "string", "description": "New table name"},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_rename_table",
+                    description="Rename a table in the database.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "old_name": {"type": "string", "description": "Current table name"},
+                            "new_name": {"type": "string", "description": "New table name"},
+                        },
+                        "required": ["old_name", "new_name"],
                     },
-                    "required": ["old_name", "new_name"],
-                },
-                handler=lambda params: _json.dumps({"renamed": _db_mgr.rename_table(params["old_name"], params["new_name"])}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {"renamed": _db_mgr.rename_table(params["old_name"], params["new_name"])},
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_rename_column — rename a column
-            _tool_registry.register(ToolDefinition(
-                name="db_rename_column",
-                description="Rename a column in a table.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "table_name": {"type": "string", "description": "Target table"},
-                        "old_name": {"type": "string", "description": "Current column name"},
-                        "new_name": {"type": "string", "description": "New column name"},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_rename_column",
+                    description="Rename a column in a table.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "table_name": {"type": "string", "description": "Target table"},
+                            "old_name": {"type": "string", "description": "Current column name"},
+                            "new_name": {"type": "string", "description": "New column name"},
+                        },
+                        "required": ["table_name", "old_name", "new_name"],
                     },
-                    "required": ["table_name", "old_name", "new_name"],
-                },
-                handler=lambda params: _json.dumps({"renamed": _db_mgr.rename_column(params["table_name"], params["old_name"], params["new_name"])}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "renamed": _db_mgr.rename_column(
+                                params["table_name"], params["old_name"], params["new_name"]
+                            )
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_create_index — create an index
-            _tool_registry.register(ToolDefinition(
-                name="db_create_index",
-                description="Create an index on one or more columns of a table. Use UNIQUE for unique constraints.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "index_name": {"type": "string", "description": "Index name"},
-                        "table_name": {"type": "string", "description": "Target table"},
-                        "columns": {"type": "array", "items": {"type": "string"}, "description": "Columns to index"},
-                        "unique": {"type": "boolean", "description": "Unique index", "default": False},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_create_index",
+                    description="Create an index on one or more columns of a table. Use UNIQUE for unique constraints.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "index_name": {"type": "string", "description": "Index name"},
+                            "table_name": {"type": "string", "description": "Target table"},
+                            "columns": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Columns to index",
+                            },
+                            "unique": {
+                                "type": "boolean",
+                                "description": "Unique index",
+                                "default": False,
+                            },
+                        },
+                        "required": ["index_name", "table_name", "columns"],
                     },
-                    "required": ["index_name", "table_name", "columns"],
-                },
-                handler=lambda params: _json.dumps({"created": _db_mgr.create_index(params["index_name"], params["table_name"], params["columns"], params.get("unique", False))}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "created": _db_mgr.create_index(
+                                params["index_name"],
+                                params["table_name"],
+                                params["columns"],
+                                params.get("unique", False),
+                            )
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_drop_index — drop an index
-            _tool_registry.register(ToolDefinition(
-                name="db_drop_index",
-                description="Drop an index from the database.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "index_name": {"type": "string", "description": "Index name to drop"},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_drop_index",
+                    description="Drop an index from the database.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "index_name": {"type": "string", "description": "Index name to drop"},
+                        },
+                        "required": ["index_name"],
                     },
-                    "required": ["index_name"],
-                },
-                handler=lambda params: _json.dumps({"dropped": _db_mgr.drop_index(params["index_name"])}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {"dropped": _db_mgr.drop_index(params["index_name"])}, indent=2
+                    ),
+                )
+            )
 
             # db_analyze — analyze a table for data quality and optimization
-            _tool_registry.register(ToolDefinition(
-                name="db_analyze",
-                description="Analyze a table: data quality, column distribution, missing indexes, duplicate indexes, and optimization suggestions.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "table_name": {"type": "string", "description": "Table to analyze"},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_analyze",
+                    description="Analyze a table: data quality, column distribution, missing indexes, duplicate indexes, and optimization suggestions.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "table_name": {"type": "string", "description": "Table to analyze"},
+                        },
+                        "required": ["table_name"],
                     },
-                    "required": ["table_name"],
-                },
-                handler=lambda params: _json.dumps(_db_mgr.analyze_table(params["table_name"]).__dict__, indent=2, default=str),
-            ))
+                    handler=lambda params: _json.dumps(
+                        _db_mgr.analyze_table(params["table_name"]).__dict__, indent=2, default=str
+                    ),
+                )
+            )
 
             # db_analyze_all — analyze all tables
-            _tool_registry.register(ToolDefinition(
-                name="db_analyze_all",
-                description="Analyze all tables in the database for data quality issues and optimization opportunities.",
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-                handler=lambda params: _json.dumps({
-                    t: r.__dict__ for t, r in _db_mgr.analyze_all().items()
-                }, indent=2, default=str),
-            ))
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_analyze_all",
+                    description="Analyze all tables in the database for data quality issues and optimization opportunities.",
+                    parameters={
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                    handler=lambda params: _json.dumps(
+                        {t: r.__dict__ for t, r in _db_mgr.analyze_all().items()},
+                        indent=2,
+                        default=str,
+                    ),
+                )
+            )
 
             # db_backup — create a database backup
-            _tool_registry.register(ToolDefinition(
-                name="db_backup",
-                description="Create a backup of the database. Returns backup path, size, table count, row count, and checksum.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "backup_path": {"type": "string", "description": "Backup file path (optional, auto-generated if omitted)", "default": None},
-                        "compress": {"type": "boolean", "description": "Compress with gzip", "default": False},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_backup",
+                    description="Create a backup of the database. Returns backup path, size, table count, row count, and checksum.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "backup_path": {
+                                "type": "string",
+                                "description": "Backup file path (optional, auto-generated if omitted)",
+                                "default": None,
+                            },
+                            "compress": {
+                                "type": "boolean",
+                                "description": "Compress with gzip",
+                                "default": False,
+                            },
+                        },
+                        "required": [],
                     },
-                    "required": [],
-                },
-                handler=lambda params: _json.dumps({
-                    "path": _db_mgr.backup(params.get("backup_path"), params.get("compress", False)).path,
-                    "tables": _db_mgr.backup(params.get("backup_path"), params.get("compress", False)).table_count,
-                    "rows": _db_mgr.backup(params.get("backup_path"), params.get("compress", False)).row_count,
-                }, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "path": _db_mgr.backup(
+                                params.get("backup_path"), params.get("compress", False)
+                            ).path,
+                            "tables": _db_mgr.backup(
+                                params.get("backup_path"), params.get("compress", False)
+                            ).table_count,
+                            "rows": _db_mgr.backup(
+                                params.get("backup_path"), params.get("compress", False)
+                            ).row_count,
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_restore — restore from backup
-            _tool_registry.register(ToolDefinition(
-                name="db_restore",
-                description="Restore the database from a backup file. WARNING: This replaces the current database entirely.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "backup_path": {"type": "string", "description": "Backup file to restore from"},
-                        "verify": {"type": "boolean", "description": "Verify backup before restoring", "default": True},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_restore",
+                    description="Restore the database from a backup file. WARNING: This replaces the current database entirely.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "backup_path": {
+                                "type": "string",
+                                "description": "Backup file to restore from",
+                            },
+                            "verify": {
+                                "type": "boolean",
+                                "description": "Verify backup before restoring",
+                                "default": True,
+                            },
+                        },
+                        "required": ["backup_path"],
                     },
-                    "required": ["backup_path"],
-                },
-                handler=lambda params: _json.dumps({"restored": _db_mgr.restore(params["backup_path"], params.get("verify", True))}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "restored": _db_mgr.restore(
+                                params["backup_path"], params.get("verify", True)
+                            )
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_export — export a table to JSON/CSV/SQL
-            _tool_registry.register(ToolDefinition(
-                name="db_export",
-                description="Export a table to a file in JSON, CSV, or SQL format.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "table_name": {"type": "string", "description": "Table to export"},
-                        "format": {"type": "string", "enum": ["json", "csv", "sql"], "description": "Output format", "default": "json"},
-                        "path": {"type": "string", "description": "Output file path (optional)", "default": None},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_export",
+                    description="Export a table to a file in JSON, CSV, or SQL format.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "table_name": {"type": "string", "description": "Table to export"},
+                            "format": {
+                                "type": "string",
+                                "enum": ["json", "csv", "sql"],
+                                "description": "Output format",
+                                "default": "json",
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Output file path (optional)",
+                                "default": None,
+                            },
+                        },
+                        "required": ["table_name"],
                     },
-                    "required": ["table_name"],
-                },
-                handler=lambda params: _json.dumps({"exported": True, "path": _db_mgr.export_table(params["table_name"], params.get("format", "json"), params.get("path"))}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "exported": True,
+                            "path": _db_mgr.export_table(
+                                params["table_name"],
+                                params.get("format", "json"),
+                                params.get("path"),
+                            ),
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_import — import data into a table
-            _tool_registry.register(ToolDefinition(
-                name="db_import",
-                description="Import data into a table from a JSON, CSV, or SQL file.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "table_name": {"type": "string", "description": "Target table"},
-                        "format": {"type": "string", "enum": ["json", "csv", "sql"], "description": "Input format", "default": "json"},
-                        "path": {"type": "string", "description": "Input file path"},
-                        "mode": {"type": "string", "enum": ["insert", "replace"], "description": "Insert or replace mode", "default": "insert"},
-                        "clear_first": {"type": "boolean", "description": "Clear table before importing", "default": False},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_import",
+                    description="Import data into a table from a JSON, CSV, or SQL file.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "table_name": {"type": "string", "description": "Target table"},
+                            "format": {
+                                "type": "string",
+                                "enum": ["json", "csv", "sql"],
+                                "description": "Input format",
+                                "default": "json",
+                            },
+                            "path": {"type": "string", "description": "Input file path"},
+                            "mode": {
+                                "type": "string",
+                                "enum": ["insert", "replace"],
+                                "description": "Insert or replace mode",
+                                "default": "insert",
+                            },
+                            "clear_first": {
+                                "type": "boolean",
+                                "description": "Clear table before importing",
+                                "default": False,
+                            },
+                        },
+                        "required": ["table_name", "path"],
                     },
-                    "required": ["table_name", "path"],
-                },
-                handler=lambda params: _json.dumps({"imported": True, "rows": _db_mgr.import_table(params["table_name"], params.get("format", "json"), params["path"], params.get("mode", "insert"), params.get("clear_first", False))}, indent=2),
-            ))
+                    handler=lambda params: _json.dumps(
+                        {
+                            "imported": True,
+                            "rows": _db_mgr.import_table(
+                                params["table_name"],
+                                params.get("format", "json"),
+                                params["path"],
+                                params.get("mode", "insert"),
+                                params.get("clear_first", False),
+                            ),
+                        },
+                        indent=2,
+                    ),
+                )
+            )
 
             # db_optimize — run VACUUM and ANALYZE
-            _tool_registry.register(ToolDefinition(
-                name="db_optimize",
-                description="Run database optimization: VACUUM (rebuild file), ANALYZE (update query planner stats), and re-analyze all tables.",
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-                handler=lambda params: _json.dumps(_db_mgr.optimize(), indent=2, default=str),
-            ))
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_optimize",
+                    description="Run database optimization: VACUUM (rebuild file), ANALYZE (update query planner stats), and re-analyze all tables.",
+                    parameters={
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                    handler=lambda params: _json.dumps(_db_mgr.optimize(), indent=2, default=str),
+                )
+            )
 
             # db_explain — get query plan
-            _tool_registry.register(ToolDefinition(
-                name="db_explain",
-                description="Get the query execution plan for a SELECT statement. Shows whether indexes are used and the join order.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "sql": {"type": "string", "description": "SQL SELECT query"},
-                        "params": {"type": "array", "description": "Query parameters", "default": None},
+            _tool_registry.register(
+                ToolDefinition(
+                    name="db_explain",
+                    description="Get the query execution plan for a SELECT statement. Shows whether indexes are used and the join order.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "sql": {"type": "string", "description": "SQL SELECT query"},
+                            "params": {
+                                "type": "array",
+                                "description": "Query parameters",
+                                "default": None,
+                            },
+                        },
+                        "required": ["sql"],
                     },
-                    "required": ["sql"],
-                },
-                handler=lambda params: _json.dumps(_db_mgr.explain_query(params["sql"], tuple(params.get("params", [])) if params.get("params") else None), indent=2, default=str),
-            ))
+                    handler=lambda params: _json.dumps(
+                        _db_mgr.explain_query(
+                            params["sql"],
+                            tuple(params.get("params", [])) if params.get("params") else None,
+                        ),
+                        indent=2,
+                        default=str,
+                    ),
+                )
+            )
 
             log.info("Registered %d database management tools", 16)
         except Exception as e:
@@ -582,6 +835,7 @@ async def lifespan(app: _FastAPI):
 
     # 10. Initialize metabolism engine (resource monitoring + context budget)
     from tektos.metabolism import MetabolismEngine
+
     global _metabolism
     _metabolism = MetabolismEngine(event_bus=_event_bus, max_tokens=262144)
     log.info("Metabolism engine initialized")
@@ -590,6 +844,7 @@ async def lifespan(app: _FastAPI):
     global _voice_manager
     try:
         from tektos.voice import get_voice_manager
+
         _voice_manager = get_voice_manager()
         try:
             await _voice_manager.initialize()
@@ -611,6 +866,7 @@ async def lifespan(app: _FastAPI):
         global vision_client
         try:
             from tektos.providers.vision_client import VisionClient
+
             vision_client = VisionClient(
                 base_url=f"{vision_url.rstrip('/')}/v1",
                 model=vision_model,
@@ -626,6 +882,7 @@ async def lifespan(app: _FastAPI):
     # 10. Initialize memory persistence layer
     global memory_system
     from tektos.memory.memory_system import MemorySystem
+
     memory_system = MemorySystem()
     if memory_system.persistence:
         memory_system.persistence.start_decay_scheduler(interval=60.0)
@@ -639,6 +896,7 @@ async def lifespan(app: _FastAPI):
         global telegram_gateway
         try:
             from tektos.telegram_gateway import create_telegram_gateway
+
             telegram_gateway = create_telegram_gateway(
                 bot_token=telegram_bot_token,
                 admin_chat_id=telegram_admin_chat_id_int,
@@ -655,6 +913,7 @@ async def lifespan(app: _FastAPI):
 
     # 12. Initialize self-repair engine (healing + degradation)
     from tektos.self_repair import get_self_repair_engine
+
     global _self_repair_engine
     _self_repair_engine = get_self_repair_engine()
     await _self_repair_engine.start()
@@ -663,8 +922,9 @@ async def lifespan(app: _FastAPI):
     # 13. Initialize safety systems — immune system, loop safety, loop guard
     # These are critical: they protect the system during execution.
     from tektos.runtime.immune_system import ImmuneSystem
-    from tektos.runtime.loop_safety import LoopSafetyMonitor, LoopSafetyConfig
     from tektos.runtime.loop_guard import ToolCallLoopGuard
+    from tektos.runtime.loop_safety import LoopSafetyConfig, LoopSafetyMonitor
+
     global _immune_system, _loop_safety_monitor, _loop_guard
     try:
         _immune_system = ImmuneSystem(
@@ -712,9 +972,10 @@ async def lifespan(app: _FastAPI):
         _loop_guard = None
 
     # 14. Initialize core agent systems — hierarchical agent, long-running agent, coding agent executor
+    from tektos.agents.coding_agent.executor import Executor as CodingAgentExecutor
     from tektos.runtime.hierarchical_agent import HierarchicalAgent
     from tektos.runtime.long_running_agent import LongRunningAgent
-    from tektos.agents.coding_agent.executor import Executor as CodingAgentExecutor
+
     try:
         _hierarchical_agent = HierarchicalAgent(max_concurrent_agents=3)
         log.info("Hierarchical agent initialized")
@@ -743,10 +1004,11 @@ async def lifespan(app: _FastAPI):
         _coding_agent_executor = None
 
     # 15. Initialize memory tier — persistence, hindsight, reflection, synthesis
-    from tektos.memory.persistence import MemoryPersistence
     from tektos.memory.hindsight_client import HindsightClient, HindsightConfig
+    from tektos.memory.persistence import MemoryPersistence
     from tektos.memory.reflection_engine import ReflectionEngine
     from tektos.memory.synthesis_engine import SynthesisEngine
+
     global _memory_persistence, _hindsight_client, _reflection_engine, _synthesis_engine
     try:
         _memory_persistence = MemoryPersistence(
@@ -761,6 +1023,7 @@ async def lifespan(app: _FastAPI):
     # 16. Initialize remaining modules — self-modification, plugins, axioms, memory backends
     try:
         from tektos.runtime.self_modification import SelfModificationEngine
+
         _self_modification_engine = SelfModificationEngine(
             project_root=str(_Path(__file__).parent / ".." / ".."),
             max_risk_level="medium",
@@ -771,8 +1034,8 @@ async def lifespan(app: _FastAPI):
         _self_modification_engine = None
 
     try:
-        from tektos.plugin_loader import PluginLoader
-        from tektos.plugin_loader import PluginRegistry
+        from tektos.plugin_loader import PluginLoader, PluginRegistry
+
         _plugin_registry = PluginRegistry()
         _plugin_loader = PluginLoader(registry=_plugin_registry)
         _plugin_loader.load_plugins()
@@ -783,6 +1046,7 @@ async def lifespan(app: _FastAPI):
 
     try:
         from tektos.axioms import AxiomSystem
+
         _axiom_system = AxiomSystem(axioms_dir=str(_Path(__file__).parent / "axioms"))
         _axiom_system.load()
         log.info("Axiom system initialized and loaded")
@@ -791,7 +1055,8 @@ async def lifespan(app: _FastAPI):
         _axiom_system = None
 
     try:
-        from tektos.memory.neo4j_memory import Neo4jProceduralMemory, Neo4jMemoryConfig
+        from tektos.memory.neo4j_memory import Neo4jMemoryConfig, Neo4jProceduralMemory
+
         _neo4j_uri = _os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
         _neo4j_parts = _neo4j_uri.replace("bolt://", "").split(":")
         _neo4j_host = _neo4j_parts[0] if _neo4j_parts else "127.0.0.1"
@@ -811,13 +1076,18 @@ async def lifespan(app: _FastAPI):
 
     try:
         from tektos.memory.postgres_memory import PostgresLongTermMemory, PostgresMemoryConfig
+
         _postgres_dsn = _os.getenv("POSTGRES_DSN", "postgresql://localhost/tektos")
         _postgres_parts = _postgres_dsn.replace("postgresql://", "").split("/")
         _postgres_db = _postgres_parts[1] if len(_postgres_parts) > 1 else "tektos"
         _postgres_host = _postgres_parts[0].split(":")[0] if _postgres_parts else "localhost"
-        _postgres_port = int(_postgres_parts[0].split(":")[1]) if ":" in _postgres_parts[0] else 5432
+        _postgres_port = (
+            int(_postgres_parts[0].split(":")[1]) if ":" in _postgres_parts[0] else 5432
+        )
         _postgres_backend = PostgresLongTermMemory(
-            config=PostgresMemoryConfig(host=_postgres_host, port=_postgres_port, database=_postgres_db),
+            config=PostgresMemoryConfig(
+                host=_postgres_host, port=_postgres_port, database=_postgres_db
+            ),
         )
         try:
             _postgres_backend.connect()
@@ -830,12 +1100,17 @@ async def lifespan(app: _FastAPI):
         _postgres_backend = None
 
     try:
-        from tektos.memory.redis_memory import RedisWorkingMemory, RedisMemoryConfig
+        from tektos.memory.redis_memory import RedisMemoryConfig, RedisWorkingMemory
+
         _redis_url = _os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
         _redis_parts = _redis_url.replace("redis://", "").split(":")
         _redis_host = _redis_parts[0] if _redis_parts else "127.0.0.1"
         _redis_port = int(_redis_parts[1].split("/")[0]) if len(_redis_parts) > 1 else 6379
-        _redis_db = int(_redis_parts[1].split("/")[1]) if len(_redis_parts) > 1 and "/" in _redis_parts[1] else 0
+        _redis_db = (
+            int(_redis_parts[1].split("/")[1])
+            if len(_redis_parts) > 1 and "/" in _redis_parts[1]
+            else 0
+        )
         _redis_backend = RedisWorkingMemory(
             config=RedisMemoryConfig(host=_redis_host, port=_redis_port, db=_redis_db),
         )
@@ -883,8 +1158,11 @@ async def lifespan(app: _FastAPI):
         _synthesis_engine = None
 
     # 16. Initialize self-improvement loop orchestrator
+    from tektos.agents.self_improvement.loop_orchestrator import (
+        SelfImprovementLoop as SelfImprovementLoopOrchestrator,
+    )
     from tektos.self_improvement.loop import SelfImprovementLoop as SelfImprovementLoopSimple
-    from tektos.agents.self_improvement.loop_orchestrator import SelfImprovementLoop as SelfImprovementLoopOrchestrator
+
     try:
         _self_improvement_loop_simple = SelfImprovementLoopSimple(max_iterations=100)
         log.info("Self-improvement loop (simple) initialized")
@@ -904,7 +1182,9 @@ async def lifespan(app: _FastAPI):
 
     # 16b. Initialize dreamtime background task — runs periodic contemplation
     _dreamtime_task: Any = None
-    _dreamtime_interval: float = float(_os.getenv("TEKTOS_DREAMTIME_INTERVAL", "300"))  # 5 minutes default
+    _dreamtime_interval: float = float(
+        _os.getenv("TEKTOS_DREAMTIME_INTERVAL", "300")
+    )  # 5 minutes default
     _dreamtime_enabled: bool = _os.getenv("TEKTOS_DREAMTIME_ENABLED", "true").lower() == "true"
 
     async def _dreamtime_loop() -> None:
@@ -933,6 +1213,7 @@ async def lifespan(app: _FastAPI):
     # 17. Initialize infrastructure — search, gitops, recovery, telemetry
     try:
         from tektos.search.unified_search import UnifiedSearch
+
         _unified_search = UnifiedSearch(
             root_dir=str(_Path(__file__).parent / ".." / ".."),
             max_results=20,
@@ -949,6 +1230,7 @@ async def lifespan(app: _FastAPI):
 
     try:
         from tektos.gitops.engine import GitOpsEngine
+
         _gitops_engine = GitOpsEngine(
             repo_root=str(_Path(__file__).parent / ".." / ".."),
             author_name="Tektos",
@@ -961,6 +1243,7 @@ async def lifespan(app: _FastAPI):
 
     try:
         from tektos.recovery.auto_recovery import AutoRecovery
+
         _auto_recovery = AutoRecovery(
             services=["llm", "event_store", "memory_persistence"],
             check_interval=30,
@@ -978,6 +1261,7 @@ async def lifespan(app: _FastAPI):
 
     try:
         from tektos.telemetry.collector import TelemetryCollector
+
         _telemetry_collector = TelemetryCollector(
             output_dir=str(_Path.home() / ".tektos/telemetry"),
             collection_interval=10.0,
@@ -996,6 +1280,7 @@ async def lifespan(app: _FastAPI):
     # 18. Initialize embedding system (vector search)
     try:
         from tektos.runtime.embedder import EmbedderClient
+
         _embedder_client = EmbedderClient(
             llm_base_url=_os.getenv("TEKTOS_EMBEDDER_URL", "http://127.0.0.1:8091/v1"),
             model=_os.getenv("TEKTOS_EMBEDDER_MODEL", "Qwen3-Embedding-0.6B-Q8_0"),
@@ -1009,6 +1294,7 @@ async def lifespan(app: _FastAPI):
     # 19. Initialize inference engine monitor
     try:
         from tektos.runtime.inference_engine import InferenceEngineMonitor
+
         _inference_monitor = InferenceEngineMonitor()
         await _inference_monitor.start()
         log.info("Inference engine monitor initialized and started")
@@ -1019,6 +1305,7 @@ async def lifespan(app: _FastAPI):
     # 20. Initialize observability manager
     try:
         from tektos.runtime.observability import ObservabilityManager
+
         _observability_manager = ObservabilityManager()
         await _observability_manager.start()
         log.info("Observability manager initialized and started")
@@ -1029,6 +1316,7 @@ async def lifespan(app: _FastAPI):
     # 21. Initialize context curator
     try:
         from tektos.runtime.context_curator import ContextCurator
+
         _context_curator = ContextCurator(max_tokens=262144, compaction_threshold=0.75)
         await _context_curator.start()
         log.info("Context curator initialized")
@@ -1039,6 +1327,7 @@ async def lifespan(app: _FastAPI):
     # 22. Initialize multi-agent orchestrator
     try:
         from tektos.runtime.multi_agent_orchestrator import MultiAgentOrchestrator
+
         _multi_agent_orchestrator = MultiAgentOrchestrator(max_concurrent_agents=5)
         log.info("Multi-agent orchestrator initialized")
     except Exception as exc:
@@ -1048,6 +1337,7 @@ async def lifespan(app: _FastAPI):
     # 23. Initialize planner orchestrator
     try:
         from tektos.runtime.planner_orchestrator import PlannerOrchestrator
+
         _planner_orchestrator = PlannerOrchestrator()
         await _planner_orchestrator.start()
         log.info("Planner orchestrator initialized")
@@ -1058,6 +1348,7 @@ async def lifespan(app: _FastAPI):
     # 24. Initialize RAG engine
     try:
         from tektos.runtime.rag_engine import RAGEngine
+
         _rag_engine = RAGEngine(
             embedder_client=_embedder_client,
             retriever=None,  # RAGRetriever initialized separately
@@ -1071,6 +1362,7 @@ async def lifespan(app: _FastAPI):
     # 25. Initialize RAG retriever
     try:
         from tektos.runtime.rag_retriever import RAGRetriever
+
         _rag_retriever = RAGRetriever(
             embedder_client=_embedder_client,
             project_root=str(_Path(__file__).parent / ".." / ".."),
@@ -1084,6 +1376,7 @@ async def lifespan(app: _FastAPI):
     # 26. Initialize repo map generator
     try:
         from tektos.runtime.repo_map_generator import RepoMapGenerator
+
         _repo_map_generator = RepoMapGenerator(
             project_root=str(_Path(__file__).parent / ".." / ".."),
         )
@@ -1095,8 +1388,9 @@ async def lifespan(app: _FastAPI):
 
     # 27. Initialize tool router
     try:
-        from tektos.runtime.tool_router import ToolRouter
         from tektos.runtime.task_decomposer import TaskDecomposer
+        from tektos.runtime.tool_router import ToolRouter
+
         _tool_router = ToolRouter(embedder_client=_embedder_client)
         _task_decomposer = TaskDecomposer()
         log.info("Tool router and task decomposer initialized")
@@ -1139,10 +1433,12 @@ async def lifespan(app: _FastAPI):
 
     # 12. Initialize hook system — register BuiltinHooks with the HookManager
     from tektos.runtime.hooks import HookManager
+
     _hook_manager = HookManager(resource_monitor=thermal_monitor)
     app.state.hook_manager = _hook_manager
     # Wire the global hook manager into the RuntimeSDK so _fire_hook() works
     from tektos.runtime import sdk as _sdk
+
     _sdk._hook_manager = _hook_manager
     log.info("Hook system initialized with BuiltinHooks")
 
@@ -1224,7 +1520,12 @@ app = _FastAPI(
 # Middleware: CORS (applied after TrustedHost in reverse order — correct)
 app.add_middleware(
     _CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3003", "http://localhost:3006", "http://localhost:5555"],  # Frontend URLs
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3003",
+        "http://localhost:3006",
+        "http://localhost:5555",
+    ],  # Frontend URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1234,6 +1535,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Request/Response schemas
 # ---------------------------------------------------------------------------
+
 
 class CreateSessionRequest(_BaseModel):
     model: str = "Qwen_Qwen3.6-35B-A3B-Q4_K_M"
@@ -1269,6 +1571,7 @@ class ModelRequest(_BaseModel):
 # ---------------------------------------------------------------------------
 # REST API — Sessions (prompt via SSE streaming)
 # ---------------------------------------------------------------------------
+
 
 class _PromptSSEBody(_BaseModel):
     prompt: str
@@ -1324,11 +1627,13 @@ async def prompt_sse(body: _PromptSSEBody):
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": model_name,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": payload.get("text", "")},
-                            "finish_reason": None,
-                        }],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": payload.get("text", "")},
+                                "finish_reason": None,
+                            }
+                        ],
                     }
                     await event_queue.put(_sse_frame(chunk))
 
@@ -1340,11 +1645,13 @@ async def prompt_sse(body: _PromptSSEBody):
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": model_name,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": finish_reason,
-                        }],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": finish_reason,
+                            }
+                        ],
                     }
                     await event_queue.put(_sse_frame(chunk))
 
@@ -1357,21 +1664,25 @@ async def prompt_sse(body: _PromptSSEBody):
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": model_name,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {
-                                "tool_calls": [{
-                                    "index": 0,
-                                    "id": tool_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": tool_name,
-                                        "arguments": "",
-                                    },
-                                }]
-                            },
-                            "finish_reason": None,
-                        }],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": tool_id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": tool_name,
+                                                "arguments": "",
+                                            },
+                                        }
+                                    ]
+                                },
+                                "finish_reason": None,
+                            }
+                        ],
                     }
                     await event_queue.put(_sse_frame(chunk))
 
@@ -1385,21 +1696,27 @@ async def prompt_sse(body: _PromptSSEBody):
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": model_name,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {
-                                "tool_calls": [{
-                                    "index": 0,
-                                    "id": tool_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": "",
-                                        "arguments": _json.dumps({"status": status, "output": output}),
-                                    },
-                                }]
-                            },
-                            "finish_reason": None,
-                        }],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": tool_id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": "",
+                                                "arguments": _json.dumps(
+                                                    {"status": status, "output": output}
+                                                ),
+                                            },
+                                        }
+                                    ]
+                                },
+                                "finish_reason": None,
+                            }
+                        ],
                     }
                     await event_queue.put(_sse_frame(chunk))
 
@@ -1423,11 +1740,13 @@ async def prompt_sse(body: _PromptSSEBody):
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": model_name,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "error",
-                        }],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "error",
+                            }
+                        ],
                         "error": {
                             "message": error_msg,
                             "type": "agent_error",
@@ -1491,11 +1810,13 @@ async def prompt_sse(body: _PromptSSEBody):
             "object": "chat.completion.chunk",
             "created": created,
             "model": model_name,
-            "choices": [{
-                "index": 0,
-                "delta": {"role": "assistant"},
-                "finish_reason": None,
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant"},
+                    "finish_reason": None,
+                }
+            ],
         }
         yield _sse_frame(role_chunk)
 
@@ -1552,11 +1873,13 @@ async def health_check():
 # Axioms API
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/axioms")
 async def list_axioms(category: str | None = None):
     """List all axioms, optionally filtered by category."""
     try:
         from tektos.axioms import load_axioms
+
         ax_sys = load_axioms()
         axioms = ax_sys.list_active()
         if category:
@@ -1586,6 +1909,7 @@ async def verify_axiom(axiom_id: str):
     """Mark an axiom as verified."""
     try:
         from tektos.axioms import load_axioms
+
         result = load_axioms().verify(axiom_id)
         if result:
             return {"ok": True, "id": axiom_id, "status": "verified"}
@@ -1600,6 +1924,7 @@ async def verify_axiom(axiom_id: str):
 # ---------------------------------------------------------------------------
 # Logs API
 # ---------------------------------------------------------------------------
+
 
 class _LogBody(_BaseModel):
     level: str | None = None
@@ -1660,24 +1985,24 @@ async def get_voice_state():
 @app.post("/api/voice/stt")
 async def transcribe_audio(request: _Request):
     """Transcribe audio to text using Whisper.
-    
+
     Accepts multipart form data with 'audio' file (WAV/MP3).
     Returns transcribed text.
     """
     if not _voice_manager:
         raise _HTTPException(status_code=503, detail="Voice system not initialized")
-    
+
     try:
         form = await request.form()
         audio_file = form.get("audio")
         if not audio_file:
             raise _HTTPException(status_code=400, detail="No audio file provided")
-        
+
         # audio_file is UploadFile from multipart form
         audio_bytes = await audio_file.read()  # type: ignore[union-attr]
         if not audio_bytes:
             raise _HTTPException(status_code=400, detail="Empty audio file")
-        
+
         text = await _voice_manager.transcribe(audio_bytes)
         return {"text": text, "wake_word_detected": _voice_manager.state.is_wake_word_detected}
     except _HTTPException:
@@ -1689,19 +2014,19 @@ async def transcribe_audio(request: _Request):
 @app.post("/api/voice/tts")
 async def synthesize_speech(request: _Request):
     """Synthesize text to speech using edge-tts.
-    
+
     Accepts JSON body with 'text' field.
     Returns audio stream (MP3).
     """
     if not _voice_manager:
         raise _HTTPException(status_code=503, detail="Voice system not initialized")
-    
+
     try:
         body = await request.json()
         text = body.get("text", "")
         if not text:
             raise _HTTPException(status_code=400, detail="No text provided")
-        
+
         audio_bytes = await _voice_manager.speak(text)
         return _StreamingResponse(
             iter([audio_bytes]),
@@ -1780,7 +2105,9 @@ async def delete_memory(tier: str, entry_id: str):
 
 class _DreamtimeRunBody(_BaseModel):
     max_memories: int = _Field(default=50, description="Max memories to gather for processing")
-    focus_area: str | None = _Field(default=None, description="Optional focus area for targeted processing")
+    focus_area: str | None = _Field(
+        default=None, description="Optional focus area for targeted processing"
+    )
 
 
 @app.get("/api/dreamtime/summary")
@@ -1857,7 +2184,10 @@ async def trigger_dreamtime_skill_generation():
         insights.extend(d.insights)
 
     if not insights:
-        return {"message": "No recent dreamtime insights to generate skills from", "skills_created": 0}
+        return {
+            "message": "No recent dreamtime insights to generate skills from",
+            "skills_created": 0,
+        }
 
     # Create skills from insights (treat each insight as a lesson)
     skills = _skill_manager.create_skill_from_reflection(
@@ -1879,11 +2209,16 @@ async def trigger_dreamtime_skill_generation():
 # REST API — Skills
 # ---------------------------------------------------------------------------
 
+
 class _CreateSkillBody(_BaseModel):
     name: str = _Field(description="Skill name")
     description: str = _Field(description="What the skill does")
-    trigger_conditions: list[str] = _Field(default_factory=list, description="Conditions that trigger this skill")
-    steps: list[dict[str, Any]] = _Field(default_factory=list, description="Ordered steps to execute")
+    trigger_conditions: list[str] = _Field(
+        default_factory=list, description="Conditions that trigger this skill"
+    )
+    steps: list[dict[str, Any]] = _Field(
+        default_factory=list, description="Ordered steps to execute"
+    )
     category: str = _Field(default="", description="Skill category")
     source: str = _Field(default="user_created", description="Origin of the skill")
     metadata: dict[str, Any] = _Field(default_factory=dict, description="Additional metadata")
@@ -2133,7 +2468,7 @@ async def improve_skill(skill_id: str, body: _UpdateSkillBody):
 
     improvements = []
     if body.description is not None:
-        improvements.append(f"Updated description")
+        improvements.append("Updated description")
     if body.steps is not None:
         improvements.append(f"Updated {len(body.steps)} steps")
     if body.trigger_conditions is not None:
@@ -2256,6 +2591,7 @@ async def execute_skill(skill_id: str, body: _ExecuteSkillBody):
 # REST API — Tools
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/tools")
 async def list_tools(enabled_only: bool = True):
     """List all registered tools."""
@@ -2284,6 +2620,7 @@ async def register_tool(body: _RegisterToolBody):
     if not _tool_registry:
         return {"error": "Tool registry not initialized"}
     from tektos.tools.registry import ToolDefinition
+
     tool = ToolDefinition(
         name=body.name,
         description=body.description,
@@ -2361,6 +2698,7 @@ async def connect_mcp(body: _ConnectMCPServer):
 # REST API — Metabolism
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/metabolism")
 async def get_metabolism():
     """Get full metabolism assessment: GPU, system, context, health."""
@@ -2389,6 +2727,7 @@ async def get_metabolism_history(limit: int = 100):
 # ---------------------------------------------------------------------------
 # REST API — Immune System
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/immune/health")
 async def get_immune_health():
@@ -2435,8 +2774,7 @@ async def get_immune_detectors():
     detectors = runtime_sdk._immune_system._detectors
     return {
         "detectors": [
-            {"name": name, "type": type(det).__name__}
-            for name, det in detectors.items()
+            {"name": name, "type": type(det).__name__} for name, det in detectors.items()
         ],
         "count": len(detectors),
     }
@@ -2453,6 +2791,7 @@ async def get_immune_memory_entries(limit: int = 50):
 # ---------------------------------------------------------------------------
 # REST API — Self-Repair Engine
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/self_repair/status")
 async def get_self_repair_status():
@@ -2512,6 +2851,7 @@ async def trigger_self_repair_health(body: dict[str, Any]):
 # REST API — Thermal Regulation
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/thermal/status")
 async def get_thermal_status():
     """Get current thermal regulation status: GPU/CPU temps, power, clock, actions."""
@@ -2540,6 +2880,7 @@ async def reset_thermal():
 # ---------------------------------------------------------------------------
 # REST API — Self-Improvement
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/self_improvement/metrics")
 async def get_self_improvement_metrics():
@@ -2570,10 +2911,12 @@ async def get_self_improvement_report():
 # REST API — Planner (S4)
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/planner/templates")
 async def get_planner_templates():
     """List available architecture templates the planner can select."""
     from tektos.agents.planner.template_selector import TEMPLATES
+
     return {"templates": [t.model_dump() for t in TEMPLATES]}
 
 
@@ -2581,6 +2924,7 @@ async def get_planner_templates():
 async def get_planner_language_games():
     """List available language games (domain classifiers)."""
     from tektos.agents.planner.language_game import LanguageGame
+
     return {
         "language_games": [
             {"name": g.value, "description": g.value.replace("_", " ").title()}
@@ -2665,6 +3009,7 @@ async def propose_schema_change(body: _ProposeSchemaChangeBody):
     if not schema_engine:
         return {"error": "Schema evolution engine not initialized"}
     from tektos.migrations.schema_evolution import FieldPattern
+
     pattern = FieldPattern(
         table=body.table,
         field_name=body.field_name,
@@ -2703,6 +3048,7 @@ async def apply_schema_proposal(body: _ApplySchemaProposalBody):
     if not schema_engine:
         return {"error": "Schema evolution engine not initialized"}
     from tektos.migrations.schema_evolution import SchemaProposal
+
     proposal = SchemaProposal(
         reason=body.reason,
         action=body.action,
@@ -2713,7 +3059,9 @@ async def apply_schema_proposal(body: _ApplySchemaProposalBody):
         proposed_sql=body.proposed_sql or "ALTER TABLE placeholder",
     )
     if not proposal.proposed_sql:
-        proposal.proposed_sql = f"ALTER TABLE {proposal.table} ADD COLUMN {proposal.column} {proposal.column_type}"
+        proposal.proposed_sql = (
+            f"ALTER TABLE {proposal.table} ADD COLUMN {proposal.column} {proposal.column_type}"
+        )
     if not proposal.validate(schema_engine):
         return {"success": False, "errors": proposal.validation_errors}
     result = schema_engine.apply_proposal(proposal)
@@ -2723,6 +3071,7 @@ async def apply_schema_proposal(body: _ApplySchemaProposalBody):
 # ---------------------------------------------------------------------------
 # REST API — Database Management
 # ---------------------------------------------------------------------------
+
 
 class _DBCreateTableBody(_BaseModel):
     table_name: str = _Field(description="Table name")
@@ -2795,6 +3144,7 @@ async def get_db_stats():
     """Get database statistics: tables, rows, sizes."""
     try:
         from tektos.db_manager import DatabaseManager
+
         db_path = str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db")
         mgr = DatabaseManager(db_path)
         return mgr.get_stats()
@@ -2807,6 +3157,7 @@ async def get_db_schema():
     """Get full database schema with column types and indexes."""
     try:
         from tektos.db_manager import DatabaseManager
+
         db_path = str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db")
         mgr = DatabaseManager(db_path)
         snapshot = mgr.introspect()
@@ -2888,9 +3239,7 @@ async def create_table(body: _DBCreateTableBody):
     if not db_manager:
         return {"error": "Database manager not initialized"}
     try:
-        result = db_manager.create_table(
-            body.table_name, body.columns, body.primary_key
-        )
+        result = db_manager.create_table(body.table_name, body.columns, body.primary_key)
         return {"created": result, "table": body.table_name}
     except ValueError as e:
         raise _HTTPException(status_code=400, detail=str(e))
@@ -2915,8 +3264,11 @@ async def add_column(table_name: str, body: _DBAddColumnBody):
         return {"error": "Database manager not initialized"}
     try:
         result = db_manager.add_column(
-            table_name, body.column_name, body.column_type,
-            body.default, body.notnull,
+            table_name,
+            body.column_name,
+            body.column_type,
+            body.default,
+            body.notnull,
         )
         return {"added": result, "table": table_name, "column": body.column_name}
     except ValueError as e:
@@ -3022,8 +3374,7 @@ async def execute_transaction(body: _BaseModel):
         return {"error": "Database manager not initialized"}
     try:
         statements = [
-            (s["sql"], tuple(s.get("params", [])))
-            for s in body.model_dump().get("statements", [])
+            (s["sql"], tuple(s.get("params", []))) for s in body.model_dump().get("statements", [])
         ]
         results = db_manager.execute_transaction(statements)
         return {"results": results}
@@ -3050,9 +3401,7 @@ async def export_table(body: _DBExportBody):
     if not db_manager:
         return {"error": "Database manager not initialized"}
     try:
-        path = db_manager.export_table(
-            body.table_name, body.format, body.path
-        )
+        path = db_manager.export_table(body.table_name, body.format, body.path)
         return {"exported": True, "path": path, "format": body.format}
     except ValueError as e:
         raise _HTTPException(status_code=400, detail=str(e))
@@ -3065,8 +3414,11 @@ async def import_table(body: _DBImportBody):
         return {"error": "Database manager not initialized"}
     try:
         count = db_manager.import_table(
-            body.table_name, body.format, body.path,
-            body.mode, body.clear_first,
+            body.table_name,
+            body.format,
+            body.path,
+            body.mode,
+            body.clear_first,
         )
         return {"imported": True, "rows": count}
     except ValueError as e:
@@ -3275,7 +3627,9 @@ async def create_session(req: CreateSessionRequest):
     """Create a new session."""
     # Handle fork
     if req.fork_session or req.fork_session_id:
-        source_id = req.fork_session_id or (req.resume_session_id if req.resume_session_id else None)
+        source_id = req.fork_session_id or (
+            req.resume_session_id if req.resume_session_id else None
+        )
         if not source_id:
             raise _HTTPException(status_code=400, detail="fork_session requires fork_session_id")
         session = await session_manager.fork_session(
@@ -3299,7 +3653,9 @@ async def create_session(req: CreateSessionRequest):
     try:
         hm = app.state.hook_manager
         if hm:
-            await hm.fire("session.created", session_id=session.id, model=req.model or runtime_sdk._llm_model)
+            await hm.fire(
+                "session.created", session_id=session.id, model=req.model or runtime_sdk._llm_model
+            )
     except Exception:
         log.exception("Hook session.created failed")
 
@@ -3329,7 +3685,9 @@ async def update_session(session_id: str, body: _UpdateSessionBody):
         if body.status is not None:
             session.status = body.status
         session.updated_at = _time.time()
-        await append_event(session_id, "session.updated", {"status": session.status, "title": session.title})
+        await append_event(
+            session_id, "session.updated", {"status": session.status, "title": session.title}
+        )
         return {
             "id": session.id,
             "title": session.title,
@@ -3427,12 +3785,21 @@ async def switch_model(session_id: str, req: ModelRequest):
         session.updated_at = _time.time()
         # Update RuntimeSDK so future prompts use the new model
         runtime_sdk._llm_model = req.model
-        await append_event(session_id, "session.updated", {
-            "changes": {"model": req.model, "from": old_model},
-        })
-        await _emit_schema_event(session_id, "model_switched", {
-            "model": req.model, "old_model": old_model,
-        })
+        await append_event(
+            session_id,
+            "session.updated",
+            {
+                "changes": {"model": req.model, "from": old_model},
+            },
+        )
+        await _emit_schema_event(
+            session_id,
+            "model_switched",
+            {
+                "model": req.model,
+                "old_model": old_model,
+            },
+        )
         return {"ok": True, "model": req.model, "old_model": old_model}
     except _HTTPException:
         raise
@@ -3444,8 +3811,10 @@ async def switch_model(session_id: str, req: ModelRequest):
 # REST API — Delegation (subagent spawning)
 # ---------------------------------------------------------------------------
 
+
 class DelegateRequest(_BaseModel):
     """Request body for delegating a subtask to a subagent."""
+
     session_id: str
     goal: str
     context: str | None = None
@@ -3455,25 +3824,25 @@ class DelegateRequest(_BaseModel):
 @app.post("/api/delegate")
 async def delegate_task(req: DelegateRequest):
     """Spawn a subagent to work on a subtask.
-    
+
     This implements the delegate_task tool's backend endpoint.
     The subagent runs in an isolated context and its final summary
     is returned when complete.
     """
     if session_manager is None:
         raise _HTTPException(status_code=503, detail="Session manager not initialized")
-    
+
     # Create a new session for the subagent
     sub_session = await session_manager.create_session(
         model=runtime_sdk._llm_model if runtime_sdk else "unknown",
     )
-    
+
     # Build the subagent prompt
     subagent_prompt = f"""You are a subagent working on a specific subtask.
 
 GOAL: {req.goal}
 
-CONTEXT: {req.context or 'No additional context provided.'}
+CONTEXT: {req.context or "No additional context provided."}
 
 WORKFLOW:
 1. Analyze the goal and plan your approach
@@ -3487,19 +3856,20 @@ IMPORTANT:
 - Do not deviate from the task
 - Return a clear summary of your work when complete
 """
-    
+
     # Submit the prompt to the subagent session
     await runtime_sdk.submit_prompt(
         session=sub_session,
         prompt=subagent_prompt,
         system_prompt="You are a specialized subagent. Complete your assigned task efficiently.",
     )
-    
+
     return {
         "subagent_id": sub_session.id,
         "status": "started",
         "goal": req.goal,
     }
+
 
 @app.get("/api/sessions/{session_id}/events")
 async def get_session_events(
@@ -3595,12 +3965,10 @@ async def search_sessions(query: str = "", limit: int = 100):
     try:
         sessions = await session_manager.search_sessions(query)
         from tektos.store.event_store import search_events as _search_events
+
         events = await _search_events(query, limit=limit)
         return {
-            "sessions": [
-                {"id": s.id, "title": s.title, "tag": s.tag}
-                for s in sessions
-            ],
+            "sessions": [{"id": s.id, "title": s.title, "tag": s.tag} for s in sessions],
             "events": events,
         }
     except Exception as exc:
@@ -3611,8 +3979,10 @@ async def search_sessions(query: str = "", limit: int = 100):
 # Vision API
 # ---------------------------------------------------------------------------
 
+
 class VisionAnalyzeRequest(_BaseModel):
     """Request body for vision analysis."""
+
     session_id: str
     image_base64: str
     prompt: str = "Describe what you see in this image in detail."
@@ -3622,6 +3992,7 @@ class VisionAnalyzeRequest(_BaseModel):
 
 class VisionAnalyzeUrlRequest(_BaseModel):
     """Request body for vision analysis from URL."""
+
     session_id: str
     image_url: str
     prompt: str = "Describe what you see in this image in detail."
@@ -3645,12 +4016,12 @@ async def vision_analyze(req: VisionAnalyzeRequest):
         # Write base64 to temp file
         import base64 as _base64
         import tempfile
+
         tmp_path = None
         try:
-            tmp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            tmp_file.write(_base64.b64decode(req.image_base64))
-            tmp_file.close()
-            tmp_path = tmp_file.name
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                tmp_file.write(_base64.b64decode(req.image_base64))
+                tmp_path = tmp_file.name
 
             # Analyze
             result = await vision_client.analyze(tmp_path, req.prompt, req.system_prompt)
@@ -3670,10 +4041,9 @@ async def vision_analyze(req: VisionAnalyzeRequest):
         finally:
             if tmp_path:
                 import os
-                try:
+
+                with suppress(OSError):
                     os.unlink(tmp_path)
-                except OSError:
-                    pass
     except _HTTPException:
         raise
     except Exception as exc:
@@ -3746,6 +4116,7 @@ async def vision_status():
 # Missing API endpoints — added to support frontend panels
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/plugins")
 async def plugins_list():
     """List loaded plugins."""
@@ -3793,6 +4164,7 @@ async def evaluation_status():
     """Evaluation harness status."""
     try:
         from tektos.runtime.evaluation_framework import get_evaluation_harness
+
         harness = get_evaluation_harness()
         status = harness.get_status()
         return {
@@ -3909,6 +4281,7 @@ async def nervous_system_status():
     """Nervous system (event bus + state machine) status."""
     from tektos.event_bus import get_event_bus
     from tektos.state_machine import get_state_machine
+
     eb = get_event_bus()
     sm = get_state_machine()
     return {
@@ -3924,6 +4297,7 @@ async def nervous_system_status():
 # Schema introspection endpoint
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/schema")
 async def get_schema_info():
     """Expose current schema version, history, and self-model for agent introspection."""
@@ -3932,11 +4306,11 @@ async def get_schema_info():
     schema = schema_engine.get_schema()
     history = schema_engine.get_evolution_history()
     snapshot = schema_engine.introspect()
-    
+
     # Get self-improvement stats
     experiences = self_improvement.get_experience()
     metrics = self_improvement.get_learning_metrics()
-    
+
     return {
         "version": schema_engine.get_current_version(),
         "schema": schema,
@@ -3956,8 +4330,10 @@ async def get_schema_info():
 # LAST_KNOWN_STATE.md endpoints
 # ---------------------------------------------------------------------------
 
+
 class StateSaveRequest(_BaseModel):
     """Request body for saving session state."""
+
     session_id: str
     objective: str = ""
     progress: str = ""
@@ -3976,16 +4352,16 @@ class StateSaveRequest(_BaseModel):
 @app.get("/api/state/{session_id}")
 async def get_session_state(session_id: str):
     """Get LAST_KNOWN_STATE.md for a session.
-    
+
     Returns the structured state as markdown, plus the parsed SessionState object.
     This is the anchor document that any resumed session will load first.
     """
     if session_id not in state_managers:
         raise _HTTPException(status_code=404, detail=f"No state manager for session {session_id}")
-    
+
     state_mgr = state_managers[session_id]
     state = state_mgr.load_state()
-    
+
     return {
         "session_id": session_id,
         "state": state.to_dict(),
@@ -3996,7 +4372,7 @@ async def get_session_state(session_id: str):
 @app.post("/api/state/{session_id}/save")
 async def save_session_state(session_id: str, req: StateSaveRequest):
     """Save/update session state to LAST_KNOWN_STATE.md.
-    
+
     Called after each major step to preserve progress.
     Any resumed session will load this to know exactly where to continue.
     """
@@ -4005,7 +4381,7 @@ async def save_session_state(session_id: str, req: StateSaveRequest):
             session_id=session_id,
             project="Tektos-Ultima-v1",
         )
-    
+
     state_mgr = state_managers[session_id]
     state = SessionState(
         session_id=session_id,
@@ -4024,39 +4400,47 @@ async def save_session_state(session_id: str, req: StateSaveRequest):
         notes=req.notes,
         referenced_files=req.referenced_files,
     )
-    
+
     state_mgr.save_state(state)
-    
+
     # Emit state event to connected clients
-    await _emit_schema_event(session_id, "session.state.saved", {
-        "objective": req.objective,
-        "progress": req.progress,
-        "completion_pct": req.completion_pct,
-    })
-    
+    await _emit_schema_event(
+        session_id,
+        "session.state.saved",
+        {
+            "objective": req.objective,
+            "progress": req.progress,
+            "completion_pct": req.completion_pct,
+        },
+    )
+
     return {"ok": True, "version": state.version}
 
 
 @app.post("/api/state/{session_id}/snapshot")
 async def snapshot_session_state(session_id: str):
     """Save a full state snapshot with version bump.
-    
+
     Called at session boundaries (complete, archive, interrupt).
     This creates a durable checkpoint that can be resumed later.
     """
     if session_id not in state_managers:
         raise _HTTPException(status_code=404, detail=f"No state manager for session {session_id}")
-    
+
     state_mgr = state_managers[session_id]
     state = state_mgr.load_state()
     state_mgr.save_full_snapshot(state)
-    
+
     # Emit state event
-    await _emit_schema_event(session_id, "session.state.snapshot", {
-        "version": state.version,
-        "timestamp": state.timestamp,
-    })
-    
+    await _emit_schema_event(
+        session_id,
+        "session.state.snapshot",
+        {
+            "version": state.version,
+            "timestamp": state.timestamp,
+        },
+    )
+
     return {"ok": True, "version": state.version}
 
 
@@ -4064,10 +4448,11 @@ async def snapshot_session_state(session_id: str):
 # Telemetry API
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/telemetry")
 async def get_telemetry():
     """Real GPU/CPU/memory/disk telemetry from live hardware sensors.
-    
+
     Primary path: NVML (pynvml) for GPU metrics.
     Fallback: nvidia-smi CLI for GPU, /proc for CPU/memory.
     """
@@ -4075,7 +4460,7 @@ async def get_telemetry():
 
     def _get_gpu_via_nvidia_smi() -> dict:
         """Fallback GPU metrics via nvidia-smi CLI (always available on NVIDIA systems).
-        
+
         Queries only valid fields for RTX 5090 / driver 570+:
         temperature.gpu, utilization.gpu, memory.used, memory.total,
         power.draw, power.limit, fan.speed
@@ -4083,20 +4468,28 @@ async def get_telemetry():
         """
         result = subprocess.run(
             [
-                "nvidia-smi", "--query-gpu="
+                "nvidia-smi",
+                "--query-gpu="
                 "temperature.gpu,utilization.gpu,memory.used,memory.total,"
                 "power.draw,power.limit,fan.speed",
-                "--format=csv,noheader,nounits"
+                "--format=csv,noheader,nounits",
             ],
-            capture_output=True, text=True, timeout=10
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             return {
-                "temperature": 0, "utilization": 0,
-                "memory_used": 0, "memory_total": 0,
-                "power_draw": 0, "power_limit": 400,
-                "fan_speed": 0, "clocks_graphics": 0,
-                "clocks_memory": 0, "memory_utilization": 0,
+                "temperature": 0,
+                "utilization": 0,
+                "memory_used": 0,
+                "memory_total": 0,
+                "power_draw": 0,
+                "power_limit": 400,
+                "fan_speed": 0,
+                "clocks_graphics": 0,
+                "clocks_memory": 0,
+                "memory_utilization": 0,
             }
         vals = [v.strip() for v in result.stdout.strip().split(",")]
         base = {
@@ -4110,8 +4503,14 @@ async def get_telemetry():
         }
         # Try additional fields that may not exist on all GPUs/drivers
         clocks_result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=clocks.current.graphics,clocks.current.memory", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=10
+            [
+                "nvidia-smi",
+                "--query-gpu=clocks.current.graphics,clocks.current.memory",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if clocks_result.returncode == 0:
             cv = [v.strip() for v in clocks_result.stdout.strip().split(",")]
@@ -4123,7 +4522,9 @@ async def get_telemetry():
         # Memory utilization (separate field in newer nvidia-smi)
         memutil_result = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.memory", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=10
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if memutil_result.returncode == 0:
             base["memory_utilization"] = float(memutil_result.stdout.strip())
@@ -4133,10 +4534,9 @@ async def get_telemetry():
 
     def _get_system_metrics() -> dict:
         """CPU/memory/disk without psutil — uses /proc and subprocess."""
-        import os
         # CPU utilization from /proc/stat
         try:
-            with open("/proc/stat", "r") as f:
+            with open("/proc/stat") as f:
                 line = f.readline()
                 parts = line.split()
                 # user, nice, system, idle, iowait, irq, softirq, steal
@@ -4150,11 +4550,16 @@ async def get_telemetry():
         # Memory from /proc/meminfo
         try:
             meminfo = {}
-            with open("/proc/meminfo", "r") as f:
+            with open("/proc/meminfo") as f:
                 for line in f:
                     key, val = line.split(":")[0], line.split(":")[1].strip().split()[0]
                     meminfo[key] = int(val) * 1024  # kB → bytes
-            mem_used = meminfo.get("MemTotal", 0) - meminfo.get("MemFree", 0) - meminfo.get("Buffers", 0) - meminfo.get("Cached", 0)
+            mem_used = (
+                meminfo.get("MemTotal", 0)
+                - meminfo.get("MemFree", 0)
+                - meminfo.get("Buffers", 0)
+                - meminfo.get("Cached", 0)
+            )
             mem_total = meminfo.get("MemTotal", 1)
             mem_percent = (mem_used / mem_total) * 100 if mem_total > 0 else 0
         except Exception as e:
@@ -4164,6 +4569,7 @@ async def get_telemetry():
         # Disk from /proc/diskstats or shutil
         try:
             import shutil
+
             disk = shutil.disk_usage("/")
             disk_used = disk.used
             disk_total = disk.total
@@ -4184,6 +4590,7 @@ async def get_telemetry():
     # Primary: try NVML
     try:
         from tektos.agents.manager.telemetry import TelemetryCollector
+
         gpu_tel = TelemetryCollector.collect()
         data = TelemetryCollector.to_dict(gpu_tel)
         # Normalize to frontend-friendly keys
@@ -4207,6 +4614,7 @@ async def get_telemetry():
 # Hooks API
 # ---------------------------------------------------------------------------
 
+
 class _FireHookBody(_BaseModel):
     event_type: str
     session_id: str | None = None
@@ -4227,10 +4635,7 @@ async def list_hooks():
             return {"error": "Hook system not initialized"}
         hooks = hm.list_hooks()
         return {
-            "hooks": [
-                {"event_type": et, "handlers": handlers}
-                for et, handlers in hooks.items()
-            ]
+            "hooks": [{"event_type": et, "handlers": handlers} for et, handlers in hooks.items()]
         }
     except Exception as exc:
         log.warning("Hook listing failed: %s", exc)
@@ -4279,20 +4684,70 @@ async def fire_hook(body: _FireHookBody):
 # Config API
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/config")
 async def get_config():
     """Return runtime configuration as a list of key-value pairs."""
     import os
+
     return {
         "config": [
-            {"key": "llm_base_url", "value": runtime_sdk._llm_base_url, "type": "string", "description": "LLM server URL", "sensitive": False},
-            {"key": "llm_model", "value": runtime_sdk._llm_model, "type": "string", "description": "Active LLM model", "sensitive": False},
-            {"key": "protocol_version", "value": PROTOCOL_VERSION, "type": "string", "description": "Protocol version", "sensitive": False},
-            {"key": "active_sessions", "value": str(len(session_manager._sessions)), "type": "number", "description": "Active session count", "sensitive": False},
-            {"key": "gpu_power_limit", "value": os.getenv("GPU_POWER_LIMIT", "400"), "type": "number", "description": "GPU power limit in watts", "sensitive": False},
-            {"key": "log_level", "value": os.getenv("TEKTOS_LOG_LEVEL", "INFO"), "type": "string", "description": "Logging verbosity", "sensitive": False},
-            {"key": "vision_url", "value": os.getenv("TEKTOS_VISION_LLM_URL", "not set"), "type": "string", "description": "Vision LLM URL", "sensitive": False},
-            {"key": "telegram_bot_token", "value": "••••••••" if os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN") else "not set", "type": "string", "description": "Telegram bot token", "sensitive": True},
+            {
+                "key": "llm_base_url",
+                "value": runtime_sdk._llm_base_url,
+                "type": "string",
+                "description": "LLM server URL",
+                "sensitive": False,
+            },
+            {
+                "key": "llm_model",
+                "value": runtime_sdk._llm_model,
+                "type": "string",
+                "description": "Active LLM model",
+                "sensitive": False,
+            },
+            {
+                "key": "protocol_version",
+                "value": PROTOCOL_VERSION,
+                "type": "string",
+                "description": "Protocol version",
+                "sensitive": False,
+            },
+            {
+                "key": "active_sessions",
+                "value": str(len(session_manager._sessions)),
+                "type": "number",
+                "description": "Active session count",
+                "sensitive": False,
+            },
+            {
+                "key": "gpu_power_limit",
+                "value": os.getenv("GPU_POWER_LIMIT", "400"),
+                "type": "number",
+                "description": "GPU power limit in watts",
+                "sensitive": False,
+            },
+            {
+                "key": "log_level",
+                "value": os.getenv("TEKTOS_LOG_LEVEL", "INFO"),
+                "type": "string",
+                "description": "Logging verbosity",
+                "sensitive": False,
+            },
+            {
+                "key": "vision_url",
+                "value": os.getenv("TEKTOS_VISION_LLM_URL", "not set"),
+                "type": "string",
+                "description": "Vision LLM URL",
+                "sensitive": False,
+            },
+            {
+                "key": "telegram_bot_token",
+                "value": "••••••••" if os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN") else "not set",
+                "type": "string",
+                "description": "Telegram bot token",
+                "sensitive": True,
+            },
         ]
     }
 
@@ -4306,6 +4761,7 @@ class _UpdateConfigBody(_BaseModel):
 async def update_config(body: _UpdateConfigBody):
     """Update a runtime configuration value."""
     import os
+
     key = body.key
     value = body.value
 
@@ -4334,11 +4790,13 @@ async def update_config(body: _UpdateConfigBody):
 # Schedule/Scheduler API
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/schedule")
 async def list_scheduled_tasks():
     """List scheduled tasks from the backup scheduler."""
     try:
         from tektos.memory.backup_scheduler import BackupScheduler
+
         scheduler = BackupScheduler()
         backups = scheduler.list_backups()
         return [
@@ -4362,6 +4820,7 @@ async def list_scheduled_tasks():
 # ---------------------------------------------------------------------------
 # Routing API
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/routing/decide")
 async def route_task(task: str = "", category: str = "general"):
@@ -4393,10 +4852,12 @@ async def route_task(task: str = "", category: str = "general"):
 # Keys API
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/keys")
 async def list_api_keys():
     """List configured API keys (values masked)."""
     import os
+
     keys = []
     sensitive_vars = [
         "TEKTOS_LLM_API_KEY",
@@ -4407,18 +4868,21 @@ async def list_api_keys():
     ]
     for var in sensitive_vars:
         value = os.getenv(var)
-        keys.append({
-            "name": var.replace("TEKTOS_", "").replace("_", " ").title(),
-            "key": var,
-            "value": "••••••••" if value else "not configured",
-            "configured": bool(value),
-        })
+        keys.append(
+            {
+                "name": var.replace("TEKTOS_", "").replace("_", " ").title(),
+                "key": var,
+                "value": "••••••••" if value else "not configured",
+                "configured": bool(value),
+            }
+        )
     return {"keys": keys}
 
 
 # ---------------------------------------------------------------------------
 # External Backend Status Endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/neo4j/status")
 async def neo4j_status():
@@ -4456,7 +4920,9 @@ async def postgres_status():
             "database": "postgres",
             "host": _postgres_backend.config.host if hasattr(_postgres_backend, "config") else None,
             "port": _postgres_backend.config.port if hasattr(_postgres_backend, "config") else None,
-            "database_name": _postgres_backend.config.database if hasattr(_postgres_backend, "config") else None,
+            "database_name": _postgres_backend.config.database
+            if hasattr(_postgres_backend, "config")
+            else None,
             "connected": conn_ok,
             "error": None,
         }
@@ -4526,8 +4992,12 @@ async def hindsight_status():
         return {
             "status": "error",
             "service": "hindsight",
-            "base_url": _hindsight_client.config.base_url if hasattr(_hindsight_client, "config") else None,
-            "bank_id": _hindsight_client.config.bank_id if hasattr(_hindsight_client, "config") else None,
+            "base_url": _hindsight_client.config.base_url
+            if hasattr(_hindsight_client, "config")
+            else None,
+            "bank_id": _hindsight_client.config.bank_id
+            if hasattr(_hindsight_client, "config")
+            else None,
             "healthy": False,
             "error": str(e),
         }
@@ -4593,17 +5063,22 @@ async def hindsight_experiences(limit: int = 10):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _emit_schema_event(session_id: str, event_type: str, payload: dict[str, Any]) -> None:
     """Emit an event to all connected WebSocket clients."""
     try:
         for ws in list(ws_manager._sessions.get(session_id, set())):
-            await ws.send_text(_json.dumps({
-                "type": event_type,
-                "session_id": session_id,
-                "payload": payload,
-                "protocol_version": PROTOCOL_VERSION,
-                "timestamp": _datetime.now(_timezone.utc).isoformat(),
-            }))
+            await ws.send_text(
+                _json.dumps(
+                    {
+                        "type": event_type,
+                        "session_id": session_id,
+                        "payload": payload,
+                        "protocol_version": PROTOCOL_VERSION,
+                        "timestamp": _datetime.now(_timezone.utc).isoformat(),
+                    }
+                )
+            )
     except Exception as exc:
         log.error(f"Error emitting {event_type}: {exc}")
 
@@ -4647,6 +5122,7 @@ async def _handle_prompt(
 # WebSocket handler
 # ---------------------------------------------------------------------------
 
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: _WebSocket, session_id: str):
     """WebSocket endpoint for live session streaming.
@@ -4658,21 +5134,30 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
     # Starlette expects headers as a list of (name, value) tuples
     extra_headers = []
     origin = websocket.headers.get("origin", "")
-    allowed_origins = ["http://localhost:3000", "http://localhost:3003", "http://localhost:3006", "http://localhost:5555"]
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://localhost:3003",
+        "http://localhost:3006",
+        "http://localhost:5555",
+    ]
     if origin in allowed_origins:
-        extra_headers.extend([
-            (b"access-control-allow-origin", origin.encode()),
-            (b"access-control-allow-methods", b"GET, POST"),
-            (b"access-control-allow-headers", b"*"),
-            (b"access-control-allow-credentials", b"true"),
-        ])
+        extra_headers.extend(
+            [
+                (b"access-control-allow-origin", origin.encode()),
+                (b"access-control-allow-methods", b"GET, POST"),
+                (b"access-control-allow-headers", b"*"),
+                (b"access-control-allow-credentials", b"true"),
+            ]
+        )
     await websocket.accept(headers=extra_headers if extra_headers else None)
     log.info(f"WS handler: accepted, now checking session {session_id[:8]}")
 
     # Check if session exists
     session = await session_manager.get_session(session_id)
     if not session:
-        log.warning(f"WS handler: session {session_id[:8]} NOT FOUND — available sessions: {[s.id[:8] for s in session_manager._sessions.values()]}")
+        log.warning(
+            f"WS handler: session {session_id[:8]} NOT FOUND — available sessions: {[s.id[:8] for s in session_manager._sessions.values()]}"
+        )
         await websocket.close(code=4004, reason="Session not found")
         return
     log.info(f"WS handler: session found, status={session.status}")
@@ -4707,11 +5192,15 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                 data = _json.loads(text)
             except _json.JSONDecodeError:
                 log.error(f"Invalid JSON from WS: {text[:200]}")
-                await websocket.send_text(_json.dumps({
-                    "type": "error",
-                    "detail": "invalid JSON",
-                    "protocol_version": PROTOCOL_VERSION,
-                }))
+                await websocket.send_text(
+                    _json.dumps(
+                        {
+                            "type": "error",
+                            "detail": "invalid JSON",
+                            "protocol_version": PROTOCOL_VERSION,
+                        }
+                    )
+                )
                 continue
 
             msg_type = data.get("type", "")
@@ -4724,11 +5213,15 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                 log.info(f"[WS] Prompt received for session {session_id[:8]}: {prompt_text[:100]}")
 
                 if not prompt_text:
-                    await websocket.send_text(_json.dumps({
-                        "type": "error",
-                        "detail": "empty prompt",
-                        "protocol_version": PROTOCOL_VERSION,
-                    }))
+                    await websocket.send_text(
+                        _json.dumps(
+                            {
+                                "type": "error",
+                                "detail": "empty prompt",
+                                "protocol_version": PROTOCOL_VERSION,
+                            }
+                        )
+                    )
                     continue
 
                 # Run prompt in background task
@@ -4745,43 +5238,55 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                 try:
                     # Approve is handled in the runtime SDK's approval callback
                     # For now, emit a system message
-                    await websocket.send_text(system_message(
-                        session_id, f"Tool {tool_id} approved", "info"
-                    ).to_json())
+                    await websocket.send_text(
+                        system_message(session_id, f"Tool {tool_id} approved", "info").to_json()
+                    )
                     # Fire session.approve hook
                     try:
                         hm = app.state.hook_manager
                         if hm:
-                            await hm.fire("session.approve", session_id=session_id, tool_name=tool_id)
+                            await hm.fire(
+                                "session.approve", session_id=session_id, tool_name=tool_id
+                            )
                     except Exception:
                         log.exception("Hook session.approve failed")
                 except KeyError:
-                    await websocket.send_text(_json.dumps({
-                        "type": "error",
-                        "detail": f"no pending tool {tool_id}",
-                        "protocol_version": PROTOCOL_VERSION,
-                    }))
+                    await websocket.send_text(
+                        _json.dumps(
+                            {
+                                "type": "error",
+                                "detail": f"no pending tool {tool_id}",
+                                "protocol_version": PROTOCOL_VERSION,
+                            }
+                        )
+                    )
 
             elif msg_type == "reject":
                 # Reject a tool call
                 tool_id = data.get("tool_id")
                 try:
-                    await websocket.send_text(system_message(
-                        session_id, f"Tool {tool_id} rejected", "warning"
-                    ).to_json())
+                    await websocket.send_text(
+                        system_message(session_id, f"Tool {tool_id} rejected", "warning").to_json()
+                    )
                     # Fire session.reject hook
                     try:
                         hm = app.state.hook_manager
                         if hm:
-                            await hm.fire("session.reject", session_id=session_id, tool_name=tool_id)
+                            await hm.fire(
+                                "session.reject", session_id=session_id, tool_name=tool_id
+                            )
                     except Exception:
                         log.exception("Hook session.reject failed")
                 except KeyError:
-                    await websocket.send_text(_json.dumps({
-                        "type": "error",
-                        "detail": f"no pending tool {tool_id}",
-                        "protocol_version": PROTOCOL_VERSION,
-                    }))
+                    await websocket.send_text(
+                        _json.dumps(
+                            {
+                                "type": "error",
+                                "detail": f"no pending tool {tool_id}",
+                                "protocol_version": PROTOCOL_VERSION,
+                            }
+                        )
+                    )
 
             elif msg_type == "interrupt":
                 await session_manager.interrupt_session(session_id)
@@ -4789,23 +5294,31 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
 
             elif msg_type == "archive":
                 await session_manager.archive_session(session_id)
-                await websocket.send_text(system_message(
-                    session_id, "Session archived", "info"
-                ).to_json())
+                await websocket.send_text(
+                    system_message(session_id, "Session archived", "info").to_json()
+                )
 
             elif msg_type == "ping":
-                await websocket.send_text(_json.dumps({
-                    "type": "pong",
-                    "timestamp": _time.time(),
-                    "protocol_version": PROTOCOL_VERSION,
-                }))
+                await websocket.send_text(
+                    _json.dumps(
+                        {
+                            "type": "pong",
+                            "timestamp": _time.time(),
+                            "protocol_version": PROTOCOL_VERSION,
+                        }
+                    )
+                )
 
             else:
-                await websocket.send_text(_json.dumps({
-                    "type": "error",
-                    "detail": f"unknown message type: {msg_type}",
-                    "protocol_version": PROTOCOL_VERSION,
-                }))
+                await websocket.send_text(
+                    _json.dumps(
+                        {
+                            "type": "error",
+                            "detail": f"unknown message type: {msg_type}",
+                            "protocol_version": PROTOCOL_VERSION,
+                        }
+                    )
+                )
 
     except _WebSocketDisconnect:
         log.debug(f"WS disconnected from {session_id[:8]}")
@@ -4820,9 +5333,11 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
 # Main entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
     """Run the server."""
     import uvicorn
+
     uvicorn.run(
         "tektos.main:app",
         host="127.0.0.1",

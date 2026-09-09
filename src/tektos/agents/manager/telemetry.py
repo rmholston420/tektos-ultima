@@ -15,15 +15,17 @@ Operational thresholds:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +38,12 @@ def _get_pynvml():
     if _pynvml is None:
         try:
             import pynvml as _mod
+
             _pynvml = _mod
         except ImportError:
             _pynvml = None
     return _pynvml
+
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
@@ -59,18 +63,21 @@ DEFAULT_POWER_LIMIT: int = 400  # throttled from 600W
 
 # ── Enums ───────────────────────────────────────────────────────────────────
 
+
 class ThermalZone(IntEnum):
     """Thermal state of the GPU."""
-    GREEN = 0       # idle
-    YELLOW = 1      # yellow zone
-    WARNING = 2     # warning zone
-    CAP = 3         # cap zone (approaching 80°C)
-    RED = 4         # red zone (approaching 88°C)
-    CRITICAL = 5    # above 88°C
+
+    GREEN = 0  # idle
+    YELLOW = 1  # yellow zone
+    WARNING = 2  # warning zone
+    CAP = 3  # cap zone (approaching 80°C)
+    RED = 4  # red zone (approaching 88°C)
+    CRITICAL = 5  # above 88°C
 
 
 class Action(IntEnum):
     """Response actions the Manager can take."""
+
     NONE = 0
     INCREASE_FAN = 1
     THROTTLE_WORKLOAD = 2
@@ -81,19 +88,21 @@ class Action(IntEnum):
 
 # ── Data Models ─────────────────────────────────────────────────────────────
 
+
 @dataclass
 class GPUTelemetry:
     """Snapshot of GPU hardware state."""
+
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     temperature_gpu: float = 0.0
     power_draw: float = 0.0  # watts
     power_limit: float = 0.0  # watts
     utilization: float = 0.0  # percent
-    fan_speed: int = 0        # percent
+    fan_speed: int = 0  # percent
     clocks_graphics: int = 0  # MHz
-    clocks_memory: int = 0    # MHz
-    memory_used: int = 0      # MB
-    memory_total: int = 0     # MB
+    clocks_memory: int = 0  # MHz
+    memory_used: int = 0  # MB
+    memory_total: int = 0  # MB
     memory_temperature: float = 0.0
     thermal_zone: ThermalZone = ThermalZone.GREEN
     action: Action = Action.NONE
@@ -104,6 +113,7 @@ class GPUTelemetry:
 @dataclass
 class ThermalReport:
     """Guardrail evaluation result."""
+
     zone: ThermalZone
     action: Action
     message: str
@@ -111,6 +121,7 @@ class ThermalReport:
 
 
 # ── NVML Wrapper ────────────────────────────────────────────────────────────
+
 
 class NVMLDriver:
     """Thin wrapper around pynvml for hardware telemetry access."""
@@ -144,9 +155,7 @@ class NVMLDriver:
         """Get GPU core temperature."""
         handle = cls.get_handle()
         nvml = _get_pynvml()
-        return float(nvml.nvmlDeviceGetTemperature(
-            handle, nvml.NVML_TEMPERATURE_GPU
-        ))
+        return float(nvml.nvmlDeviceGetTemperature(handle, nvml.NVML_TEMPERATURE_GPU))
 
     @classmethod
     def get_power_draw(cls) -> float:
@@ -176,19 +185,15 @@ class NVMLDriver:
         handle = cls.get_handle()
         nvml = _get_pynvml()
         info = nvml.nvmlDeviceGetMemoryInfo(handle)
-        return (info.used // (1024 ** 2), info.total // (1024 ** 2))
+        return (info.used // (1024**2), info.total // (1024**2))
 
     @classmethod
     def get_clocks(cls) -> tuple[int, int]:
         """Get (graphics_mhz, memory_mhz) clocks."""
         handle = cls.get_handle()
         nvml = _get_pynvml()
-        graphics = nvml.nvmlDeviceGetClockInfo(
-            handle, nvml.NVML_CLOCK_GRAPHICS
-        )
-        memory = nvml.nvmlDeviceGetClockInfo(
-            handle, nvml.NVML_CLOCK_MEM
-        )
+        graphics = nvml.nvmlDeviceGetClockInfo(handle, nvml.NVML_CLOCK_GRAPHICS)
+        memory = nvml.nvmlDeviceGetClockInfo(handle, nvml.NVML_CLOCK_MEM)
         return (graphics, memory)
 
     @classmethod
@@ -216,9 +221,7 @@ class NVMLDriver:
         nvml = _get_pynvml()
         reasons = {}
         try:
-            events = nvml.nvmlDeviceGetClockInfo(
-                handle, nvml.NVML_CLOCK_INFO_THROUGHPUT
-            )
+            nvml.nvmlDeviceGetClockInfo(handle, nvml.NVML_CLOCK_INFO_THROUGHPUT)
             reasons = {
                 "sw_power_cap": False,
                 "hw_thermal_slowdown": False,
@@ -251,6 +254,7 @@ class NVMLDriver:
 
 
 # ── Fan Controller Client ──────────────────────────────────────────────────
+
 
 class FanControllerClient:
     """Communicates with the fan controller daemon."""
@@ -287,13 +291,15 @@ class FanControllerClient:
     @staticmethod
     def set_curve(points: list[tuple[int, int]]) -> bool:
         """Set a 5-point fan curve: [(temp, speed), ...].
-        
+
         The daemon interpolates between points for dynamic control.
         """
-        data = json.dumps({
-            "type": "fan_curve",
-            "points": points,
-        })
+        data = json.dumps(
+            {
+                "type": "fan_curve",
+                "points": points,
+            }
+        )
         try:
             proc = subprocess.run(
                 f"echo '{data}' | socat - UNIX-CONNECT:/tmp/tektos/fan_controller.sock",
@@ -310,17 +316,13 @@ class FanControllerClient:
     @staticmethod
     def stop() -> bool:
         """Stop fan controller — restore BIOS control."""
-        cmd = (
-            f"sudo nvidia-settings "
-            f"--assign [gpu:{GPU_INDEX}]/GPUFanControlState=0"
-        )
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=30
-        )
+        cmd = f"sudo nvidia-settings --assign [gpu:{GPU_INDEX}]/GPUFanControlState=0"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
         return result.returncode == 0
 
 
 # ── Guardrail Evaluator ────────────────────────────────────────────────────
+
 
 class ThermalGuardrail:
     """Evaluates GPU telemetry against thermal thresholds and returns actions."""
@@ -398,6 +400,7 @@ class ThermalGuardrail:
 
 # ── Telemetry Collector ────────────────────────────────────────────────────
 
+
 class TelemetryCollector:
     """Collects GPU hardware telemetry from NVML."""
 
@@ -449,6 +452,7 @@ class TelemetryCollector:
 
 # ── Action Handler ──────────────────────────────────────────────────────────
 
+
 class ActionHandler:
     """Executes guardrail response actions."""
 
@@ -480,9 +484,7 @@ class ActionHandler:
         else:
             speed = 80
         FanControllerClient.set_speed(speed)
-        self._fan_history.append(
-            (datetime.now(timezone.utc), speed)
-        )
+        self._fan_history.append((datetime.now(timezone.utc), speed))
         logger.info(f"Fan increased to {speed}% (GPU: {temp:.1f}°C)")
 
     def _throttle_workload(self, report: ThermalReport) -> None:
@@ -491,9 +493,7 @@ class ActionHandler:
 
     def _halt_workload(self, report: ThermalReport) -> None:
         """Signal immediate workload halt."""
-        logger.critical(
-            f"Workload HALT: GPU at {report.telemetry.temperature_gpu:.1f}°C"
-        )
+        logger.critical(f"Workload HALT: GPU at {report.telemetry.temperature_gpu:.1f}°C")
 
     def _alert_user(self, report: ThermalReport) -> None:
         """Send alert notification to user."""
@@ -508,6 +508,7 @@ class ActionHandler:
 
 
 # ── Telemetry Monitor (async) ──────────────────────────────────────────────
+
 
 class TelemetryMonitor:
     """Async background monitor for GPU telemetry."""
@@ -533,10 +534,8 @@ class TelemetryMonitor:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("GPU Telemetry Monitor stopped")
 
     async def _loop(self) -> None:

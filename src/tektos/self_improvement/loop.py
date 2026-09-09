@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class LoopIteration:
     """A single iteration of the self-improvement loop."""
+
     iteration_id: int
     timestamp: float = field(default_factory=time.time)
     action: str = ""
@@ -30,10 +31,12 @@ class SelfImprovementLoop:
         self._iterations: list[LoopIteration] = []
         self._iteration_count = 0
 
-    def run_iteration(self, action: str, result: str, success: bool, lessons: list[str] | None = None) -> LoopIteration:
+    def run_iteration(
+        self, action: str, result: str, success: bool, lessons: list[str] | None = None
+    ) -> LoopIteration:
         """Run a single iteration of the self-improvement loop."""
         self._iteration_count += 1
-        
+
         iteration = LoopIteration(
             iteration_id=self._iteration_count,
             action=action,
@@ -41,11 +44,13 @@ class SelfImprovementLoop:
             success=success,
             lessons=lessons or [],
         )
-        
+
         self._iterations.append(iteration)
-        
-        log.info(f"SelfImprovementLoop: Iteration {self._iteration_count} - {action}: {'SUCCESS' if success else 'FAILED'}")
-        
+
+        log.info(
+            f"SelfImprovementLoop: Iteration {self._iteration_count} - {action}: {'SUCCESS' if success else 'FAILED'}"
+        )
+
         return iteration
 
     def get_iterations(self, limit: int = 10) -> list[LoopIteration]:

@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -21,6 +20,7 @@ log = logging.getLogger(__name__)
 
 class SymbolKind(Enum):
     """Types of code symbols."""
+
     MODULE = auto()
     FUNCTION = auto()
     CLASS = auto()
@@ -33,17 +33,19 @@ class SymbolKind(Enum):
 
 class DependencyKind(Enum):
     """Types of relationships between symbols."""
-    IMPORT = auto()      # file A imports file B
-    CALL = auto()        # function A calls function B
-    INHERIT = auto()     # class A inherits from class B
-    TYPE_REF = auto()    # type annotation references another type
-    ASSIGN = auto()      # assignment creates a dependency
-    COMPOSE = auto()     # composition/aggregation relationship
+
+    IMPORT = auto()  # file A imports file B
+    CALL = auto()  # function A calls function B
+    INHERIT = auto()  # class A inherits from class B
+    TYPE_REF = auto()  # type annotation references another type
+    ASSIGN = auto()  # assignment creates a dependency
+    COMPOSE = auto()  # composition/aggregation relationship
 
 
 @dataclass
 class Symbol:
     """A single symbol (function, class, method, etc.)."""
+
     name: str
     kind: str  # SymbolKind as string for JSON serialization
     file: str
@@ -58,14 +60,16 @@ class Symbol:
 @dataclass
 class Dependency:
     """A dependency between two symbols."""
+
     source: str  # e.g., "src/tektos/runtime/session.py::LiveSession.create_session"
     target: str  # e.g., "src/tektos/store/event_store.py::EventStore.record_event"
-    kind: str    # DependencyKind as string
+    kind: str  # DependencyKind as string
 
 
 @dataclass
 class FileNode:
     """A file in the repository."""
+
     path: str
     language: str
     lines: int
@@ -87,9 +91,9 @@ class RepographParser:
         """Parse a single file and return symbols."""
         symbols = []
         try:
-            if filepath.suffix == '.py':
+            if filepath.suffix == ".py":
                 symbols = self._parse_python(filepath)
-            elif filepath.suffix in ('.ts', '.tsx', '.js', '.jsx'):
+            elif filepath.suffix in (".ts", ".tsx", ".js", ".jsx"):
                 symbols = self._parse_typescript(filepath)
             # Add more language parsers as needed
         except Exception as e:
@@ -109,65 +113,76 @@ class RepographParser:
 
             # Process top-level definitions
             for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
-                    symbols.append(Symbol(
-                        name=node.name,
-                        kind=SymbolKind.FUNCTION.name,
-                        file=str(filepath.relative_to(self.repo_root)),
-                        line=node.lineno,
-                        column=node.col_offset,
-                        visibility="public" if not node.name.startswith('_') else "private",
-                        signature=self._get_function_signature(node),
-                        docstring=ast.get_docstring(node) or "",
-                        module=self._get_module_name(filepath)
-                    ))
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    symbols.append(
+                        Symbol(
+                            name=node.name,
+                            kind=SymbolKind.FUNCTION.name,
+                            file=str(filepath.relative_to(self.repo_root)),
+                            line=node.lineno,
+                            column=node.col_offset,
+                            visibility="public" if not node.name.startswith("_") else "private",
+                            signature=self._get_function_signature(node),
+                            docstring=ast.get_docstring(node) or "",
+                            module=self._get_module_name(filepath),
+                        )
+                    )
                 elif isinstance(node, ast.ClassDef):
-                    symbols.append(Symbol(
-                        name=node.name,
-                        kind=SymbolKind.CLASS.name,
-                        file=str(filepath.relative_to(self.repo_root)),
-                        line=node.lineno,
-                        column=node.col_offset,
-                        visibility="public" if not node.name.startswith('_') else "private",
-                        signature=f"class {node.name}",
-                        docstring=ast.get_docstring(node) or "",
-                        module=self._get_module_name(filepath)
-                    ))
+                    symbols.append(
+                        Symbol(
+                            name=node.name,
+                            kind=SymbolKind.CLASS.name,
+                            file=str(filepath.relative_to(self.repo_root)),
+                            line=node.lineno,
+                            column=node.col_offset,
+                            visibility="public" if not node.name.startswith("_") else "private",
+                            signature=f"class {node.name}",
+                            docstring=ast.get_docstring(node) or "",
+                            module=self._get_module_name(filepath),
+                        )
+                    )
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
-                        symbols.append(Symbol(
-                            name=alias.name,
+                        symbols.append(
+                            Symbol(
+                                name=alias.name,
+                                kind=SymbolKind.IMPORT.name,
+                                file=str(filepath.relative_to(self.repo_root)),
+                                line=node.lineno,
+                                column=node.col_offset,
+                                visibility="public",
+                                signature=f"import {alias.name}",
+                                module=self._get_module_name(filepath),
+                            )
+                        )
+                elif isinstance(node, ast.ImportFrom):
+                    symbols.append(
+                        Symbol(
+                            name=f"from {node.module}",
                             kind=SymbolKind.IMPORT.name,
                             file=str(filepath.relative_to(self.repo_root)),
                             line=node.lineno,
                             column=node.col_offset,
                             visibility="public",
-                            signature=f"import {alias.name}",
-                            module=self._get_module_name(filepath)
-                        ))
-                elif isinstance(node, ast.ImportFrom):
-                    symbols.append(Symbol(
-                        name=f"from {node.module}",
-                        kind=SymbolKind.IMPORT.name,
-                        file=str(filepath.relative_to(self.repo_root)),
-                        line=node.lineno,
-                        column=node.col_offset,
-                        visibility="public",
-                        signature=f"from {node.module} import ...",
-                        module=self._get_module_name(filepath)
-                    ))
+                            signature=f"from {node.module} import ...",
+                            module=self._get_module_name(filepath),
+                        )
+                    )
 
             # Add module symbol
-            symbols.insert(0, Symbol(
-                name=self._get_module_name(filepath),
-                kind=SymbolKind.MODULE.name,
-                file=str(filepath.relative_to(self.repo_root)),
-                line=1,
-                column=0,
-                visibility="public",
-                signature=f"module {filepath.name}",
-                module=self._get_module_name(filepath)
-            ))
+            symbols.insert(
+                0,
+                Symbol(
+                    name=self._get_module_name(filepath),
+                    kind=SymbolKind.MODULE.name,
+                    file=str(filepath.relative_to(self.repo_root)),
+                    line=1,
+                    column=0,
+                    visibility="public",
+                    signature=f"module {filepath.name}",
+                    module=self._get_module_name(filepath),
+                ),
+            )
 
         except Exception as e:
             log.error(f"Error parsing Python file {filepath}: {e}")
@@ -179,36 +194,47 @@ class RepographParser:
         symbols = []
         try:
             source = filepath.read_text()
-            lines = source.split('\n')
+            lines = source.split("\n")
 
             for i, line in enumerate(lines, 1):
                 # Functions
-                if 'function ' in line or 'async function ' in line:
-                    name = self._extract_name(line, 'function')
+                if "function " in line or "async function " in line:
+                    name = self._extract_name(line, "function")
                     if name:
-                        symbols.append(Symbol(
+                        symbols.append(
+                            Symbol(
+                                name=name,
+                                kind=SymbolKind.FUNCTION.name,
+                                file=str(filepath.relative_to(self.repo_root)),
+                                line=i,
+                                column=line.find(name),
+                                visibility="public",
+                                signature=line.strip(),
+                                module=self._get_module_name(filepath),
+                            )
+                        )
+                # Classes
+                elif line.strip().startswith("class "):
+                    name = (
+                        line.strip()
+                        .split("class ")[1]
+                        .split("(")[0]
+                        .split(":")[0]
+                        .split("{")[0]
+                        .strip()
+                    )
+                    symbols.append(
+                        Symbol(
                             name=name,
-                            kind=SymbolKind.FUNCTION.name,
+                            kind=SymbolKind.CLASS.name,
                             file=str(filepath.relative_to(self.repo_root)),
                             line=i,
-                            column=line.find(name),
+                            column=line.find("class"),
                             visibility="public",
                             signature=line.strip(),
-                            module=self._get_module_name(filepath)
-                        ))
-                # Classes
-                elif line.strip().startswith('class '):
-                    name = line.strip().split('class ')[1].split('(')[0].split(':')[0].split('{')[0].strip()
-                    symbols.append(Symbol(
-                        name=name,
-                        kind=SymbolKind.CLASS.name,
-                        file=str(filepath.relative_to(self.repo_root)),
-                        line=i,
-                        column=line.find('class'),
-                        visibility="public",
-                        signature=line.strip(),
-                        module=self._get_module_name(filepath)
-                    ))
+                            module=self._get_module_name(filepath),
+                        )
+                    )
 
         except Exception as e:
             log.error(f"Error parsing TypeScript file {filepath}: {e}")
@@ -218,6 +244,7 @@ class RepographParser:
     def _get_function_signature(self, node) -> str:
         """Extract function signature from AST node."""
         import ast
+
         args = []
         for arg in node.args.args:
             arg_str = arg.arg
@@ -230,13 +257,13 @@ class RepographParser:
         """Extract name after a keyword (function, class, etc.)."""
         parts = line.split(keyword, 1)
         if len(parts) > 1:
-            return parts[1].strip().split('(')[0].split(':')[0].strip()
+            return parts[1].strip().split("(")[0].split(":")[0].strip()
         return ""
 
     def _get_module_name(self, filepath: Path) -> str:
         """Convert file path to dotted module name."""
-        parts = filepath.relative_to(self.repo_root).with_suffix('').parts
-        return '.'.join(parts)
+        parts = filepath.relative_to(self.repo_root).with_suffix("").parts
+        return ".".join(parts)
 
 
 class RepographGraph:
@@ -262,11 +289,7 @@ class RepographGraph:
 
     def add_dependency(self, source: str, target: str, kind: DependencyKind):
         """Add a dependency edge."""
-        self.edges.append(Dependency(
-            source=source,
-            target=target,
-            kind=kind.name
-        ))
+        self.edges.append(Dependency(source=source, target=target, kind=kind.name))
 
     def find_dependencies(self, filepath: str) -> list[str]:
         """Find files that depend on the given file."""
@@ -441,7 +464,7 @@ class RepographQuery:
         for path, node in sorted_nodes[:20]:  # Top 20
             lines.append(f"- {node.importance:.4f} | {path}")
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
 
 class RepographSync:
@@ -455,14 +478,14 @@ class RepographSync:
         """Get list of changed files from git diff."""
         try:
             result = subprocess.run(
-                ['git', 'diff', '--name-only', 'HEAD'],
+                ["git", "diff", "--name-only", "HEAD"],
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
             )
             if result.returncode == 0:
-                return [f.strip() for f in result.stdout.split('\n') if f.strip()]
+                return [f.strip() for f in result.stdout.split("\n") if f.strip()]
         except Exception as e:
             log.warning(f"Failed to get git diff: {e}")
         return []
@@ -477,31 +500,31 @@ class RepographSync:
                     filepath=filepath,
                     language=self._detect_language(full_path),
                     symbols=symbols,
-                    imports=[]  # Will be populated by parser
+                    imports=[],  # Will be populated by parser
                 )
 
     def _detect_language(self, filepath: Path) -> str:
         """Detect file language from extension."""
         ext_map = {
-            '.py': 'python',
-            '.ts': 'typescript',
-            '.tsx': 'typescript',
-            '.js': 'javascript',
-            '.jsx': 'javascript',
+            ".py": "python",
+            ".ts": "typescript",
+            ".tsx": "typescript",
+            ".js": "javascript",
+            ".jsx": "javascript",
         }
-        return ext_map.get(filepath.suffix, 'unknown')
+        return ext_map.get(filepath.suffix, "unknown")
 
     def full_rebuild(self, parser: RepographParser):
         """Rebuild the entire graph."""
         self.graph = RepographGraph()
-        for filepath in self.repo_root.rglob('*.py'):
+        for filepath in self.repo_root.rglob("*.py"):
             try:
                 symbols = parser.parse_file(filepath)
                 self.graph.add_file(
                     filepath=str(filepath.relative_to(self.repo_root)),
-                    language='python',
+                    language="python",
                     symbols=symbols,
-                    imports=[]
+                    imports=[],
                 )
             except Exception as e:
                 log.warning(f"Failed to rebuild {filepath}: {e}")

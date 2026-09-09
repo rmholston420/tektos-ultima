@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class Experience:
     """A single experience record."""
+
     task_id: str
     description: str
     outcome: str
@@ -32,7 +33,7 @@ class ExperienceReplay:
         """Add an experience to the replay buffer."""
         self._experiences.append(experience)
         if len(self._experiences) > self.max_experiences:
-            self._experiences = self._experiences[-self.max_experiences:]
+            self._experiences = self._experiences[-self.max_experiences :]
         log.info(f"ExperienceReplay: Added experience {experience.task_id}")
 
     def get_experiences(self, limit: int = 10) -> list[Experience]:
@@ -51,8 +52,7 @@ class ExperienceReplay:
             "total_experiences": len(self._experiences),
             "success_rate": self.get_success_rate(),
             "recent_experiences": [
-                {"task_id": e.task_id, "success": e.success}
-                for e in self._experiences[-5:]
+                {"task_id": e.task_id, "success": e.success} for e in self._experiences[-5:]
             ],
         }
 

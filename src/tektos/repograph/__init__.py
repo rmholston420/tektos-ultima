@@ -15,16 +15,16 @@ Design:
 from __future__ import annotations
 
 from .core import (
-    RepographParser,
-    RepographGraph,
+    Dependency,
+    DependencyKind,
+    FileNode,
     PageRankCalculator,
+    RepographGraph,
+    RepographParser,
     RepographQuery,
     RepographSync,
     Symbol,
     SymbolKind,
-    Dependency,
-    DependencyKind,
-    FileNode,
 )
 
 __all__ = [

@@ -25,13 +25,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from tektos.agents.planner.models import BuildSpec, W5H1M
-from tektos.agents.planner.template_selector import select_best_templates
 from tektos.memory.memory_system import MemorySystem
 from tektos.memory.reflection_engine import (
+    ReflectionEngine,
     ReflectionInsight,
     ReflectionState,
-    ReflectionEngine,
 )
 
 
@@ -207,9 +205,7 @@ class SynthesisEngine:
         if insight.bias_detected:
             # Bias synthesis: the system is systematically mis-weighting something
             return {
-                "what_happened": (
-                    f"Systematic {insight.bias_detected}: {insight.content[:200]}"
-                ),
+                "what_happened": (f"Systematic {insight.bias_detected}: {insight.content[:200]}"),
                 "what_expected": f"Balanced assessment (but thesis context: {thesis_context})",
                 "synthesis": (
                     f"Correction: {insight.correction or 'Re-balance the weighting of ' + insight.source}."
@@ -276,10 +272,7 @@ class SynthesisEngine:
             return user_input
 
         # Filter actionable, high-confidence syntheses
-        actionable = [
-            s for s in synthesis_history
-            if s.is_actionable and s.confidence >= 0.7
-        ]
+        actionable = [s for s in synthesis_history if s.is_actionable and s.confidence >= 0.7]
 
         if not actionable:
             return user_input
@@ -289,7 +282,9 @@ class SynthesisEngine:
         for synth in actionable[:5]:  # Limit to top 5
             guidance_parts.append(f"- {synth.insight_type}: {synth.synthesis[:200]}")
 
-        guidance_block = "\n\n[SYNTHESIS GUIDANCE — Incorporate these insights]\n" + "\n".join(guidance_parts)
+        guidance_block = "\n\n[SYNTHESIS GUIDANCE — Incorporate these insights]\n" + "\n".join(
+            guidance_parts
+        )
         return user_input + guidance_block
 
     def get_health_report(self) -> dict[str, Any]:

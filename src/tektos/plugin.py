@@ -31,14 +31,14 @@ SKILL (already exists):
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 
-import yaml
 from pydantic import BaseModel
 
 
 class PluginConfig(BaseModel):
     """Base class for plugin configurations."""
+
     enabled: bool = True
 
 
@@ -104,7 +104,7 @@ class PluginRegistry:
             raise ValueError(f"Plugin {plugin.name!r} already registered")
         self._plugins[plugin.name] = plugin
 
-    def get(self, name: str) -> Optional[Plugin]:
+    def get(self, name: str) -> Plugin | None:
         """Get a registered plugin by name."""
         return self._plugins.get(name)
 

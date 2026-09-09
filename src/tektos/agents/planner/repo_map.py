@@ -15,7 +15,6 @@ Key features:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -23,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import tree_sitter_python as tspython
     import tree_sitter as ts
+    import tree_sitter_python as tspython
 
     TREE_SITTER_AVAILABLE = True
 except ImportError:
@@ -129,14 +128,16 @@ class RepoMapGenerator:
 
         # Find all Python files
         python_files = sorted(self.root_path.rglob("*.py"))
-        other_files = sorted(self.root_path.rglob("*"))
+        sorted(self.root_path.rglob("*"))
 
         # Filter to relevant files (exclude venv, .git, __pycache__, etc.)
         relevant_files = [
-            f for f in python_files
-            if not any(part.startswith('.') or part == '__pycache__' or part == 'venv'
-                      for part in f.parts)
-        ][:self.max_files]
+            f
+            for f in python_files
+            if not any(
+                part.startswith(".") or part == "__pycache__" or part == "venv" for part in f.parts
+            )
+        ][: self.max_files]
 
         repo_map.total_files = len(relevant_files)
 
@@ -180,7 +181,7 @@ class RepoMapGenerator:
             FileInfo with AST-based analysis, or None if analysis failed.
         """
         try:
-            content = file_path.read_text(encoding='utf-8', errors='replace')
+            content = file_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
 
@@ -188,14 +189,14 @@ class RepoMapGenerator:
             path=str(file_path),
             language="python",
             size_bytes=file_path.stat().st_size,
-            line_count=len(content.split('\n')),
+            line_count=len(content.split("\n")),
             last_modified=str(file_path.stat().st_mtime),
         )
 
         # Parse with Tree-sitter if available
         if self.parser and TREE_SITTER_AVAILABLE:
             try:
-                tree = self.parser.parse(bytes(content, 'utf-8'))
+                tree = self.parser.parse(bytes(content, "utf-8"))
                 self._extract_symbols(tree, file_info, content)
                 self._extract_imports(tree, file_info)
             except Exception as e:
@@ -216,48 +217,52 @@ class RepoMapGenerator:
             file_info: FileInfo to populate.
             content: Original file content.
         """
-        lines = content.split('\n')
+        lines = content.split("\n")
 
         def traverse(node: Any) -> None:
-            if node.type == 'class_definition':
-                name_node = node.child_by_field_name('name')
+            if node.type == "class_definition":
+                name_node = node.child_by_field_name("name")
                 if name_node:
-                    name = name_node.text.decode('utf-8')
-                    file_info.symbols.append(SymbolInfo(
-                        name=name,
-                        kind='class',
-                        file_path=file_info.path,
-                        line_start=node.start_point[0] + 1,
-                        line_end=node.end_point[0] + 1,
-                        docstring=self._get_docstring(node, lines),
-                    ))
+                    name = name_node.text.decode("utf-8")
+                    file_info.symbols.append(
+                        SymbolInfo(
+                            name=name,
+                            kind="class",
+                            file_path=file_info.path,
+                            line_start=node.start_point[0] + 1,
+                            line_end=node.end_point[0] + 1,
+                            docstring=self._get_docstring(node, lines),
+                        )
+                    )
 
-            elif node.type == 'function_definition':
-                name_node = node.child_by_field_name('name')
+            elif node.type == "function_definition":
+                name_node = node.child_by_field_name("name")
                 if name_node:
-                    name = name_node.text.decode('utf-8')
+                    name = name_node.text.decode("utf-8")
                     params = []
-                    params_node = node.child_by_field_name('parameters')
+                    params_node = node.child_by_field_name("parameters")
                     if params_node:
                         for param in params_node.children:
-                            if param.type == 'identifier':
-                                params.append(param.text.decode('utf-8'))
+                            if param.type == "identifier":
+                                params.append(param.text.decode("utf-8"))
 
                     return_type = ""
-                    annotation = node.child_by_field_name('return_type')
+                    annotation = node.child_by_field_name("return_type")
                     if annotation:
-                        return_type = annotation.text.decode('utf-8')
+                        return_type = annotation.text.decode("utf-8")
 
-                    file_info.symbols.append(SymbolInfo(
-                        name=name,
-                        kind='function' if not name.startswith('__') else 'method',
-                        file_path=file_info.path,
-                        line_start=node.start_point[0] + 1,
-                        line_end=node.end_point[0] + 1,
-                        parameters=params,
-                        return_type=return_type,
-                        docstring=self._get_docstring(node, lines),
-                    ))
+                    file_info.symbols.append(
+                        SymbolInfo(
+                            name=name,
+                            kind="function" if not name.startswith("__") else "method",
+                            file_path=file_info.path,
+                            line_start=node.start_point[0] + 1,
+                            line_end=node.end_point[0] + 1,
+                            parameters=params,
+                            return_type=return_type,
+                            docstring=self._get_docstring(node, lines),
+                        )
+                    )
 
             for child in node.children:
                 traverse(child)
@@ -271,13 +276,14 @@ class RepoMapGenerator:
             tree: Parsed AST tree.
             file_info: FileInfo to populate.
         """
+
         def traverse(node: Any) -> None:
-            if node.type == 'import_statement':
+            if node.type == "import_statement":
                 for child in node.children:
-                    if child.type == 'dotted_name':
-                        file_info.imports.append(child.text.decode('utf-8'))
-            elif node.type == 'import_from_statement':
-                module = node.child_by_field_name('module_name')
+                    if child.type == "dotted_name":
+                        file_info.imports.append(child.text.decode("utf-8"))
+            elif node.type == "import_from_statement":
+                module = node.child_by_field_name("module_name")
                 if module:
                     file_info.imports.append(f"from {module.text.decode('utf-8')}")
 
@@ -293,36 +299,43 @@ class RepoMapGenerator:
             file_info: FileInfo to populate.
             content: File content.
         """
-        lines = content.split('\n')
+        content.split("\n")
 
         # Extract classes
-        for match in re.finditer(r'^class\s+(\w+)', content, re.MULTILINE):
-            line_num = content[:match.start()].count('\n') + 1
-            file_info.symbols.append(SymbolInfo(
-                name=match.group(1),
-                kind='class',
-                file_path=file_info.path,
-                line_start=line_num,
-                line_end=line_num + 1,
-            ))
+        for match in re.finditer(r"^class\s+(\w+)", content, re.MULTILINE):
+            line_num = content[: match.start()].count("\n") + 1
+            file_info.symbols.append(
+                SymbolInfo(
+                    name=match.group(1),
+                    kind="class",
+                    file_path=file_info.path,
+                    line_start=line_num,
+                    line_end=line_num + 1,
+                )
+            )
 
         # Extract functions
-        for match in re.finditer(r'^def\s+(\w+)\(([^)]*)\)', content, re.MULTILINE):
-            line_num = content[:match.start()].count('\n') + 1
-            params = [p.strip().split(':')[0].split('=')[0].strip()
-                     for p in match.group(2).split(',') if p.strip()]
-            file_info.symbols.append(SymbolInfo(
-                name=match.group(1),
-                kind='function' if not match.group(1).startswith('__') else 'method',
-                file_path=file_info.path,
-                line_start=line_num,
-                line_end=line_num + 1,
-                parameters=params,
-            ))
+        for match in re.finditer(r"^def\s+(\w+)\(([^)]*)\)", content, re.MULTILINE):
+            line_num = content[: match.start()].count("\n") + 1
+            params = [
+                p.strip().split(":")[0].split("=")[0].strip()
+                for p in match.group(2).split(",")
+                if p.strip()
+            ]
+            file_info.symbols.append(
+                SymbolInfo(
+                    name=match.group(1),
+                    kind="function" if not match.group(1).startswith("__") else "method",
+                    file_path=file_info.path,
+                    line_start=line_num,
+                    line_end=line_num + 1,
+                    parameters=params,
+                )
+            )
 
         # Extract imports
-        for match in re.finditer(r'^(?:from\s+(\S+)\s+)?import\s+(.+)$', content, re.MULTILINE):
-            module = match.group(1) or match.group(2).split(',')[0]
+        for match in re.finditer(r"^(?:from\s+(\S+)\s+)?import\s+(.+)$", content, re.MULTILINE):
+            module = match.group(1) or match.group(2).split(",")[0]
             file_info.imports.append(module.strip())
 
     def _get_docstring(self, node: Any, lines: list[str]) -> str:
@@ -337,8 +350,8 @@ class RepoMapGenerator:
         """
         # Look for first child that is a string literal (docstring)
         for child in node.children:
-            if child.type in ('string', 'string_literal'):
-                return child.text.decode('utf-8', errors='replace').strip()
+            if child.type in ("string", "string_literal"):
+                return child.text.decode("utf-8", errors="replace").strip()
         return ""
 
     def _build_dependency_graph(self, repo_map: RepoMap) -> None:
@@ -351,13 +364,13 @@ class RepoMapGenerator:
             deps = []
             for imp in file_info.imports:
                 # Simple heuristic: convert import to file path
-                if imp.startswith('src.'):
-                    dep_path = imp.replace('.', '/') + '.py'
+                if imp.startswith("src."):
+                    dep_path = imp.replace(".", "/") + ".py"
                     if dep_path in repo_map.files:
                         deps.append(dep_path)
-                elif imp.startswith('src/'):
-                    if imp + '.py' in repo_map.files:
-                        deps.append(imp + '.py')
+                elif imp.startswith("src/"):
+                    if imp + ".py" in repo_map.files:
+                        deps.append(imp + ".py")
             repo_map.dependency_graph[file_path] = deps
 
     def get_relevant_files(self, query: str, top_k: int = 10) -> list[str]:
@@ -374,7 +387,7 @@ class RepoMapGenerator:
         scores: dict[str, float] = {}
 
         # Check symbol index (from the last generated map)
-        if hasattr(self, '_last_map') and self._last_map:
+        if hasattr(self, "_last_map") and self._last_map:
             for symbol_name, symbols in self._last_map.symbol_index.items():
                 if query_lower in symbol_name.lower():
                     for symbol in symbols:
@@ -384,7 +397,7 @@ class RepoMapGenerator:
             # Check file content for direct mentions
             for file_path, file_info in self._last_map.files.items():
                 try:
-                    content = Path(file_info.path).read_text(encoding='utf-8', errors='replace')
+                    content = Path(file_info.path).read_text(encoding="utf-8", errors="replace")
                     if query_lower in content.lower():
                         scores[file_path] = scores.get(file_path, 0) + 0.5
                 except OSError:

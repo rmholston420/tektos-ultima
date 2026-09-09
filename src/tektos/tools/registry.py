@@ -24,12 +24,10 @@ Design:
 
 from __future__ import annotations
 
-import json
 import logging
-import subprocess
 import time
-from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 log = logging.getLogger("tektos.tools")
 
@@ -168,10 +166,7 @@ class ToolRegistry:
     def _validate_input(self, tool: ToolDefinition, params: dict[str, Any]) -> bool:
         """Validate input against JSON Schema (best-effort)."""
         required = tool.parameters.get("required", [])
-        for field in required:
-            if field not in params:
-                return False
-        return True
+        return all(field in params for field in required)
 
     def load_built_in(self, sandbox) -> None:
         """Load all built-in sandbox tools."""
@@ -180,108 +175,125 @@ class ToolRegistry:
         self._built_in_tools_loaded = True
 
         # Bash tool
-        self.register(ToolDefinition(
-            name="bash",
-            description="Execute a shell command in the sandbox. Returns stdout + stderr.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command to execute"},
+        self.register(
+            ToolDefinition(
+                name="bash",
+                description="Execute a shell command in the sandbox. Returns stdout + stderr.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "Shell command to execute"},
+                    },
+                    "required": ["command"],
                 },
-                "required": ["command"],
-            },
-            handler=lambda params: sandbox.execute("bash", params),
-            timeout=30,
-        ))
+                handler=lambda params: sandbox.execute("bash", params),
+                timeout=30,
+            )
+        )
 
         # File read
-        self.register(ToolDefinition(
-            name="file_read",
-            description="Read the contents of a file at the given path.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path relative to sandbox root"},
+        self.register(
+            ToolDefinition(
+                name="file_read",
+                description="Read the contents of a file at the given path.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path relative to sandbox root",
+                        },
+                    },
+                    "required": ["path"],
                 },
-                "required": ["path"],
-            },
-            handler=lambda params: sandbox.execute("file_read", params),
-        ))
+                handler=lambda params: sandbox.execute("file_read", params),
+            )
+        )
 
         # File write
-        self.register(ToolDefinition(
-            name="file_write",
-            description="Write content to a file. Creates parent directories if needed.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path"},
-                    "content": {"type": "string", "description": "File content"},
-                    "mode": {"type": "string", "enum": ["write", "append"], "default": "write"},
+        self.register(
+            ToolDefinition(
+                name="file_write",
+                description="Write content to a file. Creates parent directories if needed.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "File path"},
+                        "content": {"type": "string", "description": "File content"},
+                        "mode": {"type": "string", "enum": ["write", "append"], "default": "write"},
+                    },
+                    "required": ["path", "content"],
                 },
-                "required": ["path", "content"],
-            },
-            handler=lambda params: sandbox.execute("file_write", params),
-        ))
+                handler=lambda params: sandbox.execute("file_write", params),
+            )
+        )
 
         # File delete
-        self.register(ToolDefinition(
-            name="file_delete",
-            description="Delete a file or directory.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Path to delete"},
+        self.register(
+            ToolDefinition(
+                name="file_delete",
+                description="Delete a file or directory.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to delete"},
+                    },
+                    "required": ["path"],
                 },
-                "required": ["path"],
-            },
-            handler=lambda params: sandbox.execute("file_delete", params),
-        ))
+                handler=lambda params: sandbox.execute("file_delete", params),
+            )
+        )
 
         # Directory list
-        self.register(ToolDefinition(
-            name="directory_list",
-            description="List contents of a directory.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Directory path", "default": "."},
+        self.register(
+            ToolDefinition(
+                name="directory_list",
+                description="List contents of a directory.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path", "default": "."},
+                    },
+                    "required": ["path"],
                 },
-                "required": ["path"],
-            },
-            handler=lambda params: sandbox.execute("directory_list", params),
-        ))
+                handler=lambda params: sandbox.execute("directory_list", params),
+            )
+        )
 
         # Directory create
-        self.register(ToolDefinition(
-            name="directory_create",
-            description="Create a directory (and parent directories).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Directory path"},
+        self.register(
+            ToolDefinition(
+                name="directory_create",
+                description="Create a directory (and parent directories).",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path"},
+                    },
+                    "required": ["path"],
                 },
-                "required": ["path"],
-            },
-            handler=lambda params: sandbox.execute("directory_create", params),
-        ))
+                handler=lambda params: sandbox.execute("directory_create", params),
+            )
+        )
 
         # Search
-        self.register(ToolDefinition(
-            name="search",
-            description="Search file contents using a regex pattern.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query (regex)"},
-                    "path": {"type": "string", "description": "Path to search", "default": "."},
-                    "case_sensitive": {"type": "boolean", "default": False},
-                    "max_results": {"type": "integer", "default": 50},
+        self.register(
+            ToolDefinition(
+                name="search",
+                description="Search file contents using a regex pattern.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query (regex)"},
+                        "path": {"type": "string", "description": "Path to search", "default": "."},
+                        "case_sensitive": {"type": "boolean", "default": False},
+                        "max_results": {"type": "integer", "default": 50},
+                    },
+                    "required": ["query"],
                 },
-                "required": ["query"],
-            },
-            handler=lambda params: sandbox.execute("search", params),
-        ))
+                handler=lambda params: sandbox.execute("search", params),
+            )
+        )
 
         log.info(f"Loaded {7} built-in tools")
 
@@ -346,8 +358,8 @@ class MCPClient:
 
     def _connect_http(self, url: str) -> dict[str, Any]:
         """Connect via HTTP POST to MCP server's list_tools endpoint."""
-        import urllib.request
         import json as _json
+        import urllib.request
 
         payload = _json.dumps({"method": "tools/list", "params": {}, "id": 1}).encode()
         req = urllib.request.Request(
@@ -427,19 +439,23 @@ class MCPClient:
                     # SSE URL is like http://host:port/sse → endpoint is http://host:port/mcp
                     base = sse_base_url.rsplit("/sse", 1)[0]
                     endpoint_url = f"{base}/mcp"
-                    log.info("SSE endpoint not found in stream; using derived URL: %s", endpoint_url)
+                    log.info(
+                        "SSE endpoint not found in stream; using derived URL: %s", endpoint_url
+                    )
 
                 # Step 2: Send MCP initialize request
-                init_payload = _json.dumps({
-                    "jsonrpc": "2.0",
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "tektos", "version": "0.1.0"},
-                    },
-                    "id": 1,
-                }).encode()
+                init_payload = _json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "tektos", "version": "0.1.0"},
+                        },
+                        "id": 1,
+                    }
+                ).encode()
 
                 async with session.post(
                     endpoint_url,
@@ -452,12 +468,14 @@ class MCPClient:
                     log.info("MCP initialize response: %s", init_response.get("result", {}))
 
                 # Step 3: Call tools/list to discover tools
-                list_payload = _json.dumps({
-                    "jsonrpc": "2.0",
-                    "method": "tools/list",
-                    "params": {},
-                    "id": 2,
-                }).encode()
+                list_payload = _json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "tools/list",
+                        "params": {},
+                        "id": 2,
+                    }
+                ).encode()
 
                 async with session.post(
                     endpoint_url,
@@ -494,14 +512,16 @@ class MCPClient:
         def handler(params):
             """Sync wrapper for MCP tool call."""
             try:
-                import urllib.request
                 import json as _json
+                import urllib.request
 
-                payload = _json.dumps({
-                    "method": "tools/call",
-                    "params": {"name": tool_name, "arguments": params},
-                    "id": int(time.time() * 1000),
-                }).encode()
+                payload = _json.dumps(
+                    {
+                        "method": "tools/call",
+                        "params": {"name": tool_name, "arguments": params},
+                        "id": int(time.time() * 1000),
+                    }
+                ).encode()
                 req = urllib.request.Request(
                     f"{server_url}/mcp",
                     data=payload,
@@ -514,14 +534,16 @@ class MCPClient:
             except Exception as exc:
                 return f"MCP error: {exc}"
 
-        self.registry.register(ToolDefinition(
-            name=name,
-            description=tool_def.get("description", ""),
-            parameters=schema if isinstance(schema, dict) else {},
-            handler=handler,
-            enabled=True,
-            timeout=30,
-        ))
+        self.registry.register(
+            ToolDefinition(
+                name=name,
+                description=tool_def.get("description", ""),
+                parameters=schema if isinstance(schema, dict) else {},
+                handler=handler,
+                enabled=True,
+                timeout=30,
+            )
+        )
         self._imported_count += 1
         log.info(f"Imported MCP tool: {name}")
 

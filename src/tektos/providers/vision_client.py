@@ -26,6 +26,7 @@ log = logging.getLogger("tektos.vision")
 @dataclass
 class VisionResult:
     """Result from a vision analysis."""
+
     text: str
     model: str
     prompt_tokens: int = 0
@@ -107,18 +108,20 @@ class VisionClient:
         messages: list[dict[str, Any]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{mime_type};base64,{img_b64}",
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{img_b64}",
+                        },
                     },
-                },
-                {"type": "text", "text": prompt},
-            ],
-        })
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        )
 
         payload = {
             "model": self.model,
@@ -166,16 +169,18 @@ class VisionClient:
         messages: list[dict[str, Any]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{img_b64}"},
-                },
-                {"type": "text", "text": prompt},
-            ],
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{img_b64}"},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        )
 
         payload = {
             "model": self.model,
