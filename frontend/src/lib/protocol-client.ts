@@ -207,12 +207,11 @@ export class ProtocolClient {
       this.emitError(new Error(`Parse error: ${err}`));
       return;
     }
-    // Pong tracking (backend replies with {type: "pong"})
+    // Pong tracking (gateway proxy replies with JSON-RPC {jsonrpc:"2.0", result:"pong", id})
     if (
       typeof data === "object" &&
       data !== null &&
-      "type" in data &&
-      (data as { type: string }).type === "pong"
+      (data as { result?: unknown }).result === "pong"
     ) {
       this.lastPong = Date.now();
       return;
@@ -361,7 +360,10 @@ export class ProtocolClient {
       return;
     }
     try {
-      this.ws?.send(JSON.stringify({ type: "ping" }));
+      // JSON-RPC 2.0 ping — gateway proxy replies with {jsonrpc:"2.0", result:"pong", id}
+      this.ws?.send(
+        JSON.stringify({ jsonrpc: "2.0", method: "ping", id: `hb-${Date.now()}` }),
+      );
     } catch {
       /* connection will surface via onclose */
     }
