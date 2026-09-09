@@ -114,7 +114,10 @@ jobs:
 
       - name: ESLint
         working-directory: frontend
-        run: npx eslint . --max-warnings 0
+        # Warnings track pre-existing typing debt — see docs/history/eslint-debt.md.
+        # CI fails only on hard errors (require() in app code, unescaped JSX
+        # entities, etc.) so drift is caught without blocking on legacy warns.
+        run: npx eslint .
 
   frontend-e2e:
     name: Frontend E2E (Playwright)

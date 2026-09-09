@@ -152,7 +152,7 @@ export function RedisPanel() {
             </span>
           </div>
           <div className="space-y-2 text-xs text-slate-400">
-            <p>Seconds–minutes, 7±2 items via Sorted Sets with priority-based eviction (Miller's Law).</p>
+            <p>Seconds–minutes, 7±2 items via Sorted Sets with priority-based eviction (Miller&apos;s Law).</p>
             <div className="grid grid-cols-2 gap-2 mt-2">
               <div className="bg-black/30 rounded p-2">
                 <span className="text-slate-500">Structure</span>
