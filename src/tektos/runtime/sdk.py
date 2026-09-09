@@ -504,9 +504,10 @@ class RuntimeSDK:
         self._session_locks_guard = _asyncio.Lock()
         # Hard ceiling on how long a single _stream_llm invocation may hold
         # its session lock. Overridable via env for slow CPU fallback
-        # models; default 120s handles healthy GPU + degraded CPU paths.
+        # models; default 600s handles Qwen3 thinking + long tool-heavy
+        # turns on GPU. Bump higher for CPU fallback.
         self._prompt_timeout_seconds: float = float(
-            _os.getenv("TEKTOS_PROMPT_TIMEOUT_SECONDS", "120")
+            _os.getenv("TEKTOS_PROMPT_TIMEOUT_SECONDS", "600")
         )
         self._sandbox = SandboxProvider()
         self._loop_monitor = LoopSafetyMonitor(loop_safety_config or LoopSafetyConfig())
@@ -548,10 +549,20 @@ class RuntimeSDK:
             enabled=LLM_FAILOVER_ENABLED,
             cooldown_seconds=LLM_FAILOVER_COOLDOWN,
             # read timeout bounded so a wedged upstream (e.g. a stalled
-            # llama-server) can't hold the SDK's per-session lock for 5
-            # minutes. Streaming requests that produce no bytes within this
-            # window trip httpx.ReadTimeout and unwind cleanly.
-            timeout=httpx.Timeout(30.0, read=60.0),
+            # llama-server) can't hold the SDK's per-session lock. Streaming
+            # requests that produce no bytes within this window trip
+            # httpx.ReadTimeout and unwind cleanly.
+            #
+            # Qwen3 in thinking mode routinely emits 60-120s of reasoning
+            # tokens on the first chunk (reasoning_content, no content) so
+            # httpx's read clock resets rarely. 60s was too tight and every
+            # prompt tripped it; 300s covers deep thinking while still
+            # bounding a truly stalled upstream. Prompt-level ceiling is
+            # governed separately by TEKTOS_PROMPT_TIMEOUT_SECONDS.
+            timeout=httpx.Timeout(
+                30.0,
+                read=float(_os.getenv("TEKTOS_LLM_READ_TIMEOUT", "300.0")),
+            ),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
         # Validate connection — degrade gracefully instead of aborting
