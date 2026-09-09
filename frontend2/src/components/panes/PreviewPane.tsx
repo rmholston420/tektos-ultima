@@ -15,7 +15,8 @@ import { ExternalLink } from "lucide-react";
 export default function PreviewPane() {
   const byId = useStore($artifacts);
   const order = useStore($artifactOrder);
-  const latest = order.length ? byId[order[order.length - 1]] : null;
+  const latestId = order.length ? order[order.length - 1] : null;
+  const latest = latestId ? byId[latestId] : null;
 
   if (!latest) {
     return (
