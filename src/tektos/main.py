@@ -2107,8 +2107,25 @@ class _TektosLogHandler(_log.Handler):
         _tektos_log_buffer.append(record)
 
 
-# Install the handler at module load time
+# Install the handler at module load time.
+#
+# We also raise the root logger's effective level from the Python default of
+# WARNING to INFO so tektos.* INFO records are actually captured. Without this
+# line, INFO records (including the failover trace in FailoverLLMClient and
+# the LLM probe startup line in RuntimeSDK) are filtered out before they even
+# reach the handler, and the /api/logs endpoint can never surface them.
+#
+# Honor TEKTOS_LOG_LEVEL if set (DEBUG/INFO/WARNING/ERROR/CRITICAL); default
+# to INFO. Uvicorn's own log level is set separately via the CLI or
+# uvicorn.run(log_level=...).
+_root_log_level_name = _os.environ.get("TEKTOS_LOG_LEVEL", "INFO").upper()
+_root_log_level = getattr(_log, _root_log_level_name, _log.INFO)
+_log.getLogger().setLevel(_root_log_level)
+
 _tektos_log_handler = _TektosLogHandler()
+# Match the handler's level to the root's so it captures everything the root
+# lets through.
+_tektos_log_handler.setLevel(_root_log_level)
 _log.getLogger().addHandler(_tektos_log_handler)
 
 
