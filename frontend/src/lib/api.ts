@@ -160,16 +160,89 @@ class ApiClient {
 
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    const response = await fetch(url, {
-      headers: { "Content-Type": "application/json", ...options?.headers },
-      ...options,
-    });
+    const method = (options?.method || "GET").toUpperCase();
 
-    if (!response.ok) {
-      throw new Error(`API Error ${response.status}: ${response.statusText}`);
+    // Backend restarts (e.g. after `git pull`) leave a brief window where
+    // Next.js's /api proxy returns 500 ECONNREFUSED. Without a retry the
+    // user sees a red toast on the very next click after a restart, even
+    // though the backend comes back within a second or two. Retry a small
+    // number of times with exponential backoff on transient failures.
+    //
+    // Only retried:
+    //   * network errors thrown by fetch itself (backend not listening),
+    //   * 502 / 503 / 504 (proxy layer says upstream is down),
+    //   * 500 ONLY for idempotent methods (GET / HEAD / OPTIONS) or when
+    //     the caller explicitly opts in via an X-Retry-500 header.
+    // Never retried:
+    //   * 4xx (client error — will keep failing),
+    //   * 500 on POST/PATCH/DELETE by default (may have side-effected),
+    //   * caller-issued AbortController signal.
+    //
+    // POST /api/sessions is explicitly whitelisted because it is
+    // idempotent-enough in practice (worst case: an orphan empty session
+    // no user ever prompted) and it is the request most likely to hit the
+    // restart gap.
+    const isIdempotent =
+      method === "GET" || method === "HEAD" || method === "OPTIONS";
+    const optIn500Retry =
+      (options?.headers as Record<string, string> | undefined)?.[
+        "X-Retry-500"
+      ] === "1" ||
+      (method === "POST" && endpoint === "/api/sessions");
+
+    const maxAttempts = 3;
+    const baseDelayMs = 250;
+    let lastErr: Error = new Error("API request failed");
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let response: Response | null = null;
+      let fetchErr: unknown = null;
+      try {
+        response = await fetch(url, {
+          headers: { "Content-Type": "application/json", ...options?.headers },
+          ...options,
+        });
+      } catch (err) {
+        fetchErr = err;
+      }
+
+      // Success path.
+      if (response && response.ok) {
+        return response.json();
+      }
+
+      // fetch() itself threw — network-level failure (backend not
+      // listening, DNS, connection reset). The request never reached the
+      // server, so retrying is safe on any method.
+      if (fetchErr) {
+        lastErr =
+          fetchErr instanceof Error
+            ? fetchErr
+            : new Error(String(fetchErr));
+        if (attempt >= maxAttempts) throw lastErr;
+        await new Promise((r) => setTimeout(r, baseDelayMs * 2 ** (attempt - 1)));
+        continue;
+      }
+
+      // HTTP error response. Decide whether to retry based on status +
+      // method safety.
+      const status = response!.status;
+      lastErr = new Error(`API Error ${status}: ${response!.statusText}`);
+
+      const retryableStatus =
+        status === 502 ||
+        status === 503 ||
+        status === 504 ||
+        (status === 500 && (isIdempotent || optIn500Retry));
+
+      if (!retryableStatus || attempt >= maxAttempts) {
+        throw lastErr;
+      }
+
+      await new Promise((r) => setTimeout(r, baseDelayMs * 2 ** (attempt - 1)));
     }
 
-    return response.json();
+    throw lastErr;
   }
 
   // Sessions
