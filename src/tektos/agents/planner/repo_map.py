@@ -277,7 +277,7 @@ class RepoMapGenerator:
                     if child.type == 'dotted_name':
                         file_info.imports.append(child.text.decode('utf-8'))
             elif node.type == 'import_from_statement':
-                module = child_by_field_name('module_name')
+                module = node.child_by_field_name('module_name')
                 if module:
                     file_info.imports.append(f"from {module.text.decode('utf-8')}")
 

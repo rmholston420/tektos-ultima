@@ -106,7 +106,6 @@ _VAGUE_TERMS: dict[str, str] = {
     "simple": "straightforward implementation (specify: number of components, lines of code)",
     "complex": "requires careful design (specify: number of dependencies, concurrency, state)",
     "secure": "meets security standards (specify: authentication, authorization, encryption)",
-    "fast": "low-latency (specify: response time, throughput)",
     "reliable": "meets uptime/accuracy standards (specify: SLA, error rate)",
     "scalable": "handles increased load (specify: users, requests, data volume)",
     "efficient": "optimal resource usage (specify: CPU, memory, bandwidth, time)",

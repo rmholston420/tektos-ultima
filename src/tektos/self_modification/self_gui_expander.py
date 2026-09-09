@@ -195,19 +195,19 @@ class SelfGUIExpander:
             f"export const {store_name} = writable({{",
         ]
 
-        for field in fields:
-            field_name = field["name"]
-            default_value = self._infer_default(field["type"])
+        for fld in fields:
+            field_name = fld["name"]
+            default_value = self._infer_default(fld["type"])
             lines.append(f'  {field_name}: {default_value},')
 
         lines.append("});")
         lines.append("")
 
         # Add helper functions
-        for field in fields:
+        for fld in fields:
             lines.extend([
-                f"export function set{self._camel_to_pascal(field['name'])}(value: {field['type']}): void {{",
-                f'  {store_name}.update(state => ({{ ...state, {field["name"]}: value }}));',
+                f"export function set{self._camel_to_pascal(fld['name'])}(value: {fld['type']}): void {{",
+                f'  {store_name}.update(state => ({{ ...state, {fld["name"]}: value }}));',
                 "}",
                 "",
             ])

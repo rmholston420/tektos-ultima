@@ -112,7 +112,7 @@ session_manager: SessionManager
 runtime_sdk: RuntimeSDK
 ws_manager: WebSocketManager
 schema_engine: SchemaEvolutionEngine
-db_manager: DatabaseManager
+db_manager: DatabaseManager | None = None
 self_improvement: SelfImprovementAdapter
 thermal_monitor: ThermalMonitor | None = None
 vision_client: Any = None
@@ -127,7 +127,7 @@ state_managers: dict[str, SessionStateManager] = {}
 @_asynccontextmanager
 async def lifespan(app: _FastAPI):
     """Initialize and clean up resources."""
-    global session_manager, runtime_sdk, ws_manager, schema_engine, self_improvement
+    global session_manager, runtime_sdk, ws_manager, schema_engine, self_improvement, db_manager
     global _skill_manager, _skill_executor
     global _tool_registry, _mcp_client
     global _metabolism, _voice_manager
@@ -4456,7 +4456,7 @@ async def postgres_status():
             "database": "postgres",
             "host": _postgres_backend.config.host if hasattr(_postgres_backend, "config") else None,
             "port": _postgres_backend.config.port if hasattr(_postgres_backend, "config") else None,
-            "database": _postgres_backend.config.database if hasattr(_postgres_backend, "config") else None,
+            "database_name": _postgres_backend.config.database if hasattr(_postgres_backend, "config") else None,
             "connected": conn_ok,
             "error": None,
         }

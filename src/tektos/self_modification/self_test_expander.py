@@ -173,8 +173,8 @@ class SelfTestExpander:
 
     # ── Code Generation ─────────────────────────────────────────────────
 
-    def generate_test_file(self, plan: TestGenerationPlan) -> str:
-        """Generate a pytest test file from a TestGenerationPlan."""
+    def generate_test_file(self, plan: TestPlanData) -> str:
+        """Generate a pytest test file from a TestPlanData."""
         module_name = plan.module_path.split(".")[-1]
 
         lines = [
@@ -276,7 +276,7 @@ class SelfTestExpander:
         added_lines: dict[str, list[str]] = None,
         deleted_lines: dict[str, list[str]] = None,
         auto_run: bool = True,
-    ) -> list[TestGenerationPlan]:
+    ) -> list[TestPlanData]:
         """Main entry point: analyze changes and generate/expand tests.
 
         Args:
@@ -286,7 +286,7 @@ class SelfTestExpander:
             auto_run: Whether to run the generated tests after writing them.
 
         Returns:
-            List of TestGenerationPlan objects describing what was generated.
+            List of TestPlanData objects describing what was generated.
         """
         scopes = self.analyze_diff(changed_files, added_lines, deleted_lines)
         plans = self.generate_plan(scopes)

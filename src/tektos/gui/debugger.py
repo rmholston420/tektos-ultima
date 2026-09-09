@@ -411,7 +411,7 @@ class ChromeDebugger:
                         try:
                             entry.response_time_ms = response.elapsed_time_ms
                         except Exception as e:
-                            log.warning("Debugger operation failed: %s", e)
+                            logger.warning("Debugger operation failed: %s", e)
                         break
 
             self._page.on("console", on_console)
@@ -661,7 +661,7 @@ def main():
             # Save report
             report_path = debugger._recorder.save_report()
             logger.info(f"Report saved to: {report_path}")
-            ogger.info(json.dumps(session.to_dict(), indent=2))
+            logger.info(json.dumps(session.to_dict(), indent=2))
 
     asyncio.run(run())
 

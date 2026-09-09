@@ -394,7 +394,7 @@ class SelfModificationEngine:
         return {
             "total_requests": len(self._requests),
             "completed_modifications": len(self._completed_modifications),
-            "self_tests": len(self._self_tests),
+            "self_tests_count": len(self._self_tests),
             "passed_tests": sum(1 for t in self._self_tests if t.passed),
             "failed_tests": sum(1 for t in self._self_tests if not t.passed),
             "requests": {rid: r.to_dict() for rid, r in self._requests.items()},

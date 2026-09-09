@@ -129,7 +129,6 @@ _PHRASE_REPLACEMENTS: dict[str, str] = {
     "check the tests": "verify test coverage of",
     "check the docs": "review documentation of",
     "check the config": "validate configuration for",
-    "check the logs": "review logs for",
     "check the metrics": "collect metrics from",
     "check the alerts": "check alerts for",
     "check the deployments": "check deployments for",
