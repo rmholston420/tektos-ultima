@@ -1362,16 +1362,46 @@ class RuntimeSDK:
                 # reach a real answer or a tool call.
                 # Configurable via TEKTOS_LLM_MAX_TOKENS.
                 _max_tokens = int(_os.getenv("TEKTOS_LLM_MAX_TOKENS", "16384"))
+                # Qwen3.8-27B specific: the model's chat template defaults to
+                # reasoning_effort="xhigh" on EVERY request, which is what was
+                # burning our per-turn max_tokens budget entirely inside <think>
+                # and producing empty visible turns. The model's own HF
+                # discussion (Qwen/Qwen3.8-27B · discussion #113) confirms
+                # forcing "medium" prevents thinking loops and roughly triples
+                # throughput without quality loss.
+                # Valid values: "low" | "medium" | "xhigh". Anything else
+                # ("minimal", "high", "max") makes the template raise on every
+                # request. Configurable via TEKTOS_LLM_REASONING_EFFORT.
+                _reasoning_effort = _os.getenv(
+                    "TEKTOS_LLM_REASONING_EFFORT", "medium"
+                ).lower()
+                if _reasoning_effort not in ("low", "medium", "xhigh"):
+                    log.warning(
+                        f"[SDK] Invalid TEKTOS_LLM_REASONING_EFFORT={_reasoning_effort!r}, "
+                        f"falling back to 'medium'"
+                    )
+                    _reasoning_effort = "medium"
+                _chat_template_kwargs: dict[str, Any] = {
+                    "reasoning_effort": _reasoning_effort,
+                }
+                # preserve_thinking was needed on Qwen3.6 to work around an
+                # "empty arguments after 2-3 turns" bug (upstream pi #3325).
+                # It replays every prior turn's <think> block back to the model,
+                # which on 3.8 compounds the token pressure since 3.8 already
+                # has native reasoning-effort control. Off by default here;
+                # flip back on with TEKTOS_LLM_PRESERVE_THINKING=1 if the
+                # 3.6-era empty-args symptom returns.
+                if _os.getenv("TEKTOS_LLM_PRESERVE_THINKING", "").lower() in (
+                    "1", "true", "yes",
+                ):
+                    _chat_template_kwargs["preserve_thinking"] = True
                 payload = {
                     "model": self._llm_model,
                     "messages": messages,
                     "stream": True,
                     "temperature": 0.1,
                     "max_tokens": _max_tokens,
-                    # Qwen3.6 fix: preserve_thinking=true keeps reasoning traces in history,
-                    # preventing the "empty arguments after 2-3 turns" bug documented at
-                    # https://github.com/earendil-works/pi/issues/3325
-                    "chat_template_kwargs": {"preserve_thinking": True},
+                    "chat_template_kwargs": _chat_template_kwargs,
                 }
 
                 # Enable function calling with available tools
