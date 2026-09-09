@@ -83,6 +83,25 @@ export const $orderedMessages = computed(
   (byId, order) => order.map((id) => byId[id]).filter(Boolean),
 );
 
+/**
+ * True whenever the newest assistant message is still open — the model is
+ * actively generating (or the stream stalled after only reasoning). Used by
+ * the GeneratingRow status row so the user can see a live "assistant is
+ * working…" indicator instead of guessing whether the turn ever ended.
+ */
+export const $isGenerating = computed(
+  [$messages, $messageOrder],
+  (byId, order) => {
+    for (let i = order.length - 1; i >= 0; i--) {
+      const m = byId[order[i]];
+      if (!m) continue;
+      if (m.role !== "assistant") return false;
+      return !m.completed;
+    }
+    return false;
+  },
+);
+
 // ---- Tool calls --------------------------------------------------------
 
 export const $toolCalls = map<Record<string, ToolCallRecord>>({});
