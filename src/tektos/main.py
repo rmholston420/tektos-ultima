@@ -1391,7 +1391,12 @@ async def lifespan(app: _FastAPI):
         from tektos.runtime.task_decomposer import TaskDecomposer
         from tektos.runtime.tool_router import ToolRouter
 
-        _tool_router = ToolRouter(embedder_client=_embedder_client)
+        # Pass the initialized ToolRegistry so execute_with_recovery can
+        # actually dispatch tool calls instead of returning placeholders.
+        _tool_router = ToolRouter(
+            embedder_client=_embedder_client,
+            tool_registry=_tool_registry,
+        )
         _task_decomposer = TaskDecomposer()
         log.info("Tool router and task decomposer initialized")
     except Exception as exc:
@@ -2616,19 +2621,26 @@ class _RegisterToolBody(_BaseModel):
 
 @app.post("/api/tools/register")
 async def register_tool(body: _RegisterToolBody):
-    """Register a new tool at runtime."""
-    if not _tool_registry:
-        return {"error": "Tool registry not initialized"}
-    from tektos.tools.registry import ToolDefinition
+    """Registering arbitrary tools over HTTP is not supported.
 
-    tool = ToolDefinition(
-        name=body.name,
-        description=body.description,
-        parameters=body.parameters,
-        handler=lambda p: f"Tool {body.name} executed",  # placeholder
+    A ToolDefinition needs a real handler callable; accepting one by
+    JSON body would either be a security hole (arbitrary-code upload)
+    or a placeholder that returns a canned string on every invocation
+    (which is what this endpoint used to do). Real tools must be added
+    in-process via ``ToolRegistry.register`` at startup, or through MCP
+    integration for external tools. This route stays wired so callers
+    get a clear 501 instead of silently registering a no-op tool.
+    """
+    # Reference body so mypy/ruff don't flag the unused parameter.
+    _ = body
+    raise _HTTPException(
+        status_code=501,
+        detail=(
+            "Runtime tool registration over HTTP is not implemented. "
+            "Register tools in-process via ToolRegistry.register or expose "
+            "them through MCP."
+        ),
     )
-    _tool_registry.register(tool)
-    return {"status": "registered", "name": tool.name}
 
 
 @app.post("/api/tools/{tool_name}/enable")
