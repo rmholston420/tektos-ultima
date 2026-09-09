@@ -126,6 +126,21 @@ class EvaluationHarness:
         self._evaluations: dict[str, EvaluationResult] = {}
         self._tasks: dict[str, EvaluationTask] = {}
         self._results: list[EvaluationResult] = []
+        # Optional plug-in for SWE-bench delegation (see set_swe_bench_runner).
+        self._swe_bench_runner: Any = None
+
+    def set_swe_bench_runner(self, runner: Any) -> None:
+        """Register an external SWE-bench runner.
+
+        Tektos does not ship an in-tree SWE-bench harness. Callers that
+        need SWE-bench scoring should register an object with an
+        ``async run(evaluation)`` coroutine (for example a thin adapter
+        around the OpenHands SWE-bench evaluator). When present, the
+        runner is invoked from :meth:`_run_swe_bench_evaluation` and
+        expected to populate ``evaluation.score`` and
+        ``evaluation.details``.
+        """
+        self._swe_bench_runner = runner
 
     async def run_evaluation(self, evaluation: EvaluationResult) -> EvaluationResult:
         """Run an evaluation.
@@ -179,16 +194,38 @@ class EvaluationHarness:
         return evaluation
 
     async def _run_swe_bench_evaluation(self, evaluation: EvaluationResult) -> None:
-        """Run SWE-bench evaluation."""
-        # For now, simulate SWE-bench evaluation
-        # In production, this would use the actual SWE-bench harness
-        evaluation.score = 0.0
-        evaluation.details = {
-            "swe_bench_version": "1.0",
-            "tasks_solved": 0,
-            "total_tasks": 0,
-            "pass_rate": 0.0,
-        }
+        """Run SWE-bench evaluation via an externally registered runner.
+
+        Tektos does not embed the SWE-bench harness — it is a large
+        third-party evaluation stack we intentionally do not vendor.
+        The recommended path is to delegate to OpenHands' SWE-bench
+        evaluator (or another external harness) via
+        :meth:`set_swe_bench_runner`.
+
+        Behavior:
+
+        - If a runner has been registered, its ``run(evaluation)``
+          coroutine is awaited and expected to populate
+          ``evaluation.score`` and ``evaluation.details``.
+        - Otherwise this method raises :class:`NotImplementedError`,
+          which surfaces as ``EvaluationStatus.FAILED`` with a clear
+          error message on the evaluation result. It never silently
+          reports a fake ``score=0.0`` — that produced misleading
+          "pass_rate=0" telemetry in previous versions.
+        """
+        runner = self._swe_bench_runner
+        if runner is None:
+            raise NotImplementedError(
+                "SWE-bench evaluation requires an external runner. Register one "
+                "via EvaluationHarness.set_swe_bench_runner(...). Tektos does not "
+                "ship an in-tree SWE-bench harness; the recommended integration "
+                "is a thin adapter around the OpenHands SWE-bench evaluator."
+            )
+
+        run = getattr(runner, "run", None)
+        if run is None or not callable(run):
+            raise TypeError("SWE-bench runner must expose an async 'run(evaluation)' method")
+        await run(evaluation)
 
     async def _run_custom_evaluation(self, evaluation: EvaluationResult) -> None:
         """Run custom evaluation."""
