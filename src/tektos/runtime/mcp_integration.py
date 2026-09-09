@@ -19,7 +19,6 @@ This module provides:
 from __future__ import annotations
 
 import logging
-import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any

@@ -6,14 +6,13 @@ After: unknown action falls back to the injected ToolRegistry.dispatch().
 
 from __future__ import annotations
 
-from typing import Any
 import asyncio
+from typing import Any
 
 import pytest
 
 from tektos.skills.manager import SkillManager
-from tektos.skills.registry import SkillRegistry
-from tektos.skills.registry import Skill
+from tektos.skills.registry import Skill, SkillRegistry
 
 
 class _RecordingRegistry:

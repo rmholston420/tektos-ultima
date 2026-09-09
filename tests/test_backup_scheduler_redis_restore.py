@@ -6,9 +6,6 @@ happy path shells out to redis-cli and requires a running redis.
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import pytest
 
 from tektos.memory.backup_scheduler import BackupConfig, BackupScheduler
