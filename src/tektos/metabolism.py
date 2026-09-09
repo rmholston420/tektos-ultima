@@ -308,9 +308,15 @@ class MetabolismEngine:
             result = subprocess.run(
                 [
                     "nvidia-smi",
+                    # NOTE: 'used_gpus' was in the original field list but is
+                    # not a valid nvidia-smi query key; it caused every query
+                    # to return non-zero exit status, spamming
+                    # 'nvidia-smi query failed' warnings and making
+                    # get_gpu_metrics always return defaults. Drop it — the
+                    # code below indexes fields[0..8] which stay stable.
                     "--query-gpu=temperature.gpu,power.draw,power.limit,fan.speed,"
                     "utilization.gpu,clocks.current.graphics,clocks.current.memory,"
-                    "memory.used,memory.total,used_gpus",
+                    "memory.used,memory.total",
                     "--format=csv,noheader,nounits",
                 ],
                 capture_output=True,
@@ -325,7 +331,7 @@ class MetabolismEngine:
                 raise ValueError("Empty nvidia-smi output")
 
             fields = [f.strip() for f in line.split(",")]
-            if len(fields) < 11:
+            if len(fields) < 9:
                 raise ValueError(f"Unexpected nvidia-smi fields: {fields}")
 
             timestamp = datetime.now(timezone.utc).isoformat()

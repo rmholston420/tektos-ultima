@@ -19,6 +19,7 @@ import contextlib
 import json
 import logging
 import uuid
+from typing import Any
 import os
 import sys
 import time
@@ -379,6 +380,8 @@ async def _ws_reader_loop(sid, ws):
 
                 # Map Tektos events to gateway events
                 if event_type == "session.ready":
+                    # Legacy Hermes-style gateway.ready handshake so the boot
+                    # sequence in the frontend still completes.
                     event = _notification(
                         "event",
                         {
@@ -391,6 +394,51 @@ async def _ws_reader_loop(sid, ws):
                         },
                     )
                     await _broadcast_to_clients(event)
+
+                    # Also forward the underlying session.ready so the
+                    # frontend session store can populate $sessionModel and
+                    # $sessionCwd for the header status stack.
+                    session_ready_event = _notification(
+                        "event",
+                        {
+                            "type": "session.ready",
+                            "payload": {
+                                "session_id": sid,
+                                "model": payload.get("model"),
+                                "cwd": payload.get("cwd"),
+                                "since_seq": payload.get("since_seq", 0),
+                            },
+                        },
+                    )
+                    await _broadcast_to_clients(session_ready_event)
+
+                elif event_type == "session.created":
+                    event = _notification(
+                        "event",
+                        {
+                            "type": "session.created",
+                            "payload": {
+                                "session_id": sid,
+                                "model": payload.get("model"),
+                                "cwd": payload.get("cwd"),
+                            },
+                        },
+                    )
+                    await _broadcast_to_clients(event)
+
+                elif event_type == "session.updated":
+                    changes = payload.get("changes", {})
+                    fwd_payload: dict[str, Any] = {"session_id": sid}
+                    if "model" in changes:
+                        fwd_payload["model"] = changes["model"]
+                    if "cwd" in changes:
+                        fwd_payload["cwd"] = changes["cwd"]
+                    if len(fwd_payload) > 1:  # only forward if something to say
+                        event = _notification(
+                            "event",
+                            {"type": "session.updated", "payload": fwd_payload},
+                        )
+                        await _broadcast_to_clients(event)
 
                 elif event_type == "assistant.delta":
                     text = payload.get("text", "") or payload.get("delta", "")

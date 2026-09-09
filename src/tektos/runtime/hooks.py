@@ -237,12 +237,33 @@ class BuiltinHooks:
                 )
             return HookResult()
 
-        if self._resource_monitor:
+        # Only register the thermal guard when the injected resource monitor
+        # actually exposes ``check_thermal_limit``. Earlier the hook called
+        # the method unconditionally, which raised AttributeError on every
+        # tool.before fire and produced ``Hook tool.before failed:
+        # _check_thermal_limit`` in the log for every tool call. The fire
+        # loop is non-blocking so tools still ran, but the noise misled the
+        # model into thinking its own tools were being sandboxed.
+        if self._resource_monitor and hasattr(
+            self._resource_monitor, "check_thermal_limit"
+        ):
 
             @self._registry.register("tool.before")
             async def _check_thermal_limit(ctx: HookContext) -> HookResult:
-                """Block inference if GPU is above operational ceiling."""
-                if not self._resource_monitor.check_thermal_limit():
+                """Block inference if GPU is above operational ceiling.
+
+                Fail-open on telemetry errors: a diagnostic failure inside
+                the resource monitor must never deny the user's tool call.
+                """
+                try:
+                    ok = self._resource_monitor.check_thermal_limit()
+                except Exception:
+                    logger.debug(
+                        "check_thermal_limit raised; treating as pass",
+                        exc_info=True,
+                    )
+                    return HookResult()
+                if not ok:
                     return HookResult(
                         outcome=HookResultCode.ABORT,
                         message="GPU thermal limit reached — inference blocked",

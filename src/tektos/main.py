@@ -5538,8 +5538,17 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
     await session_manager.add_ws_connection(session_id, websocket)
     await ws_manager.add(session_id, websocket)
 
-    # Send session.ready (first message after connect)
-    await websocket.send_text(session_ready(session_id, since_seq=0).to_json())
+    # Send session.ready (first message after connect). Populate model +
+    # cwd so the frontend header renders the active model and working
+    # directory immediately without a follow-up REST GET.
+    await websocket.send_text(
+        session_ready(
+            session_id,
+            since_seq=0,
+            model=getattr(session, "model", None),
+            cwd=getattr(session, "cwd", None),
+        ).to_json()
+    )
     log.info(f"WS handler: sent session.ready, entering main loop for {session_id[:8]}")
 
     try:
