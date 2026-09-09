@@ -180,10 +180,25 @@ export function applyEnvelope(env: WSEnvelope): void {
         delta?: string;
         reasoning?: string;
       };
-      const chunk = p.text ?? p.delta ?? "";
-      if (!chunk) return;
 
-      const isReasoning = env.event_type === "assistant.reasoning";
+      // The gateway proxy rewrites both backend event types into a single
+      // 'assistant.delta' envelope for the WS clients:
+      //   spoken chunk    → { delta: <text>,  reasoning: undefined }
+      //   reasoning chunk → { delta: "",      reasoning: <text> }
+      // so we cannot rely on env.event_type alone to tell them apart.
+      // Instead, look at which payload field is populated — the two are
+      // independent additive streams into text and reasoning, and a single
+      // envelope may (in principle) carry both.
+      const textChunk = p.text ?? p.delta ?? "";
+      const reasoningChunk =
+        p.reasoning ?? (env.event_type === "assistant.reasoning" ? textChunk : "");
+      // If the envelope was gateway-rewritten as reasoning-only, its
+      // 'delta' field is an empty string, so make sure that empty string
+      // does not leak into the spoken text stream.
+      const spokenChunk =
+        env.event_type === "assistant.reasoning" || p.reasoning ? "" : textChunk;
+      if (!spokenChunk && !reasoningChunk) return;
+
       const correlationId = env.correlation_id ?? "";
 
       // Resolve target message: explicit message_id > newest open message
@@ -210,16 +225,18 @@ export function applyEnvelope(env: WSEnvelope): void {
         }
       }
 
+      const applyChunks = (existing: AssistantMessage): AssistantMessage => ({
+        ...existing,
+        text: spokenChunk ? (existing.text ?? "") + spokenChunk : existing.text,
+        reasoning: reasoningChunk
+          ? (existing.reasoning ?? "") + reasoningChunk
+          : existing.reasoning,
+      });
+
       if (targetId) {
         const existing = byId[targetId] as AssistantMessage | undefined;
         if (existing) {
-          $messages.setKey(targetId, {
-            ...existing,
-            text: isReasoning ? existing.text : (existing.text ?? "") + chunk,
-            reasoning: isReasoning
-              ? (existing.reasoning ?? "") + chunk
-              : existing.reasoning,
-          });
+          $messages.setKey(targetId, applyChunks(existing));
           return;
         }
         // targetId set (from payload.message_id) but no message exists yet
@@ -228,8 +245,8 @@ export function applyEnvelope(env: WSEnvelope): void {
         const msg: AssistantMessage = {
           id: targetId,
           role: "assistant",
-          text: isReasoning ? "" : chunk,
-          reasoning: isReasoning ? chunk : undefined,
+          text: spokenChunk,
+          reasoning: reasoningChunk || undefined,
           created_at: now,
           completed: false,
           correlation_id: correlationId,
@@ -248,8 +265,8 @@ export function applyEnvelope(env: WSEnvelope): void {
       const msg: AssistantMessage = {
         id: newId,
         role: "assistant",
-        text: isReasoning ? "" : chunk,
-        reasoning: isReasoning ? chunk : undefined,
+        text: spokenChunk,
+        reasoning: reasoningChunk || undefined,
         created_at: now,
         completed: false,
         correlation_id: correlationId,
