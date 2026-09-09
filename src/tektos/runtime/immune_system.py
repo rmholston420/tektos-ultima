@@ -957,11 +957,18 @@ class ModelFailoverDetector:
 
     name = "model_failover"
 
+    # Ports that Tektos legitimately targets as an LLM_BASE_URL:
+    #   8090 — direct primary (Qwen on GPU)          — DANGEROUS as sole endpoint
+    #                                                    if primary is/goes down
+    #   8093 — Hermes proxy (owns 8090→8092 failover) — SAFE, recommended default
+    # See docs/HERMES_TOPOLOGY.md for the full rationale.
     _FAILOVER_PATTERNS: list[tuple[str, str, ThreatSeverity]] = [
-        # Changing SDK config to point to dead endpoint
+        # Changing SDK config to point directly at primary port with no fallback
+        # path — if primary dies Tektos has nowhere to go. Hermes at 8093 is the
+        # safe way to target the primary because Hermes handles failover itself.
         (
             r"(?i)\bTEKTOS_LLM_BASE_URL\s*=\s*['\"]?http://127\.0\.0\.1:8090",
-            "SDK config pointing to primary port (would fail if primary is down)",
+            "SDK config pointing directly at primary port (bypasses Hermes failover; use 8093 or keep 8092 fallback enabled)",
             ThreatSeverity.HIGH,
         ),
         # Stopping primary without starting secondary
