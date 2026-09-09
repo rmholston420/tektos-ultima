@@ -34,12 +34,15 @@ class HealingWorkflow:
     """A multi-step repair workflow.
 
     Workflows handle complex scenarios that require coordinated
-    multi-step repair actions.
+    multi-step repair actions. Like :class:`~tektos.self_repair.strategies.BaseRepairStrategy`,
+    built-in workflows are *simulated* by default — they only mutate the
+    passed-in ``ctx`` dict. See ``TEKTOS_SELF_REPAIR_REQUIRE_REAL``.
     """
 
     name: str = "base"
     triggers: list[str] = []  # Threat categories that trigger this workflow
     min_severity: int = 1
+    simulation: bool = True
 
     async def can_run(self, category: str, severity: int) -> bool:
         return category in self.triggers and severity >= self.min_severity
@@ -408,7 +411,34 @@ class RepairWorkflows:
             severity,
         )
 
-        return await workflow.run(ctx)
+        result = await workflow.run(ctx)
+        if getattr(workflow, "simulation", False):
+            # Same guard as strategies.RepairStrategyRegistry.repair —
+            # loud warning by default, hard failure under
+            # TEKTOS_SELF_REPAIR_REQUIRE_REAL.
+            import os as _os
+
+            if _os.getenv("TEKTOS_SELF_REPAIR_REQUIRE_REAL", "").lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                raise NotImplementedError(
+                    f"Healing workflow {workflow.name!r} is simulation-only "
+                    f"but TEKTOS_SELF_REPAIR_REQUIRE_REAL is set."
+                )
+            log.warning(
+                "[self_repair] workflow %s executed SIMULATED repair \u2014 no "
+                "real syscall was made. ctx mutation only.",
+                workflow.name,
+            )
+            marker = " [simulated]"
+            if result.verification_details and marker not in result.verification_details:
+                result.verification_details = f"{result.verification_details}{marker}"
+            elif not result.verification_details:
+                result.verification_details = "simulated"
+        return result
 
     def list_workflows(self) -> list[dict[str, Any]]:
         """List all registered workflows."""
