@@ -1833,7 +1833,7 @@ async def prompt_sse(body: _PromptSSEBody):
                     }
                     await event_queue.put(_sse_frame(chunk))
 
-                elif et == "tool.permission_required":
+                elif et == "tool.permission.required":
                     # Tool permission request — emit as custom hermes.tool.progress
                     tool_id = payload.get("tool_id", "")
                     tool_name = payload.get("tool_name", "")
@@ -4278,6 +4278,28 @@ async def embedder_status():
     }
 
 
+@app.post("/api/embedder/embed")
+async def embedder_embed(payload: dict[str, Any]):
+    """Generate an embedding for the supplied text."""
+    if _embedder_client is None:
+        return {"error": "embedder not initialized"}
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        return {"error": "text is required"}
+    try:
+        result = await _embedder_client.embed(text)
+        embeddings = result.embeddings or []
+        first = embeddings[0] if embeddings else []
+        return {
+            "model": result.model,
+            "dimensions": len(first),
+            "usage": result.usage,
+            "embedding_preview": first[:8],
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 @app.get("/api/evaluation/status")
 async def evaluation_status():
     """Evaluation harness status."""
@@ -4307,6 +4329,46 @@ async def inference_status():
         "health": "ok" if available else "llm_backend_unreachable",
         "llm_available": available,
     }
+
+
+@app.get("/api/inference/metrics")
+async def inference_metrics():
+    """Aggregate inference-engine metrics collected from active llama.cpp instances.
+
+    Returns a flat dict shaped for the frontend InferencePanel; keys are
+    optional and only populated when the monitor is up.
+    """
+    if _inference_monitor is None:
+        return {
+            "total_tokens": 0,
+            "tokens_per_second": 0.0,
+            "cache_hit_rate": 0.0,
+            "avg_prompt_latency": 0.0,
+            "avg_generation_latency": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "status": "monitor_not_initialized",
+        }
+    try:
+        state = await _inference_monitor.collect_all_metrics()
+        instances = list(state.instances.values())
+        if not instances:
+            return {"total_tokens": 0, "status": "no_active_instances"}
+        tps = sum(m.predicted_tokens_seconds for m in instances) / len(instances)
+        prompt_lat = sum(m.avg_prompt_latency_ms for m in instances) / len(instances)
+        gen_lat = sum(m.avg_generation_latency_ms for m in instances) / len(instances)
+        return {
+            "total_tokens": int(state.total_tokens_processed),
+            "tokens_per_second": round(tps, 2),
+            "cache_hit_rate": round(state.avg_cache_hit_rate, 3),
+            "avg_prompt_latency": round(prompt_lat, 2),
+            "avg_generation_latency": round(gen_lat, 2),
+            "prompt_tokens": int(sum(m.prompt_tokens_total for m in instances)),
+            "completion_tokens": int(sum(m.tokens_predicted_total for m in instances)),
+            "instances": len(instances),
+        }
+    except Exception as exc:
+        return {"error": str(exc), "status": "collection_failed"}
 
 
 @app.post("/api/self_improvement/enqueue")
@@ -4446,6 +4508,37 @@ async def orchestrator_status():
         "long_running_agent": _long_running_agent is not None,
         "coding_executor": _coding_agent_executor is not None,
     }
+
+
+@app.get("/api/multi-agent-orchestrator/agents")
+async def orchestrator_agents():
+    """List registered orchestrator sub-agents with their live state."""
+    agents: list[dict[str, Any]] = []
+    if _hierarchical_agent is not None:
+        agents.append({
+            "id": "hierarchical",
+            "name": "Hierarchical Planner",
+            "role": "planner",
+            "status": "ready",
+            "active_tasks": len(getattr(_hierarchical_agent, "_active_tasks", []) or []),
+        })
+    if _long_running_agent is not None:
+        agents.append({
+            "id": "long_running",
+            "name": "Long-Running Executor",
+            "role": "executor",
+            "status": "ready",
+            "active_tasks": len(getattr(_long_running_agent, "_active_tasks", []) or []),
+        })
+    if _coding_agent_executor is not None:
+        agents.append({
+            "id": "coding",
+            "name": "Coding Agent",
+            "role": "executor",
+            "status": "ready",
+            "active_tasks": len(getattr(_coding_agent_executor, "_active_sessions", []) or []),
+        })
+    return agents
 
 
 @app.get("/api/nervous-system/status")

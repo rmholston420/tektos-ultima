@@ -477,7 +477,7 @@ async def _ws_reader_loop(sid, ws):
                     )
                     await _broadcast_to_clients(event)
 
-                elif event_type == "tool.permission_required":
+                elif event_type == "tool.permission.required":
                     event = _notification(
                         "event",
                         {

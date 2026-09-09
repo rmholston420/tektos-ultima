@@ -377,7 +377,7 @@ class TestHandleToolCompletion:
         )
         assert result == "Tool rejected by user"
         event_types = [e.event_type for e in events]
-        assert "tool.permission_required" in event_types
+        assert "tool.permission.required" in event_types
         completed_events = [e for e in events if e.event_type == "tool.completed"]
         assert len(completed_events) == 1
         assert completed_events[0].payload.get("status") == "rejected"
@@ -402,7 +402,7 @@ class TestHandleToolCompletion:
         )
         assert result == "ls output"
         event_types = [e.event_type for e in events]
-        assert "tool.permission_required" in event_types
+        assert "tool.permission.required" in event_types
         completed_events = [e for e in events if e.event_type == "tool.completed"]
         assert len(completed_events) == 1
         assert completed_events[0].payload.get("status") == "success"
@@ -422,7 +422,7 @@ class TestHandleToolCompletion:
         )
         assert result == "Tool rejected: no approval callback"
         event_types = [e.event_type for e in events]
-        assert "tool.permission_required" in event_types
+        assert "tool.permission.required" in event_types
         completed_events = [e for e in events if e.event_type == "tool.completed"]
         assert len(completed_events) == 1
         assert completed_events[0].payload.get("status") == "rejected"

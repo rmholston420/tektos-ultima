@@ -91,24 +91,6 @@ export interface Axiom {
   verified_at?: string;
 }
 
-export interface RepographNode {
-  filepath: string;
-  language: string;
-  classes: string[];
-  functions: string[];
-  imports: string[];
-  dependencies: string[];
-  pagerank: number;
-}
-
-export interface GitStatus {
-  is_repo: boolean;
-  branch: string;
-  is_dirty: boolean;
-  staged_files: string[];
-  head_hash: string;
-}
-
 export interface LogEntry {
   level: "DEBUG" | "INFO" | "WARNING" | "ERROR";
   logger: string;
@@ -240,7 +222,7 @@ class ApiClient {
 
   // Routing
   async getModels(): Promise<ModelProfile[]> {
-    return this.request("/api/routing/models");
+    return this.request("/api/models");
   }
 
   async getRoutingDecision(task: string, complexity: number): Promise<RoutingDecision> {
@@ -257,20 +239,6 @@ class ApiClient {
 
   async verifyAxiom(id: string): Promise<void> {
     await this.request(`/api/axioms/${id}/verify`, { method: "POST" });
-  }
-
-  // Repograph
-  async getRepograph(): Promise<RepographNode[]> {
-    return this.request("/api/repograph");
-  }
-
-  // Git
-  async getGitStatus(): Promise<GitStatus> {
-    return this.request("/api/git/status");
-  }
-
-  async getGitCommits(count: number = 10): Promise<any[]> {
-    return this.request(`/api/git/commits?count=${count}`);
   }
 
   // Plugins

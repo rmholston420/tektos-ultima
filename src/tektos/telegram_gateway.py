@@ -583,7 +583,7 @@ class TelegramGateway:
                             error_msg = event.get("payload", {}).get("error", "")
                             await self._send_message(user_id, f"❌ *Tool error:* {error_msg}")
 
-                    elif event_type == "tool.permission_required":
+                    elif event_type == "tool.permission.required":
                         await self._send_permission_request(user_id, event)
 
                     elif event_type == "session.failed":

@@ -397,7 +397,7 @@ async def _ws_reader_loop(sid: str, ws: websockets.WebSocketClientProtocol) -> N
                     )
                 )
 
-            elif event_type == "tool.permission_required":
+            elif event_type == "tool.permission.required":
                 _write(
                     _notification(
                         "event",

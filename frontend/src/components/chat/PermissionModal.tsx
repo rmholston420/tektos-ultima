@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useStore } from "@nanostores/react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { $permissionQueue, resolvePermission } from "@/lib/stores/session";
@@ -19,6 +20,13 @@ export function PermissionModal() {
     getProtocolClient().sendPermission(current.request_id, granted);
     resolvePermission(current.request_id);
   };
+
+  // Palette action “Approve next permission prompt” dispatches this event.
+  useEffect(() => {
+    const handler = () => decide(true);
+    window.addEventListener("tektos:permission:approve", handler);
+    return () => window.removeEventListener("tektos:permission:approve", handler);
+  }, [current]);
 
   return (
     <Dialog.Root open={current !== null} onOpenChange={(o) => !o && decide(false)}>

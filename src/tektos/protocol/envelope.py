@@ -15,7 +15,7 @@ Every event uses a versioned envelope:
 Required event types:
   - session.created / session.ready / session.updated
   - assistant.delta / assistant.completed
-  - tool.started / tool.delta / tool.completed / tool.permission_required
+  - tool.started / tool.delta / tool.completed / tool.permission.required
   - system.message
   - session.interrupted / session.failed
   - self_improvement.tick / resource.warning
@@ -56,7 +56,7 @@ class EventType(str, Enum):
     TOOL_STARTED = "tool.started"
     TOOL_DELTA = "tool.delta"
     TOOL_COMPLETED = "tool.completed"
-    TOOL_PERMISSION_REQUIRED = "tool.permission_required"
+    TOOL_PERMISSION_REQUIRED = "tool.permission.required"
 
     SYSTEM_MESSAGE = "system.message"
 
@@ -66,6 +66,12 @@ class EventType(str, Enum):
     SELF_IMPROVEMENT_TICK = "self_improvement.tick"
     RESOURCE_WARNING = "resource.warning"
     LOOP_SAFETY_WARNING = "loop_safety.warning"
+
+    PLAN_PROPOSED = "plan.proposed"
+    PLAN_APPROVED = "plan.approved"
+
+    ARTIFACT_CREATED = "artifact.created"
+    ARTIFACT_UPDATED = "artifact.updated"
 
 
 # ---------------------------------------------------------------------------
@@ -313,5 +319,86 @@ def loop_safety_warning(
         payload={
             "state": state,
             "details": details or {},
+        },
+    )
+
+
+def plan_proposed(
+    session_id: str,
+    plan_id: str,
+    steps: list[dict[str, Any]],
+) -> WSEnvelope:
+    """Planner has produced a plan; frontend renders it and awaits approval.
+
+    Each step is ``{"id": str, "text": str, "requires_approval"?: bool}``.
+    """
+    return WSEnvelope(
+        session_id=session_id,
+        event_type=EventType.PLAN_PROPOSED,
+        payload={
+            "plan_id": plan_id,
+            "steps": steps,
+        },
+    )
+
+
+def plan_approved(
+    session_id: str,
+    plan_id: str,
+    approved_by: str | None = None,
+) -> WSEnvelope:
+    """Plan has been approved (by the user or an auto-approver)."""
+    return WSEnvelope(
+        session_id=session_id,
+        event_type=EventType.PLAN_APPROVED,
+        payload={
+            "plan_id": plan_id,
+            "approved_by": approved_by,
+        },
+    )
+
+
+def artifact_created(
+    session_id: str,
+    artifact_id: str,
+    kind: str,
+    title: str,
+    *,
+    path: str | None = None,
+    url: str | None = None,
+    content_type: str | None = None,
+    bytes_len: int | None = None,
+) -> WSEnvelope:
+    """A new artifact (file, url, diff, or note) has been produced."""
+    return WSEnvelope(
+        session_id=session_id,
+        event_type=EventType.ARTIFACT_CREATED,
+        payload={
+            "artifact_id": artifact_id,
+            "kind": kind,
+            "title": title,
+            "path": path,
+            "url": url,
+            "content_type": content_type,
+            "bytes": bytes_len,
+        },
+    )
+
+
+def artifact_updated(
+    session_id: str,
+    artifact_id: str,
+    *,
+    patch: dict[str, Any] | None = None,
+    version: int | None = None,
+) -> WSEnvelope:
+    """An existing artifact has been revised. ``patch`` is a partial update."""
+    return WSEnvelope(
+        session_id=session_id,
+        event_type=EventType.ARTIFACT_UPDATED,
+        payload={
+            "artifact_id": artifact_id,
+            "patch": patch or {},
+            "version": version,
         },
     )

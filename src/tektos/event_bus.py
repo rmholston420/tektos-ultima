@@ -13,7 +13,7 @@ Design:
 VSM Layer Subscriptions (default):
 - S1 (Coding Agent): tool.*, assistant.*
 - S2 (Event Stream): all types (reads all)
-- S3 (Manager): resource.*, loop_safety.*, session.failed, tool.permission_required
+- S3 (Manager): resource.*, loop_safety.*, session.failed, tool.permission.required
 - S4 (Planner): self_improvement.*, resource.warning (for proposals)
 - S5 (Axioms): session.failed (for validation)
 
