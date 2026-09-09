@@ -720,6 +720,53 @@ class DangerousCommandDetector:
         return threats
 
 
+# Patterns that indicate a bash command actually *writes* to something,
+# used by SelfModificationDetector to skip read-only reconnaissance.
+_BASH_WRITE_TOKENS = (
+    r"\brm\b",
+    r"\bmv\b",
+    r"\bcp\b",
+    r"\btee\b",
+    r"\bdd\b",
+    r"\bchmod\b",
+    r"\bchown\b",
+    r"\btruncate\b",
+    r"\bsed\s+-i\b",
+    r"\bawk\s+-i\s+inplace\b",
+    r"\bperl\s+-i\b",
+    r"\becho\b[^|]*>",
+    r"\bprintf\b[^|]*>",
+    r"\bcat\b[^|]*>",
+    r">\s*[/.a-zA-Z0-9_-]+",       # any redirect target that looks like a file
+    r">>\s*[/.a-zA-Z0-9_-]+",
+    r"\bgit\s+(commit|add|checkout|reset|revert|rebase|push|apply|am|mv|rm)\b",
+    r"\bpatch\b",
+    r"\btouch\b",
+    r"\bmkdir\b",
+    r"\brmdir\b",
+    r"\bln\b",
+    r"\btrash\b",
+)
+_BASH_WRITE_RE = re.compile("|".join(_BASH_WRITE_TOKENS))
+
+
+def _bash_command_writes(command: str) -> bool:
+    """Return True when the bash *command* could mutate the filesystem.
+
+    Pure reads (``cat`` / ``head`` / ``tail`` / ``wc`` / ``grep`` / ``ls`` /
+    ``less`` / ``file`` / ``stat`` / ``find`` without ``-delete``) return
+    False even when they mention a protected path.
+    """
+    if not command:
+        return False
+    if _BASH_WRITE_RE.search(command):
+        return True
+    # `find ... -delete` is a mutation.
+    if re.search(r"\bfind\b.*\s-delete\b", command):
+        return True
+    return False
+
+
 class SelfModificationDetector:
     """Detects attempts to modify core system files (self-modification guard).
 
@@ -770,9 +817,17 @@ class SelfModificationDetector:
                         )
                     )
 
-        # Check bash commands that modify protected files
+        # Check bash commands that modify protected files. Read-only
+        # commands (cat, head, wc, grep, less, ls) that merely reference a
+        # protected path must not trigger the self-modification guard —
+        # earlier every 'wc -l src/tektos/main.py' fired a 'Self-modification
+        # attempt' warning that leaked into the model's log-tail context
+        # and caused it to hallucinate a sandbox block on read-only
+        # exploration.
         elif ctx.tool_name == "bash":
             command = ctx.tool_input.get("command", "") or ""
+            if not _bash_command_writes(command):
+                return threats
             for pattern, desc in self._compiled:
                 if pattern.search(command):
                     threats.append(

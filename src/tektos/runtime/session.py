@@ -17,6 +17,7 @@ import logging as _log
 import time as _time
 import uuid as _uuid
 from dataclasses import dataclass, field
+from pathlib import Path as _Path
 from typing import Any
 
 from tektos.state_machine import State, get_state_machine
@@ -100,10 +101,19 @@ class SessionManager:
     ) -> LiveSession:
         """Create a new session. Emits session.created to event store and state machine."""
         session_id = str(_uuid.uuid4())
+        # Resolve the working directory to an absolute path so the header
+        # status stack ('/home/user/dev/tektos-ultima-v1') isn't rendered
+        # as the useless literal '.', and so tools that snapshot session
+        # state see a stable path that doesn't drift with the server
+        # process's own cwd.
+        try:
+            resolved_cwd = str(_Path(cwd).expanduser().resolve())
+        except Exception:
+            resolved_cwd = cwd
         session = LiveSession(
             id=session_id,
             model=model,
-            cwd=cwd,
+            cwd=resolved_cwd,
             permission_mode=permission_mode,
             root_session_id=fork_session_id or resume_session_id,
         )
