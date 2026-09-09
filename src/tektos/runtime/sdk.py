@@ -1198,6 +1198,39 @@ class RuntimeSDK:
         # Add current prompt
         messages.append({"role": "user", "content": prompt})
 
+        # Classify the prompt intent so termination heuristics stop treating
+        # every text-only turn as an abandoned build task. The pre-existing
+        # anti-abandonment nudge ("STOP. You have not finished the task — no
+        # output file has been created") is correct for build/create/write
+        # prompts, but it poisons Q&A / explore / summarize prompts: those
+        # complete with a text answer and NO file, so the nudge fires
+        # forever and the turn never terminates. This flag lets the
+        # completion branch skip the file-required nudge for read-only
+        # prompts.
+        _prompt_lc = (prompt or "").lower()
+        _build_verbs = (
+            "write ", "create ", "build ", "implement ", "generate ",
+            "make a ", "make an ", "produce ", "scaffold ", "add a ",
+            "add an ", "save ", "export ", "emit ", "draft ",
+        )
+        _readonly_verbs = (
+            "summarize", "summarise", "explain", "describe", "list",
+            "show", "tell me", "what ", "how ", "why ", "which ",
+            "explore", "analyze", "analyse", "review", "audit",
+            "walk me through", "give me an overview", "outline",
+            "compare", "contrast", "find", "look up", "look at",
+            "open ", "read ", "inspect", "check",
+        )
+        _has_build = any(v in _prompt_lc for v in _build_verbs)
+        _has_readonly = any(v in _prompt_lc for v in _readonly_verbs)
+        # Only require a file/deliverable when the prompt CLEARLY asks for one
+        # and doesn't also ask for a read-only response.
+        _prompt_requires_file = _has_build and not _has_readonly
+        log.info(
+            f"[SDK] Prompt intent for {session.id[:8]}: "
+            f"requires_file={_prompt_requires_file} (build={_has_build}, readonly={_has_readonly})"
+        )
+
         # Apply context compaction if available — 4-tier compression
         if self._context_compactor:
             # Estimate token count (rough: 4 chars per token)
@@ -2062,7 +2095,41 @@ class RuntimeSDK:
                             if isinstance(m.get("content"), str) is False and m.get("tool_calls")
                         )
 
-                        if not _explicit_done and _text_only_nudges < 3:
+                        # For read-only prompts (summarize / explain / list /
+                        # explore / Q&A), a substantive text answer with
+                        # finish_reason=='stop' IS the completion signal. The
+                        # "you haven't written the file yet" nudge is only
+                        # correct for build/create/write prompts — firing it
+                        # on a Q&A turn poisons the response and traps the
+                        # loop forever.
+                        _natural_stop = finish_reason in ("stop", "end_turn") or stop_reason == "end_turn"
+                        _substantive = len(current_text.strip()) >= 40
+                        if (
+                            not _prompt_requires_file
+                            and _natural_stop
+                            and _substantive
+                        ):
+                            log.info(
+                                f"[SDK] Read-only prompt completed for {session.id[:8]} "
+                                f"(finish_reason={finish_reason} len={len(current_text)})"
+                            )
+                            await on_event(
+                                assistant_completed(session.id, stop_reason or "end_turn")
+                            )
+                            try:
+                                await append_event(
+                                    session.id,
+                                    "assistant.completed",
+                                    {"stop_reason": stop_reason or "end_turn"},
+                                )
+                            except Exception:
+                                pass
+                            messages.append(
+                                {"role": "assistant", "content": current_text}
+                            )
+                            return
+
+                        if not _explicit_done and _prompt_requires_file and _text_only_nudges < 3:
                             # Model went quiet but didn't signal completion —
                             # push it back to work instead of ending the session.
                             _text_only_nudges += 1
