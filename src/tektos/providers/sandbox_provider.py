@@ -55,7 +55,17 @@ MAX_OUTPUT_SIZE = 100_000
 
 
 class SandboxProvider:
-    """Execute tools safely within a filesystem root sandbox."""
+    """Execute tools safely within a filesystem root sandbox.
+
+    Implements :class:`tektos.ports.SandboxProviderPort` via duck typing:
+    exposes ``name``, ``kind``, ``version``, ``start``, ``stop``,
+    ``health``, and ``execute``.
+    """
+
+    # ProviderPort metadata
+    name: str = "local-sandbox"
+    kind: str = "sandbox"
+    version: str = "1.0.0"
 
     def __init__(
         self,
@@ -75,6 +85,23 @@ class SandboxProvider:
         if not self.fs_root.exists():
             log.warning("Sandbox root %s does not exist, creating it", self.fs_root)
             self.fs_root.mkdir(parents=True, exist_ok=True)
+
+    # ── ProviderPort lifecycle ────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """No-op for the local sandbox; kept for :class:`ProviderPort`."""
+        return None
+
+    async def stop(self) -> None:
+        """No-op for the local sandbox; kept for :class:`ProviderPort`."""
+        return None
+
+    async def health(self) -> bool:
+        """Return ``True`` when the sandbox root is writable."""
+        try:
+            return self.fs_root.exists() and self.fs_root.is_dir()
+        except OSError:
+            return False
 
     def execute(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         """Execute a tool by name with given input. Returns result string."""
