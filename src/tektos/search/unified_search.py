@@ -11,7 +11,9 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,6 +74,9 @@ class UnifiedSearch:
         ]
         self._index: dict[str, list[tuple[int, str]]] = {}  # file -> [(line_no, text)]
         self._indexed = False
+        # file_path -> (content_hash, embedding). Content hash is over the
+        # exact text we embedded, so a reindex + edit invalidates cleanly.
+        self._embedding_cache: dict[str, tuple[str, list[float]]] = {}
 
     def index(self) -> int:
         """Index all files in root_dir. Returns file count."""
@@ -217,53 +222,82 @@ class UnifiedSearch:
         query: str,
         file_pattern: str | None = None,
     ) -> list[SearchResult]:
-        """Embedding-based semantic search via embedding service."""
+        """Embedding-based semantic search via a local embedding service.
+
+        Contract with the embedding service: HTTP POST to
+        ``{embedding_url}/embeddings`` with JSON
+        ``{"input": <str|list[str]>, "model": "all-MiniLM-L6-v2"}``,
+        returning ``{"data": [{"embedding": [float,...]}, ...]}`` (OpenAI-
+        compatible envelope). Per-file embeddings are cached keyed by a
+        SHA-256 of the exact text we embedded so re-runs skip network I/O
+        when files haven't changed.
+
+        Scoring is real cosine similarity in [-1, 1]; we filter results
+        below ``0.2`` (a permissive threshold that keeps clearly
+        unrelated files out) and scale the surviving scores by 5.0 so
+        they sit in the same order of magnitude as keyword-search
+        scores when the caller merges the two.
+        """
         import httpx
 
-        # Get embedding for query
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{self.embedding_url}/embeddings",
-                json={"input": query, "model": "all-MiniLM-L6-v2"},
-            )
-            resp.raise_for_status()
-            resp.json()["data"][0]["embedding"]
-
-        # Simple cosine similarity search (in-memory for now)
-        # In production, this would use a vector DB
-        results: list[SearchResult] = []
-
+        # 1) Gather files we need to score, computing (text, hash) once.
+        candidates: list[tuple[str, str, str]] = []  # (filepath, text, content_hash)
         for filepath, lines in self._index.items():
             if file_pattern and not re.search(file_pattern, filepath):
                 continue
-
-            # Build a simple text representation for embedding
-            text = " ".join(line for _, line in lines[:50])  # First 50 lines
+            text = " ".join(line for _, line in lines[:50])
             if not text.strip():
                 continue
+            content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            candidates.append((filepath, text, content_hash))
 
-            # For now, use keyword overlap as a proxy for semantic similarity
-            # In production, this would compare actual embeddings
-            query_words = set(re.split(r"\s+", query.lower()))
-            text_words = set(re.split(r"\s+", text.lower()))
-            overlap = len(query_words & text_words)
-            score = overlap / max(len(query_words), 1) * 5.0
+        if not candidates:
+            return []
 
-            if score > 0:
-                results.append(
-                    SearchResult(
-                        file_path=filepath,
-                        score=score,
-                        snippet=text[:200],
-                        metadata={"method": "semantic"},
-                    )
+        # 2) Figure out which files are cache misses.
+        misses: list[tuple[int, str]] = [
+            (idx, text)
+            for idx, (filepath, text, content_hash) in enumerate(candidates)
+            if self._embedding_cache.get(filepath, (None, None))[0] != content_hash
+        ]
+
+        # 3) One HTTP round trip: query + all misses batched in ``input``.
+        async with httpx.AsyncClient(timeout=30) as client:
+            payload_inputs: list[str] = [query] + [text for _, text in misses]
+            resp = await client.post(
+                f"{self.embedding_url}/embeddings",
+                json={"input": payload_inputs, "model": "all-MiniLM-L6-v2"},
+            )
+            resp.raise_for_status()
+            data = resp.json()["data"]
+
+        query_embedding: list[float] = data[0]["embedding"]
+        for (idx, _text), entry in zip(misses, data[1:], strict=True):
+            filepath, _, content_hash = candidates[idx]
+            self._embedding_cache[filepath] = (content_hash, entry["embedding"])
+
+        # 4) Real cosine similarity against every candidate.
+        results: list[SearchResult] = []
+        for filepath, text, _content_hash in candidates:
+            _, doc_embedding = self._embedding_cache[filepath]
+            similarity = _cosine_similarity(query_embedding, doc_embedding)
+            if similarity < 0.2:
+                continue
+            results.append(
+                SearchResult(
+                    file_path=filepath,
+                    score=similarity * 5.0,
+                    snippet=text[:200],
+                    metadata={"method": "semantic", "cosine": round(similarity, 4)},
                 )
+            )
 
         return results
 
     def clear_index(self) -> None:
-        """Clear the search index."""
+        """Clear the search index and any cached embeddings."""
         self._index.clear()
+        self._embedding_cache.clear()
         self._indexed = False
         log.info("Search index cleared")
 
@@ -276,6 +310,26 @@ class UnifiedSearch:
             "embedding_url": self.embedding_url,
             "indexed": self._indexed,
         }
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two equal-length embedding vectors.
+
+    Returns 0.0 for length mismatch or zero-norm inputs so callers never
+    have to guard against ``NaN``/``ZeroDivisionError`` in the hot loop.
+    """
+    if len(a) != len(b) or not a:
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b, strict=True):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / math.sqrt(norm_a * norm_b)
 
 
 # Singleton

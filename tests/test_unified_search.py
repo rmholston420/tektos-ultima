@@ -14,8 +14,8 @@ from tektos.search.unified_search import (
     reset_unified_search,
 )
 
-
 # ─── SearchResult ─────────────────────────────────────────────────────────────
+
 
 class TestSearchResult:
     def test_creation(self):
@@ -43,6 +43,7 @@ class TestSearchResult:
 
 # ─── UnifiedSearch ────────────────────────────────────────────────────────────
 
+
 class TestUnifiedSearch:
     def setup_method(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -53,9 +54,7 @@ class TestUnifiedSearch:
         (Path(self.tmpdir) / "test2.md").write_text(
             "# Test File\n\nThis is a test file for searching.\n"
         )
-        (Path(self.tmpdir) / "test3.json").write_text(
-            '{"name": "test", "value": 42}\n'
-        )
+        (Path(self.tmpdir) / "test3.json").write_text('{"name": "test", "value": 42}\n')
         self.search = UnifiedSearch(root_dir=self.tmpdir, max_results=10)
 
     def test_creation(self):
@@ -167,7 +166,154 @@ class TestUnifiedSearch:
             assert "lines_indexed" in r.metadata
 
 
+# ─── Semantic search / cosine similarity ─────────────────────────────────────
+
+
+class TestCosineSimilarity:
+    def test_orthogonal_returns_zero(self):
+        from tektos.search.unified_search import _cosine_similarity
+
+        assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0
+
+    def test_identical_returns_one(self):
+        from tektos.search.unified_search import _cosine_similarity
+
+        assert _cosine_similarity([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) == 1.0
+
+    def test_opposite_returns_negative_one(self):
+        from tektos.search.unified_search import _cosine_similarity
+
+        assert _cosine_similarity([1.0, 0.0], [-1.0, 0.0]) == -1.0
+
+    def test_length_mismatch_returns_zero(self):
+        from tektos.search.unified_search import _cosine_similarity
+
+        assert _cosine_similarity([1.0], [1.0, 2.0]) == 0.0
+
+    def test_zero_vector_returns_zero(self):
+        from tektos.search.unified_search import _cosine_similarity
+
+        assert _cosine_similarity([0.0, 0.0], [1.0, 1.0]) == 0.0
+
+
+class TestSemanticSearch:
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        # Two files: one closer to the query "database queries" than the other.
+        (Path(self.tmpdir) / "db.py").write_text(
+            "def run_query(sql): return conn.execute(sql).fetchall()\n"
+        )
+        (Path(self.tmpdir) / "unrelated.py").write_text("def add(a, b): return a + b\n")
+        self.search = UnifiedSearch(
+            root_dir=self.tmpdir,
+            embedding_url="http://localhost:8091",
+            max_results=10,
+        )
+        self.search.index()
+
+    def test_semantic_uses_cosine_and_caches_embeddings(self, monkeypatch):
+        """Prove: (1) we compute real cosine, (2) misses go to HTTP once,
+        (3) a second call is served entirely from cache (0 network calls
+        for embeddings, only the query embedding is fetched).
+        """
+        import httpx
+
+        # Deterministic "embeddings": name-based so we can compute expected
+        # cosine by hand.
+        # Note the trailing spaces: _semantic_search builds text by joining
+        # every indexed line, and the file's terminal newline produces an
+        # extra empty line that shows up as a trailing space.
+        vectors: dict[str, list[float]] = {
+            "database queries": [1.0, 0.0, 0.0],
+            "def run_query(sql): return conn.execute(sql).fetchall() ": [
+                0.9,
+                0.1,
+                0.0,
+            ],
+            "def add(a, b): return a + b ": [0.0, 1.0, 0.0],
+        }
+
+        request_count = {"n": 0}
+
+        class _FakeResp:
+            def __init__(self, data: dict):
+                self._data = data
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return self._data
+
+        class _FakeClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc) -> None:
+                return None
+
+            async def post(self, url, json):
+                request_count["n"] += 1
+                inputs = json["input"]
+                # Return vectors in input order; unknown inputs get zeros.
+                data = [{"embedding": vectors.get(text, [0.0, 0.0, 1.0])} for text in inputs]
+                return _FakeResp({"data": data})
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+
+        # First call: one HTTP round trip carrying query + both file embeddings.
+        results = asyncio.run(self.search._semantic_search("database queries"))
+        assert request_count["n"] == 1
+        # db.py should win by a lot.
+        top = max(results, key=lambda r: r.score)
+        assert top.file_path.endswith("db.py")
+        assert top.metadata["method"] == "semantic"
+        assert "cosine" in top.metadata
+        # Cache is populated for both files.
+        assert len(self.search._embedding_cache) == 2
+
+        # Second call reuses cache: only the query is embedded (still 1 request),
+        # but the payload should carry only the query, no misses.
+        second = asyncio.run(self.search._semantic_search("database queries"))
+        assert request_count["n"] == 2  # one more request, for the query only
+        assert second[0].file_path.endswith("db.py")
+
+    def test_semantic_returns_empty_when_no_candidates(self, monkeypatch):
+        # Pattern that matches no file -> no HTTP call, no results.
+        import httpx
+
+        called = {"n": 0}
+
+        class _FakeClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc) -> None:
+                return None
+
+            async def post(self, *args, **kwargs):
+                called["n"] += 1
+                raise AssertionError("should not be called")
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+        results = asyncio.run(self.search._semantic_search("anything", file_pattern=r"nomatch"))
+        assert results == []
+        assert called["n"] == 0
+
+    def test_clear_index_wipes_embedding_cache(self):
+        self.search._embedding_cache["fake"] = ("hash", [1.0])
+        self.search.clear_index()
+        assert self.search._embedding_cache == {}
+
+
 # ─── Singleton ────────────────────────────────────────────────────────────────
+
 
 class TestSingleton:
     def test_get_unified_search_creates_new(self):
