@@ -287,7 +287,7 @@ class TestSendPromptToSessionEventHandlers:
         rs = AsyncMock()
 
         async def fake_submit(session, prompt, on_event):
-            await on_event({"type": "tool.permission_required", "payload": {"tool_name": "bash", "tool_id": "tool-123"}})
+            await on_event({"type": "tool.permission.required", "payload": {"tool_name": "bash", "tool_id": "tool-123"}})
 
         rs.submit_prompt = AsyncMock(side_effect=fake_submit)
         sm = AsyncMock()

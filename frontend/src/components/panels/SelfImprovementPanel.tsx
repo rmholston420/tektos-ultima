@@ -60,7 +60,51 @@ export function SelfImprovementPanel() {
     loading: true,
     error: null,
   });
-  const [activeTab, setActiveTab] = useState<"metrics" | "experiences" | "report">("metrics");
+  const [activeTab, setActiveTab] = useState<"metrics" | "experiences" | "report" | "queue">("metrics");
+  const [queueStatus, setQueueStatus] = useState<{
+    enabled: boolean;
+    orchestrator_ready: boolean;
+    pending: number;
+    interval_seconds: number;
+  } | null>(null);
+  const [enqueueText, setEnqueueText] = useState("");
+  const [enqueueMsg, setEnqueueMsg] = useState<string | null>(null);
+
+  const fetchQueueStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/self_improvement/status");
+      setQueueStatus(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    void fetchQueueStatus();
+    const t = setInterval(fetchQueueStatus, 15000);
+    return () => clearInterval(t);
+  }, [fetchQueueStatus]);
+
+  const enqueuePrompt = async () => {
+    const prompt = enqueueText.trim();
+    if (!prompt) return;
+    setEnqueueMsg(null);
+    try {
+      const res = await fetch("/api/self_improvement/enqueue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      const body = await res.json();
+      if (body.queued) {
+        setEnqueueMsg(`✓ queued (${body.pending} pending)`);
+        setEnqueueText("");
+        void fetchQueueStatus();
+      } else {
+        setEnqueueMsg(`✗ ${body.error ?? "failed"}`);
+      }
+    } catch (err) {
+      setEnqueueMsg(`✗ ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -140,7 +184,7 @@ export function SelfImprovementPanel() {
           <span className="text-xs text-text-muted">System 4 — Cybernetic Loop</span>
         </div>
         <div className="flex items-center gap-1 bg-bg-3 rounded-lg p-0.5">
-          {(["metrics", "experiences", "report"] as const).map((tab) => (
+          {(["metrics", "experiences", "report", "queue"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -150,7 +194,13 @@ export function SelfImprovementPanel() {
                   : "text-text-muted hover:text-text-primary"
               }`}
             >
-              {tab === "metrics" ? "Metrics" : tab === "experiences" ? "Experiences" : "Report"}
+              {tab === "metrics"
+                ? "Metrics"
+                : tab === "experiences"
+                ? "Experiences"
+                : tab === "report"
+                ? "Report"
+                : "Queue"}
             </button>
           ))}
         </div>
@@ -158,6 +208,56 @@ export function SelfImprovementPanel() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {activeTab === "queue" && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-4 gap-3">
+              <div className="bg-surface rounded-lg p-3 border border-border text-center">
+                <div className={`text-2xl font-bold ${queueStatus?.enabled ? "text-green-400" : "text-text-muted"}`}>
+                  {queueStatus?.enabled ? "on" : "off"}
+                </div>
+                <div className="text-xs text-text-muted">Driver</div>
+              </div>
+              <div className="bg-surface rounded-lg p-3 border border-border text-center">
+                <div className={`text-2xl font-bold ${queueStatus?.orchestrator_ready ? "text-green-400" : "text-text-muted"}`}>
+                  {queueStatus?.orchestrator_ready ? "ready" : "n/a"}
+                </div>
+                <div className="text-xs text-text-muted">Orchestrator</div>
+              </div>
+              <div className="bg-surface rounded-lg p-3 border border-border text-center">
+                <div className="text-2xl font-bold text-text-primary">{queueStatus?.pending ?? 0}</div>
+                <div className="text-xs text-text-muted">Pending</div>
+              </div>
+              <div className="bg-surface rounded-lg p-3 border border-border text-center">
+                <div className="text-2xl font-bold text-text-primary">
+                  {queueStatus ? `${queueStatus.interval_seconds}s` : "—"}
+                </div>
+                <div className="text-xs text-text-muted">Interval</div>
+              </div>
+            </div>
+            <textarea
+              value={enqueueText}
+              onChange={(e) => setEnqueueText(e.target.value)}
+              placeholder="Prompt to enqueue for the self-improvement driver…"
+              className="w-full h-28 rounded bg-black/40 border border-border p-2 font-mono text-11 text-text-primary focus:outline-none focus:border-accent"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={enqueuePrompt}
+                disabled={!enqueueText.trim()}
+                className="rounded bg-accent px-3 py-1.5 text-11 font-medium text-white disabled:opacity-40"
+              >
+                Enqueue
+              </button>
+              {enqueueMsg && <span className="text-11 text-text-muted">{enqueueMsg}</span>}
+            </div>
+            {!queueStatus?.enabled && (
+              <div className="text-11 text-text-muted">
+                Driver is off. Items still queue but need TEKTOS_SELF_IMPROVEMENT_ENABLED=true to process.
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === "metrics" && (
           <>
             {/* Overview Stats */}

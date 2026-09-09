@@ -109,7 +109,72 @@ export function DatabasePanel() {
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [sampleData, setSampleData] = useState<Record<string, unknown>[]>([]);
   const [loadingSample, setLoadingSample] = useState(false);
-  const [activeTab, setActiveTab] = useState<"schema" | "analysis" | "backups">("schema");
+  const [activeTab, setActiveTab] = useState<"schema" | "analysis" | "backups" | "query">("schema");
+
+  // Query tab state
+  const [sql, setSql] = useState<string>("SELECT name FROM sqlite_master WHERE type='table' LIMIT 20;");
+  const [queryResult, setQueryResult] = useState<{ rows: number; data: Record<string, unknown>[] } | null>(null);
+  const [queryError, setQueryError] = useState<string | null>(null);
+  const [queryRunning, setQueryRunning] = useState(false);
+  const [explainPlan, setExplainPlan] = useState<unknown>(null);
+
+  const isDml = (s: string) =>
+    /^\s*(insert|update|delete|replace|drop|alter|create|truncate)\b/i.test(s);
+
+  const runQuery = async () => {
+    setQueryRunning(true);
+    setQueryError(null);
+    setExplainPlan(null);
+    try {
+      if (isDml(sql)) {
+        if (!window.confirm("This looks like a DML/DDL statement. Run it?")) {
+          setQueryRunning(false);
+          return;
+        }
+        const res = await fetch("/api/db/dml", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sql, require_confirmation: false }),
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.detail || body.error || "DML failed");
+        setQueryResult({ rows: body.rows_affected ?? 0, data: [] });
+      } else {
+        const res = await fetch("/api/db/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sql, limit: 500 }),
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.detail || body.error || "Query failed");
+        setQueryResult(body);
+      }
+    } catch (e) {
+      setQueryError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setQueryRunning(false);
+    }
+  };
+
+  const runExplain = async () => {
+    setQueryRunning(true);
+    setQueryError(null);
+    setQueryResult(null);
+    try {
+      const res = await fetch("/api/db/explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || body.error || "Explain failed");
+      setExplainPlan(body);
+    } catch (e) {
+      setQueryError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setQueryRunning(false);
+    }
+  };
 
   const fetchDatabase = useCallback(async () => {
     try {
@@ -204,6 +269,7 @@ export function DatabasePanel() {
         <div className="flex border-b border-slate-700">
           {[
             { key: "schema" as const, label: `Schema (${tableNames.length})` },
+            { key: "query" as const, label: "Query" },
             { key: "analysis" as const, label: `Analysis (${tableNames.length})` },
             { key: "backups" as const, label: `Backups (${backups.length})` },
           ].map((tab) => (
@@ -223,6 +289,75 @@ export function DatabasePanel() {
 
         {/* Tab content */}
         <div className="p-4">
+          {activeTab === "query" && (
+            <div className="space-y-3">
+              <textarea
+                value={sql}
+                onChange={(e) => setSql(e.target.value)}
+                spellCheck={false}
+                className="w-full h-40 rounded bg-black/60 border border-slate-700 p-2 font-mono text-11 text-slate-200 focus:outline-none focus:border-accent"
+                placeholder="Enter SQL…"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={runQuery}
+                  disabled={queryRunning || !sql.trim()}
+                  className="rounded bg-accent px-3 py-1.5 text-11 font-medium text-black disabled:opacity-40"
+                >
+                  {queryRunning ? "Running…" : "Run"}
+                </button>
+                <button
+                  onClick={runExplain}
+                  disabled={queryRunning || !sql.trim()}
+                  className="rounded border border-slate-700 px-3 py-1.5 text-11 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+                >
+                  Explain plan
+                </button>
+                {queryResult && (
+                  <span className="text-11 text-slate-400">
+                    {queryResult.rows} row{queryResult.rows === 1 ? "" : "s"}
+                  </span>
+                )}
+              </div>
+              {queryError && (
+                <div className="rounded border border-red-800 bg-red-950/40 p-2 text-11 text-red-300">
+                  {queryError}
+                </div>
+              )}
+              {explainPlan !== null && explainPlan !== undefined && (
+                <pre className="max-h-64 overflow-auto rounded bg-black/60 border border-slate-700 p-2 font-mono text-10 text-slate-200">
+                  {JSON.stringify(explainPlan, null, 2)}
+                </pre>
+              )}
+              {queryResult && queryResult.data.length > 0 && (
+                <div className="overflow-auto rounded border border-slate-700">
+                  <table className="w-full text-11">
+                    <thead className="bg-slate-800">
+                      <tr>
+                        {Object.keys(queryResult.data[0]).map((k) => (
+                          <th key={k} className="text-left px-2 py-1 font-medium text-slate-300 border-b border-slate-700">
+                            {k}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {queryResult.data.slice(0, 500).map((row, i) => (
+                        <tr key={i} className="odd:bg-black/20">
+                          {Object.values(row).map((v, j) => (
+                            <td key={j} className="px-2 py-1 text-slate-200 font-mono truncate max-w-xs">
+                              {v === null ? <span className="text-slate-500">null</span> : String(v)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === "schema" && (
             <div className="space-y-3">
               {tableNames.length === 0 ? (

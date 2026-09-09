@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "@nanostores/react";
-import { Send, Square } from "lucide-react";
+import { Send, Square, Mic, MicOff } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { $connectionState } from "@/lib/stores/connection";
 import {
@@ -42,6 +42,62 @@ export function Composer() {
   }, [text, autosize]);
 
   const canSend = text.trim().length > 0 && state === "connected" && !streaming;
+
+  // Voice input: MediaRecorder -> POST /api/voice/stt -> append transcript.
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  const stopRecording = useCallback(() => {
+    const rec = recorderRef.current;
+    if (rec && rec.state !== "inactive") rec.stop();
+    setRecording(false);
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/ogg;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ];
+      const mime = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m)) || "";
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      recorderRef.current = rec;
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" });
+        setTranscribing(true);
+        try {
+          const form = new FormData();
+          form.append("audio", blob, "speech.webm");
+          const res = await fetch("/api/voice/stt", { method: "POST", body: form });
+          const body = await res.json();
+          if (body.text) {
+            setText((prev) => (prev ? `${prev} ${body.text}` : body.text));
+            requestAnimationFrame(() => textareaRef.current?.focus());
+          } else if (body.detail || body.error) {
+            console.error("STT failed:", body.detail || body.error);
+          }
+        } catch (err) {
+          console.error("STT request failed:", err);
+        } finally {
+          setTranscribing(false);
+        }
+      };
+      rec.start();
+      setRecording(true);
+    } catch (err) {
+      console.error("Microphone permission denied:", err);
+    }
+  }, []);
 
   const submit = useCallback(() => {
     const trimmed = text.trim();
@@ -112,6 +168,20 @@ export function Composer() {
           )}
           data-testid="composer-input"
         />
+        <button
+          type="button"
+          onClick={recording ? stopRecording : startRecording}
+          disabled={transcribing || state !== "connected"}
+          className={cn(
+            "inline-flex h-8 w-8 items-center justify-center rounded",
+            recording ? "bg-red-500 text-white animate-pulse" : "bg-surface-6 text-text-base hover:bg-surface-7",
+            "transition-colors duration-fast ease disabled:opacity-40",
+          )}
+          title={recording ? "Stop recording" : transcribing ? "Transcribing…" : "Voice input"}
+          data-testid="composer-mic"
+        >
+          {recording ? <MicOff className="h-3 w-3" /> : <Mic className="h-3 w-3" />}
+        </button>
         {streaming ? (
           <button
             type="button"

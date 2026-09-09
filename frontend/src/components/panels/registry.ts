@@ -56,6 +56,7 @@ export const PANELS: PanelMeta[] = [
   { id: "memory",           label: "Memory",             section: "Context & Memory", Component: asDyn(() => import("./MemoryPanel").then((m) => ({ default: m.MemoryPanel }))) },
   { id: "memory_system",    label: "Memory System",      section: "Context & Memory", Component: asDyn(() => import("./MemorySystemPanel").then((m) => ({ default: m.MemorySystemPanel }))) },
   { id: "hindsight",        label: "Hindsight",          section: "Context & Memory", Component: asDyn(() => import("./HindsightPanel").then((m) => ({ default: m.HindsightPanel }))) },
+  { id: "dreamtime",        label: "Dreamtime",          section: "Context & Memory", Component: asDyn(() => import("./DreamtimePanel").then((m) => ({ default: m.DreamtimePanel }))) },
 
   // Retrieval
   { id: "rag",              label: "RAG",                section: "Retrieval",  Component: asDyn(() => import("./RagPanel").then((m) => ({ default: m.RagPanel }))) },
@@ -80,6 +81,9 @@ export const PANELS: PanelMeta[] = [
   { id: "mcp",              label: "MCP",                section: "Integrations", Component: asDyn(() => import("./McpPanel").then((m) => ({ default: m.McpPanel }))) },
   { id: "hooks",            label: "Hooks",              section: "Integrations", Component: asDyn(() => import("./HooksPanel").then((m) => ({ default: m.HooksPanel }))) },
   { id: "scheduling",       label: "Scheduling",         section: "Integrations", Component: asDyn(() => import("./SchedulingPanel").then((m) => ({ default: m.SchedulingPanel }))) },
+
+  // Operator tools
+  { id: "ops",              label: "Ops",                section: "Operator",    Component: asDyn(() => import("./OpsPanel").then((m) => ({ default: m.OpsPanel }))) },
 
   // Configuration
   { id: "config",           label: "Config",             section: "Configuration", Component: asDyn(() => import("./ConfigPanel").then((m) => ({ default: m.ConfigPanel }))) },

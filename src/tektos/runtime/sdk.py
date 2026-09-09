@@ -32,6 +32,10 @@ from tektos.protocol.envelope import (
     loop_safety_warning,
     session_failed,
     tool_completed,
+    artifact_created,
+    artifact_updated,
+    plan_proposed,
+    plan_approved,
     tool_permission_required,
     tool_started,
 )
@@ -349,6 +353,85 @@ hooks = HookRegistry()
 _hook_manager = None
 
 
+# ---------------------------------------------------------------------------
+# Artifact tracking — one seen-set per (session_id, path)
+# ---------------------------------------------------------------------------
+
+_seen_artifacts: dict[str, dict[str, int]] = {}
+
+
+def _artifact_id_for(session_id: str, path: str) -> str:
+    """Deterministic id per (session, path) so updates target the same node."""
+    import hashlib
+
+    h = hashlib.sha1(f"{session_id}:{path}".encode()).hexdigest()[:16]
+    return f"art_{h}"
+
+
+def _guess_content_type(path: str) -> str | None:
+    import mimetypes
+
+    ct, _ = mimetypes.guess_type(path)
+    return ct
+
+
+async def _emit_artifact_from_tool(
+    *,
+    session_id: str,
+    tool_id: str,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    on_event: Any,
+) -> None:
+    """Emit artifact.created / artifact.updated for file-producing tools.
+
+    Currently observes ``file_write`` (path + content) and ``bash`` (best-effort
+    when the command clearly writes to a single file via ``>`` redirection).
+    Silent on unrecognized shapes.
+    """
+    if tool_name != "file_write":
+        return
+    path = tool_input.get("path") if isinstance(tool_input, dict) else None
+    if not isinstance(path, str) or not path:
+        return
+    content = tool_input.get("content") if isinstance(tool_input, dict) else None
+    bytes_len = len(content.encode("utf-8", errors="ignore")) if isinstance(content, str) else None
+
+    seen_by_session = _seen_artifacts.setdefault(session_id, {})
+    aid = _artifact_id_for(session_id, path)
+
+    if aid not in seen_by_session:
+        seen_by_session[aid] = 1
+        try:
+            title = path.rsplit("/", 1)[-1] or path
+            await on_event(
+                artifact_created(
+                    session_id,
+                    aid,
+                    kind="file",
+                    title=title,
+                    path=path,
+                    content_type=_guess_content_type(path),
+                    bytes_len=bytes_len,
+                )
+            )
+        except Exception:
+            log.debug("artifact_created emit failed", exc_info=True)
+    else:
+        seen_by_session[aid] += 1
+        try:
+            await on_event(
+                artifact_updated(
+                    session_id,
+                    aid,
+                    patch={"bytes": bytes_len} if bytes_len is not None else None,
+                    version=seen_by_session[aid],
+                )
+            )
+        except Exception:
+            log.debug("artifact_updated emit failed", exc_info=True)
+
+
 def _fire_hook(event_type: str, **kwargs) -> None:
     """Fire a hook through the global HookManager (set during lifespan).
 
@@ -654,6 +737,28 @@ class RuntimeSDK:
                     log.info(
                         f"[SDK] Planner created plan with {len(plan.steps)} steps for session {session.id[:8]}"
                     )
+                    # Broadcast the plan to the frontend so PlanRow can render it.
+                    if on_event is not None:
+                        try:
+                            steps_payload = [
+                                {
+                                    "id": getattr(step, "id", None) or f"step_{i}",
+                                    "text": step.description,
+                                    "requires_approval": False,
+                                }
+                                for i, step in enumerate(plan.steps)
+                            ]
+                            await on_event(
+                                plan_proposed(session.id, str(plan_id), steps_payload)
+                            )
+                            # Auto-approve: backend does not gate execution on
+                            # user approval today, so the frontend's plan row
+                            # should reflect that.
+                            await on_event(
+                                plan_approved(session.id, str(plan_id), approved_by="auto")
+                            )
+                        except Exception:
+                            log.debug("plan.* emit failed", exc_info=True)
             except Exception as exc:
                 log.debug(f"[SDK] Planning failed (non-fatal): {exc}")
 
@@ -1850,6 +1955,19 @@ class RuntimeSDK:
             result = await self._execute_tool(tool_name, tool_input)
             completed_tools.add(tool_id)  # Mark as completed BEFORE returning
             await on_event(tool_completed(session.id, tool_id, "success", str(result)))
+
+            # Emit artifact.created / artifact.updated for file-producing tools
+            # so the frontend Artifacts destination and preview pane can update.
+            try:
+                await _emit_artifact_from_tool(
+                    session_id=session.id,
+                    tool_id=tool_id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    on_event=on_event,
+                )
+            except Exception:
+                log.debug("Artifact emission skipped", exc_info=True)
             # Persist tool_completed to event store
             with contextlib.suppress(Exception):
                 await append_event(

@@ -150,7 +150,7 @@ class TestApproveRejectBugFix:
             tool_input={"command": "ls -la"},
         )
 
-        assert env.event_type == "tool.permission_required"
+        assert env.event_type == "tool.permission.required"
         assert env.payload["tool_id"] == "tool-1"
         assert env.payload["tool_name"] == "bash"
         assert env.payload["tool_input"] == {"command": "ls -la"}
