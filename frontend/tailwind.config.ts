@@ -1,64 +1,77 @@
-// @ts-check
-import { resolve } from "path";
+import type { Config } from "tailwindcss";
 
-/** @type {import('tailwindcss').Config} */
-export default {
-  content: ["./src/**/*.{ts,tsx}"],
+const config: Config = {
+  content: [
+    "./src/app/**/*.{ts,tsx}",
+    "./src/components/**/*.{ts,tsx}",
+    "./src/lib/**/*.{ts,tsx}",
+  ],
   theme: {
     extend: {
       colors: {
-        bg: {
-          1: "#0a0e17",
-          2: "#0d1520",
-          3: "#111827",
-          4: "#1a2234",
-        },
-        surface: {
-          DEFAULT: "#151d2e",
-          hover: "#1c2740",
-          active: "#232f4a",
-        },
-        border: {
-          DEFAULT: "#1e2a3f",
-          light: "#2a3855",
-          focus: "#3b82f6",
-        },
-        text: {
-          primary: "#e2e8f0",
-          secondary: "#94a3b8",
-          muted: "#64748b",
-          accent: "#60a5fa",
-        },
-        accent: {
-          DEFAULT: "#3b82f6",
-          hover: "#2563eb",
-          active: "#1d4ed8",
-          glow: "rgba(59, 130, 246, 0.15)",
-        },
-        status: {
-          success: "#10b981",
-          warning: "#f59e0b",
-          error: "#ef4444",
-          info: "#6366f1",
-        },
-        tibet: {
-          bg: "#1a0f2e",
-          gold: "#d4a843",
-          crimson: "#8b2252",
-          saffron: "#f4c430",
-          incense: "#7c3aed",
-        },
+        // Surface ramp (13 steps, OpenHands-style)
+        "surface-0": "var(--surface-0)",
+        "surface-1": "var(--surface-1)",
+        "surface-2": "var(--surface-2)",
+        "surface-3": "var(--surface-3)",
+        "surface-4": "var(--surface-4)",
+        "surface-5": "var(--surface-5)",
+        "surface-6": "var(--surface-6)",
+        "surface-7": "var(--surface-7)",
+        "surface-8": "var(--surface-8)",
+        "surface-9": "var(--surface-9)",
+        "surface-10": "var(--surface-10)",
+        "surface-11": "var(--surface-11)",
+        "surface-12": "var(--surface-12)",
+        // Text
+        "text-base": "var(--text-base)",
+        "text-muted": "var(--text-muted)",
+        "text-faint": "var(--text-faint)",
+        // Accent
+        primary: "var(--primary)",
+        "primary-hover": "var(--primary-hover)",
+        agent: "var(--agent)",
+        "agent-hover": "var(--agent-hover)",
+        // Semantic
+        error: "var(--error)",
+        warning: "var(--warning)",
+        success: "var(--success)",
+        // Stroke
+        stroke: "var(--stroke)",
       },
       fontFamily: {
-        mono: ["JetBrains Mono", "Fira Code", "monospace"],
-        sans: ["Inter", "system-ui", "sans-serif"],
-        collapse: ["Collapse", "Inter", "system-ui", "sans-serif"],
+        sans: ["var(--font-body)", "system-ui", "sans-serif"],
+        mono: ["var(--font-mono)", "ui-monospace", "monospace"],
+      },
+      fontSize: {
+        // Hermes density baseline
+        "10": ["10px", "14px"],
+        "11": ["11px", "16px"],
+        "12": ["12px", "16px"],
+        "13": ["13px", "18px"],
+        "14": ["14px", "20px"],
+        "16": ["16px", "24px"],
+        "20": ["20px", "28px"],
+        "28": ["28px", "36px"],
+      },
+      borderRadius: {
+        sm: "var(--radius-sm)",
+        DEFAULT: "var(--radius)",
+        full: "9999px",
       },
       boxShadow: {
-        glow: "0 0 20px rgba(59, 130, 246, 0.15)",
-        "glow-lg": "0 0 40px rgba(59, 130, 246, 0.25)",
+        card: "var(--shadow)",
+      },
+      transitionDuration: {
+        fast: "100ms",
+        narrative: "240ms",
+      },
+      transitionTimingFunction: {
+        ease: "cubic-bezier(0.4, 0.0, 0.2, 1)",
       },
     },
   },
   plugins: [],
 };
+
+export default config;

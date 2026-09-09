@@ -1,0 +1,236 @@
+"use client";
+
+export type EventType = "session.created" | "session.ready" | "session.updated" | "assistant.delta" | "assistant.completed" | "tool.started" | "tool.delta" | "tool.completed" | "tool.permission.required" | "system.message" | "session.interrupted" | "session.failed" | "self_improvement.tick" | "resource.warning" | "model_switched";
+
+export interface WSEnvelopeClient {
+  session_id: string; event_type: string; payload: Record<string, unknown>; seq?: number; protocol_version: string; timestamp?: string;
+}
+
+export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
+export interface ConnectionStateChange { state: ConnectionState; error?: string | null; }
+export type EventHandler = (envelope: WSEnvelopeClient) => void;
+export type ErrorHandler = (error: Error) => void;
+export type StateHandler = (state: ConnectionStateChange) => void;
+
+export class ProtocolClient {
+  private ws: WebSocket | null = null;
+  private _sessionId = "";
+  private handlers = new Map<string, Set<EventHandler>>();
+  private errorHandlers: ErrorHandler[] = [];
+  private stateHandlers: StateHandler[] = [];
+  private reconnectAttempts = 0;
+  private reconnectDelay = 1000;
+  private state: ConnectionState = "disconnected";
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private lastPong = 0;
+  private lastPingSent = 0;
+  private host = process.env.NEXT_PUBLIC_TEKTOS_HOST || "localhost";
+  private port = parseInt(process.env.NEXT_PUBLIC_TEKTOS_PORT || "8765", 10);
+  private protocol = process.env.NEXT_PUBLIC_TEKTOS_WS_PROTOCOL || "ws";
+  private pendingMessages: string[] = [];
+
+  constructor(options?: { host?: string; port?: number; protocol?: string }) {
+    if (options?.host) this.host = options.host;
+    if (options?.port) this.port = options.port;
+    if (options?.protocol) {
+      this.protocol = options.protocol;
+    }
+    // istanbul ignore if — window.location.protocol is read-only in jsdom
+    else this.protocol = "ws";
+  }
+
+  private notifyError(err: Error): void {
+    this.errorHandlers.forEach((h) => { try { h(err); } catch (_) { console.error("Handler threw", _); } });
+  }
+
+  handleCloseEvent(ev: CloseEvent): void {
+    if (ev.code !== 1000 && this.reconnectAttempts < 10) this.scheduleReconnect();
+  }
+
+  /* c8 ignore — inline wrapper only reachable from onclose arrow assignment */
+  private handleCloseEventForOnClose(ev: CloseEvent): void {
+    this.handleCloseEvent(ev);
+  }
+
+  private flushPendingMessages(): void {
+    while (this.pendingMessages.length > 0 && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const msg = this.pendingMessages.shift()!;
+      try { this.ws.send(msg); } catch (_) { break; }
+    }
+  }
+
+  connect(): void {
+    // If an old WS connection is open (e.g., from a previous session), close it first
+    if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
+      try { this.ws.close(1000, "Session change"); } catch (_) {}
+    }
+    // Gateway proxy: connect to the proxy endpoint (no session ID in URL)
+    const url = `${this.protocol}://${this.host}:${this.port}/`;
+    console.log(`ProtocolClient.connecting to ${url}`);
+    this.setState("connecting");
+    this.reconnectAttempts++;
+    try {
+      this.ws = new WebSocket(url);
+      this.ws.onopen = () => {
+        console.log("ProtocolClient.WS opened");
+        this.reconnectAttempts = 0;
+        this.reconnectDelay = 1000;
+        this.setState("connected");
+        this.startHeartbeat();
+        this.flushPendingMessages();
+      };
+      this.ws.onmessage = (e: MessageEvent) => {
+        console.log("ProtocolClient.WS message:", e.data.substring(0, 200));
+        // Track pong responses for heartbeat
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === "pong") {
+            this.lastPong = Date.now();
+          }
+        } catch (_) {}
+        // Check if this is a JSON-RPC notification from the gateway proxy
+        try {
+          const data = JSON.parse(e.data);
+          if (data.jsonrpc === "2.0" && data.method === "event") {
+            this.handleJsonRpcNotification(data);
+            return;
+          }
+        } catch (_) {}
+        // Otherwise parse as Tektos envelope
+        try { this.dispatch(JSON.parse(e.data)); } catch (err) { this.notifyError(new Error("Parse error: " + err)); }
+      };
+      this.ws.onclose = (ev) => {
+        console.log("ProtocolClient.WS closed:", ev.code, ev.reason);
+        this.stopHeartbeat();
+        this.setState("disconnected", ev.reason || "Closed");
+        this.handleCloseEventForOnClose(ev);
+      };
+      this.ws.onerror = () => {
+        console.log("ProtocolClient.WS error");
+        this.setState("disconnected", "WS error");
+      };
+    } catch (err) { this.notifyError(new Error("Connect error: " + err)); }
+  }
+
+  disconnect(): void { if (this.ws) { this.ws.close(1000, "Disconnect"); this.ws = null; } this.stopHeartbeat(); this.setState("disconnected"); }
+  reconnect(): void { this.disconnect(); this.connect(); }
+  sendPrompt(message: string, options?: { model?: string; cwd?: string }): void {
+    // Gateway proxy: use JSON-RPC prompt.submit
+    const msg: any = { jsonrpc: "2.0", method: "prompt.submit", params: { session_id: this._sessionId, text: message } };
+    if (options?.model) msg.params.model = options.model;
+    if (options?.cwd) msg.params.cwd = options.cwd;
+    const json = JSON.stringify(msg);
+    console.log("ProtocolClient.sendPrompt:", json, "ws readyState:", this.ws?.readyState, "sessionId:", this._sessionId);
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(json);
+      console.log("ProtocolClient.sendPrompt: sent");
+    } else {
+      this.pendingMessages.push(json);
+      console.log("ProtocolClient.sendPrompt: queued (ws not open), pending:", this.pendingMessages.length);
+    }
+  }
+  sendInterrupt(): void {
+    if (this._sessionId) {
+      const json = JSON.stringify({ jsonrpc: "2.0", method: "session.interrupt", params: { session_id: this._sessionId } });
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(json);
+      } else {
+        this.pendingMessages.push(json);
+      }
+    }
+  }
+  sendResume(fromSeq: number): void { /* Not implemented on backend — no 'resume' message type */ }
+  setSessionId(id: string): void { this._sessionId = id; }
+  get sessionId(): string { return this._sessionId; }
+
+  on(eventType: string | "*", handler: EventHandler): void {
+    const key = eventType === "*" ? "*" : eventType;
+    if (!this.handlers.has(key)) this.handlers.set(key, new Set());
+    this.handlers.get(key)!.add(handler);
+  }
+
+  off(eventType: string | "*", handler: EventHandler): void {
+    const key = eventType === "*" ? "*" : eventType;
+    this.handlers.get(key)?.delete(handler);
+  }
+
+  onError(handler: ErrorHandler): void { this.errorHandlers.push(handler); }
+  offError(handler: ErrorHandler): void { const i = this.errorHandlers.indexOf(handler); if (i >= 0) this.errorHandlers.splice(i, 1); }
+  onStateChange(handler: StateHandler): void { this.stateHandlers.push(handler); }
+  offStateChange(handler: StateHandler): void { const i = this.stateHandlers.indexOf(handler); if (i >= 0) this.stateHandlers.splice(i, 1); }
+
+  private dispatch(envelope: WSEnvelopeClient): void {
+    this._sessionId = envelope.session_id;
+    const eventKey = envelope.event_type;
+    const specific = this.handlers.get(eventKey);
+    if (specific) specific.forEach((h) => { try { h(envelope); } catch (e) { this.notifyError(new Error("Event handler error: " + e)); } });
+    const wildcard = this.handlers.get("*");
+    if (wildcard) wildcard.forEach((h) => { try { h(envelope); } catch (e) { this.notifyError(new Error("Wildcard handler error: " + e)); } });
+  }
+
+  // Handle raw JSON-RPC notifications from the gateway proxy
+  private handleJsonRpcNotification(data: any): void {
+    if (data.jsonrpc !== "2.0" || data.method !== "event" || !data.params) return;
+    
+    const params = data.params;
+    const eventType = params.type || "";
+    const payload = params.payload || {};
+    
+    // Map gateway event types to WSEnvelopeClient format
+    const envelope: WSEnvelopeClient = {
+      session_id: payload.session_id || this._sessionId || "",
+      event_type: eventType,
+      payload: payload,
+      protocol_version: "1.0.0",
+    };
+    
+    // Handle gateway.ready specially
+    if (eventType === "gateway.ready") {
+      this.setState("connected");
+      this.startHeartbeat();
+      return;
+    }
+    
+    this.dispatch(envelope);
+  }
+
+  private setState(s: ConnectionState, e?: string | null): void {
+    this.state = s;
+    this.stateHandlers.forEach((h) => h({ state: s, error: e ?? null }));
+  }
+
+  private scheduleReconnect(): void {
+    const d = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts), 30000);
+    this.reconnectDelay = d;
+    this.setState("reconnecting", `Reconnecting in ${Math.round(d / 1000)}s...`);
+    setTimeout(() => this.connect(), d);
+  }
+
+  private startHeartbeat(): void {
+    this.lastPong = Date.now();
+    this.lastPingSent = 0;
+    this.heartbeatInterval = setInterval(() => this.heartbeatTick(), 10000);
+  }
+
+  // istanbul ignore next
+  private heartbeatTick(): void {
+    /* istanbul ignore else */
+    if (Date.now() - this.lastPong > 15000) {
+      this.ws?.close(4000, "Timeout");
+    } else {
+      this.ws?.send(JSON.stringify({ type: "ping" }));
+    }
+  }
+
+  private stopHeartbeat(): void { if (this.heartbeatInterval) { clearInterval(this.heartbeatInterval); this.heartbeatInterval = null; } }
+}
+
+export const EventType = {
+  SESSION_CREATED: "session.created", SESSION_READY: "session.ready", SESSION_UPDATED: "session.updated",
+  ASSISTANT_DELTA: "assistant.delta", ASSISTANT_COMPLETED: "assistant.completed",
+  TOOL_STARTED: "tool.started", TOOL_DELTA: "tool.delta", TOOL_COMPLETED: "tool.completed",
+  TOOL_PERMISSION_REQUIRED: "tool.permission.required", SYSTEM_MESSAGE: "system.message",
+  SESSION_INTERRUPTED: "session.interrupted", SESSION_FAILED: "session.failed",
+  SELF_IMPROVEMENT_TICK: "self_improvement.tick", RESOURCE_WARNING: "resource.warning",
+  MODEL_SWITCHED: "model_switched",
+} as const;
