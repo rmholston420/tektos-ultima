@@ -154,7 +154,8 @@ class ApiClient {
   private cacheTtl = 5000; // 5s cache for list endpoints
 
   constructor(baseUrl: string = "") {
-    this.baseUrl = baseUrl || window.location.origin;
+    // Defer window access so this class is safe to import during SSR / prerender.
+    this.baseUrl = baseUrl || (typeof window !== "undefined" ? window.location.origin : "");
   }
 
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {

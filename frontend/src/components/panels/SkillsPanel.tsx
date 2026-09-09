@@ -105,6 +105,78 @@ export function SkillsPanel() {
     }
   };
 
+  const [busySkill, setBusySkill] = useState<string | null>(null);
+  const [lastAction, setLastAction] = useState<string | null>(null);
+
+  const executeSkill = async (skillId: string) => {
+    setBusySkill(skillId);
+    setLastAction(null);
+    try {
+      const res = await fetch(`/api/skills/${skillId}/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context: {} }),
+      });
+      const body = await res.json();
+      setLastAction(body.success ? `✓ ${body.skill_name}: ${body.result}` : `✗ ${body.skill_name}: ${body.error}`);
+    } catch (err) {
+      setLastAction(`✗ execute failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusySkill(null);
+      fetchSkills();
+    }
+  };
+
+  const improveSkill = async (skillId: string) => {
+    setBusySkill(skillId);
+    setLastAction(null);
+    try {
+      const res = await fetch(`/api/skills/${skillId}/improve`, { method: "POST" });
+      const body = await res.json();
+      setLastAction(body.error ? `✗ improve: ${body.error}` : `✓ improved to v${body.version ?? "?"}`);
+    } catch (err) {
+      setLastAction(`✗ improve failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusySkill(null);
+      fetchSkills();
+    }
+  };
+
+  const pruneSkill = async (skillId: string) => {
+    if (!confirm("Prune this skill (delete if usage/success too low)?")) return;
+    setBusySkill(skillId);
+    try {
+      const res = await fetch(`/api/skills/${skillId}/prune`, { method: "POST" });
+      const body = await res.json();
+      setLastAction(body.error ? `✗ prune: ${body.error}` : `✓ ${body.pruned ? "pruned" : "kept"}`);
+    } finally {
+      setBusySkill(null);
+      fetchSkills();
+    }
+  };
+
+  const runMaintenance = async () => {
+    setLastAction("running maintenance…");
+    try {
+      const res = await fetch("/api/skills/maintenance", { method: "POST" });
+      const body = await res.json();
+      setLastAction(body.error ? `✗ maintenance: ${body.error}` : `✓ maintenance: ${JSON.stringify(body)}`);
+    } finally {
+      fetchSkills();
+    }
+  };
+
+  const runDedup = async () => {
+    setLastAction("running dedup…");
+    try {
+      const res = await fetch("/api/skills/dedup", { method: "POST" });
+      const body = await res.json();
+      setLastAction(body.error ? `✗ dedup: ${body.error}` : `✓ dedup: ${JSON.stringify(body)}`);
+    } finally {
+      fetchSkills();
+    }
+  };
+
   if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" /></div>;
 
   return (
@@ -131,6 +203,27 @@ export function SkillsPanel() {
           {error}
         </div>
       )}
+
+      {/* Maintenance toolbar */}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <button
+          onClick={runMaintenance}
+          className="rounded border border-border px-3 py-1 text-text-primary hover:bg-bg-3"
+        >
+          Run maintenance
+        </button>
+        <button
+          onClick={runDedup}
+          className="rounded border border-border px-3 py-1 text-text-primary hover:bg-bg-3"
+        >
+          Deduplicate skills
+        </button>
+        {lastAction && (
+          <span className="ml-2 text-text-muted truncate max-w-md" title={lastAction}>
+            {lastAction}
+          </span>
+        )}
+      </div>
 
       {/* Search and filter */}
       <div className="flex gap-3">
@@ -178,7 +271,31 @@ export function SkillsPanel() {
                 {skill.last_used && <span>last: {new Date(skill.last_used).toLocaleDateString()}</span>}
               </div>
             </div>
-            <div className="flex items-center gap-3 text-right">
+            <div className="flex items-center gap-2 text-right">
+              <button
+                onClick={() => executeSkill(skill.id)}
+                disabled={busySkill === skill.id}
+                className="rounded border border-border px-2 py-1 text-xs text-text-primary hover:bg-bg-3 disabled:opacity-40"
+                title="Execute skill"
+              >
+                Run
+              </button>
+              <button
+                onClick={() => improveSkill(skill.id)}
+                disabled={busySkill === skill.id}
+                className="rounded border border-border px-2 py-1 text-xs text-text-primary hover:bg-bg-3 disabled:opacity-40"
+                title="Improve via reflection"
+              >
+                Improve
+              </button>
+              <button
+                onClick={() => pruneSkill(skill.id)}
+                disabled={busySkill === skill.id}
+                className="rounded border border-border px-2 py-1 text-xs text-text-primary hover:bg-bg-3 disabled:opacity-40"
+                title="Prune if underused"
+              >
+                Prune
+              </button>
               <button
                 onClick={() => toggleSkill(skill.id)}
                 className={`relative w-12 h-6 rounded-full transition-all ${skill.enabled ? "bg-accent" : "bg-bg-3 border border-border"}`}
