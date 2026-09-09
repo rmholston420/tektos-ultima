@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { useProtocol } from "@/lib/hooks/useProtocol";
 import { LeftRail } from "@/components/shell/LeftRail";
 import { RightRail } from "@/components/panes/RightRail";
+import { PaletteMount } from "@/components/palette/PaletteMount";
 import { registerBuiltinVisualizers } from "@/components/assistant-ui/tool-visualizers";
 
 registerBuiltinVisualizers();
@@ -37,6 +38,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside aria-label="Contextual pane" className="hairline min-h-0">
         <RightRail />
       </aside>
+
+      <PaletteMount />
     </div>
   );
 }
