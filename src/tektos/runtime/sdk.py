@@ -1354,12 +1354,20 @@ class RuntimeSDK:
             try:
                 # Build payload
                 log.info(f"[SDK] Building payload for session {session.id[:8]}")
+                # max_tokens: 4096 was too tight for Qwen3-27B in thinking mode.
+                # A single turn can spend 3-4k tokens on reasoning alone before
+                # emitting any content or tool_call, which trips finish_reason=
+                # 'length' with an empty visible response — the model then
+                # loops silently. 16k gives thinking-mode enough headroom to
+                # reach a real answer or a tool call.
+                # Configurable via TEKTOS_LLM_MAX_TOKENS.
+                _max_tokens = int(_os.getenv("TEKTOS_LLM_MAX_TOKENS", "16384"))
                 payload = {
                     "model": self._llm_model,
                     "messages": messages,
                     "stream": True,
                     "temperature": 0.1,
-                    "max_tokens": 4096,
+                    "max_tokens": _max_tokens,
                     # Qwen3.6 fix: preserve_thinking=true keeps reasoning traces in history,
                     # preventing the "empty arguments after 2-3 turns" bug documented at
                     # https://github.com/earendil-works/pi/issues/3325
@@ -1927,6 +1935,70 @@ class RuntimeSDK:
                                         stall_count = 0
                                 else:
                                     stall_count = 0
+                    elif not saw_any_text and not current_text and not tool_calls_this_turn:
+                        # No content, no tools, no reasoning-terminated action —
+                        # the model produced ONLY reasoning tokens this turn and
+                        # stopped. Common causes:
+                        #   * finish_reason='length' — max_tokens exhausted
+                        #     inside a <think> block, so nothing ever left the
+                        #     scratchpad.
+                        #   * Qwen3 thinking mode 'answered itself' inside the
+                        #     reasoning trace and forgot to emit a content
+                        #     message.
+                        # Without this branch the outer while-loop would just
+                        # run another LLM call with the same messages and the
+                        # same result forever, and the frontend would never see
+                        # an assistant.completed event to close the turn.
+                        log.warning(
+                            f"[SDK] Empty visible turn (finish_reason={finish_reason} "
+                            f"stop_reason={stop_reason}) for session {session.id[:8]}. "
+                            f"Injecting content-only nudge."
+                        )
+                        # Nudge the model to actually SPEAK the answer, with a
+                        # bounded retry so a truly stuck task can still end.
+                        if _text_only_nudges < 3:
+                            _text_only_nudges += 1
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "Your previous turn produced only internal reasoning "
+                                        "with no visible answer and no tool call. Do NOT think "
+                                        "further — write the answer directly as your response, "
+                                        "or call the next tool. Keep the answer concise."
+                                    ),
+                                }
+                            )
+                            continue
+                        # Nudge budget exhausted — close the turn cleanly so
+                        # the UI stops spinning. Give the user a real message
+                        # so the failure mode is visible instead of silent.
+                        fallback_msg = (
+                            "I ran out of turns while still reasoning about this task. "
+                            "Please rephrase or narrow the request and I'll try again."
+                        )
+                        await on_event(assistant_delta(session.id, fallback_msg))
+                        try:
+                            await append_event(
+                                session.id,
+                                "assistant.delta",
+                                {"text": fallback_msg},
+                            )
+                        except Exception:
+                            pass
+                        await on_event(
+                            assistant_completed(session.id, stop_reason or "empty_reasoning")
+                        )
+                        try:
+                            await append_event(
+                                session.id,
+                                "assistant.completed",
+                                {"stop_reason": stop_reason or "empty_reasoning"},
+                            )
+                        except Exception:
+                            pass
+                        messages.append({"role": "assistant", "content": fallback_msg})
+                        return
                     elif saw_any_text or current_text:
                         # Text-only response — no tool calls this turn.
                         #
