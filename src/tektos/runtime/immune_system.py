@@ -730,6 +730,19 @@ class DangerousCommandDetector:
 
 # Patterns that indicate a bash command actually *writes* to something,
 # used by SelfModificationDetector to skip read-only reconnaissance.
+#
+# Redirect handling is tricky. Earlier versions used `>\s*[filechars]+`,
+# which fired on `2>&1` (stderr fd-dup, not a write) because it saw the
+# `>` and the following characters. Even worse, `\becho\b[^|]*>` used a
+# greedy `[^|]*` that ate everything up to the next `>` anywhere in the
+# line — so `echo "---"; wc -l src/tektos/main.py 2>&1` matched, wrongly
+# flagging a pure read as a write to main.py.
+#
+# New shape:
+#   * redirect operator only counts as a write when the token AFTER `>`/`>>`
+#     is NOT a `&<digit>` fd-dup and IS file-like (not a comparison RHS).
+#   * `echo`/`printf`/`cat` are dropped from the write-token list — they
+#     only write via a redirect, which we already catch generically.
 _BASH_WRITE_TOKENS = (
     r"\brm\b",
     r"\bmv\b",
@@ -742,11 +755,13 @@ _BASH_WRITE_TOKENS = (
     r"\bsed\s+-i\b",
     r"\bawk\s+-i\s+inplace\b",
     r"\bperl\s+-i\b",
-    r"\becho\b[^|]*>",
-    r"\bprintf\b[^|]*>",
-    r"\bcat\b[^|]*>",
-    r">\s*[/.a-zA-Z0-9_-]+",       # any redirect target that looks like a file
-    r">>\s*[/.a-zA-Z0-9_-]+",
+    # File-redirect: optional single fd number, then `>` or `>>`, then a
+    # target that is NOT an fd-dup (`&1` / `&2`) and NOT empty. Must be
+    # preceded by whitespace/line-start/pipe/semicolon so we don't match
+    # `>` inside quoted strings that started at column 0 or inside `>>`
+    # already covered by the alternation.
+    r"(?:^|[\s;&|(])(?:\d)?>>?\s*(?!&)[^\s|;&<>()]+",
+    r"(?:^|[\s;&|(])&>>?\s*[^\s|;&<>()]+",           # bash `&>` both streams
     r"\bgit\s+(commit|add|checkout|reset|revert|rebase|push|apply|am|mv|rm)\b",
     r"\bpatch\b",
     r"\btouch\b",
@@ -782,7 +797,15 @@ def _bash_command_writes(command: str) -> bool:
 # /tmp/out' as a self-modification of main.py because it saw the
 # protected filename anywhere in the command and *some* write
 # elsewhere — killing read-only exploration.
-_REDIRECT_TARGET_RE = re.compile(r">>?\s*([^\s|;&<>]+)")
+# Same shape as the write-detection redirect pattern, but with a capture
+# group so we can pull the actual target path out. Optional single-digit
+# fd, then `>` or `>>`, then a non-fd-dup file-like target.
+_REDIRECT_TARGET_RE = re.compile(
+    r"(?:^|[\s;&|(])(?:\d)?>>?\s*(?!&)([^\s|;&<>()]+)"
+)
+_AMP_REDIRECT_TARGET_RE = re.compile(
+    r"(?:^|[\s;&|(])&>>?\s*([^\s|;&<>()]+)"
+)
 _MODIFYING_CMD_TARGET_RES: tuple[re.Pattern, ...] = (
     # mv/cp/ln: the LAST arg is the destination. Simple heuristic: last
     # whitespace-separated token after the command keyword.
@@ -820,6 +843,8 @@ def _bash_write_targets(command: str) -> list[str]:
         return targets
 
     for m in _REDIRECT_TARGET_RE.finditer(command):
+        targets.append(m.group(1))
+    for m in _AMP_REDIRECT_TARGET_RE.finditer(command):
         targets.append(m.group(1))
 
     for pat in _MODIFYING_CMD_TARGET_RES:
