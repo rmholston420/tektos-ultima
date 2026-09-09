@@ -211,18 +211,40 @@ export function applyEnvelope(env: WSEnvelope): void {
       }
 
       if (targetId) {
-        const existing = byId[targetId];
-        $messages.setKey(targetId, {
-          ...existing,
-          text: isReasoning ? existing.text : existing.text + chunk,
-          reasoning: isReasoning ? (existing.reasoning ?? "") + chunk : existing.reasoning,
-        });
+        const existing = byId[targetId] as AssistantMessage | undefined;
+        if (existing) {
+          $messages.setKey(targetId, {
+            ...existing,
+            text: isReasoning ? existing.text : (existing.text ?? "") + chunk,
+            reasoning: isReasoning
+              ? (existing.reasoning ?? "") + chunk
+              : existing.reasoning,
+          });
+          return;
+        }
+        // targetId set (from payload.message_id) but no message exists yet
+        // — mint one keyed by that id so a later delta with the same id
+        // routes back here and completion can close it.
+        const msg: AssistantMessage = {
+          id: targetId,
+          role: "assistant",
+          text: isReasoning ? "" : chunk,
+          reasoning: isReasoning ? chunk : undefined,
+          created_at: now,
+          completed: false,
+          correlation_id: correlationId,
+          tool_call_ids: [],
+        };
+        $messages.setKey(targetId, msg);
+        $messageOrder.set([...order, targetId]);
         return;
       }
 
-      // No open assistant message yet — mint one keyed by correlation_id
-      // (or a fallback so we still get a stable key on unknown backends).
-      const newId = correlationId || `msg-${Date.now()}-${order.length}`;
+      // No open assistant message yet — mint one. Prefer the payload's
+      // message_id (so a later assistant.completed carrying the same id
+      // closes THIS message rather than falling through to open-message
+      // scan), then correlation_id, then a synthesized fallback.
+      const newId = p.message_id || correlationId || `msg-${Date.now()}-${order.length}`;
       const msg: AssistantMessage = {
         id: newId,
         role: "assistant",
@@ -276,11 +298,19 @@ export function applyEnvelope(env: WSEnvelope): void {
 
       const closeOne = (msgId: string, override: { text?: string; reasoning?: string }) => {
         const existing = $messages.get()[msgId];
+        // Defensive: treat empty-string overrides the same as omitted.
+        // The old gateway path emitted `text: ""` on completion (backend
+        // never sends text on assistant.completed) which, via `??`, would
+        // wipe the whole accumulated delta text since `"" ?? existing`
+        // stays `""`. Anything downstream from a stale gateway hits the
+        // same trap, so guard here too.
+        const overrideText = override.text ? override.text : undefined;
+        const overrideReasoning = override.reasoning ? override.reasoning : undefined;
         const msg: AssistantMessage = {
           id: msgId,
           role: "assistant",
-          text: override.text ?? existing?.text ?? "",
-          reasoning: override.reasoning ?? existing?.reasoning,
+          text: overrideText ?? existing?.text ?? "",
+          reasoning: overrideReasoning ?? existing?.reasoning,
           created_at: existing?.created_at ?? now,
           completed: true,
           correlation_id: env.correlation_id ?? existing?.correlation_id,
@@ -294,8 +324,16 @@ export function applyEnvelope(env: WSEnvelope): void {
       };
 
       if (p.message_id) {
-        closeOne(p.message_id, { text: p.text, reasoning: p.reasoning });
-        return;
+        // If the payload carries a message_id but that id isn't in the store
+        // yet, the delta stream is using a different id (correlation-derived).
+        // Falling back to closing all open assistant messages preserves the
+        // accumulated text; closing an unknown id would create an empty
+        // message and never mark the real one completed.
+        const known = $messages.get()[p.message_id];
+        if (known) {
+          closeOne(p.message_id, { text: p.text, reasoning: p.reasoning });
+          return;
+        }
       }
 
       const order = $messageOrder.get();

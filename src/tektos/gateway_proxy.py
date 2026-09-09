@@ -488,19 +488,38 @@ async def _ws_reader_loop(sid, ws):
 
                 elif event_type == "assistant.completed":
                     # Close out the current assistant-turn message and rotate.
+                    #
+                    # The backend's assistant.completed payload is
+                    # intentionally sparse — it only carries stop_reason,
+                    # not text/reasoning. Previously this proxy defaulted
+                    # text to '' when the backend omitted it, which the
+                    # frontend completion reducer then wrote into the
+                    # message store as text='' via `text: p.text` — wiping
+                    # the entire accumulated delta text the moment the
+                    # turn ended. Users saw the answer flash and vanish.
+                    #
+                    # Fix: OMIT text/reasoning/usage from the forwarded
+                    # payload when the backend didn't send them, so the
+                    # frontend reducer's `text: p.text ?? existing.text`
+                    # fallback path preserves what the delta stream
+                    # accumulated.
                     msg_id = _assistant_msg_ids.pop(sid, None) or f"msg_{uuid.uuid4().hex[:12]}"
+                    completed_payload: dict[str, Any] = {
+                        "session_id": sid,
+                        "message_id": msg_id,
+                        "stop_reason": payload.get("stop_reason", "end_turn"),
+                    }
+                    if "text" in payload:
+                        completed_payload["text"] = payload["text"]
+                    if "reasoning" in payload:
+                        completed_payload["reasoning"] = payload["reasoning"]
+                    if "usage" in payload:
+                        completed_payload["usage"] = payload["usage"]
                     event = _notification(
                         "event",
                         {
                             "type": "assistant.completed",
-                            "payload": {
-                                "session_id": sid,
-                                "message_id": msg_id,
-                                "text": payload.get("text", ""),
-                                "reasoning": payload.get("reasoning"),
-                                "usage": payload.get("usage"),
-                                "stop_reason": payload.get("stop_reason", "end_turn"),
-                            },
+                            "payload": completed_payload,
                         },
                     )
                     await _broadcast_to_clients(event)
