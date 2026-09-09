@@ -223,6 +223,10 @@ async def lifespan(app: _FastAPI):
         skill_dir=str(_Path.home() / ".tektos/skills/"),
     )
     _skill_manager = SkillManager(registry=_skill_registry)
+    # ToolRegistry is created a few lines below; wire it into the
+    # SkillManager after construction so unknown skill-step actions can
+    # fall back to tool dispatch instead of silently no-op'ing.
+    # (set_tool_registry() call happens after _tool_registry init below.)
     # tool_registry is initialized later at step 9; pass None for now
     _skill_executor = SkillExecutor(
         runtime_sdk=runtime_sdk,
@@ -286,6 +290,7 @@ async def lifespan(app: _FastAPI):
     _sandbox = SandboxProvider()
     _tool_registry = ToolRegistry(event_bus=_event_bus)
     _tool_registry.load_built_in(_sandbox)
+    _skill_manager.set_tool_registry(_tool_registry)
     _mcp_client = MCPClient(registry=_tool_registry)
     try:
         _mcp_client.connect(

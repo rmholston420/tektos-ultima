@@ -72,12 +72,21 @@ class SkillManager:
         skill_dir: str | Path | None = None,
         max_active_skills: int = 100,
         min_success_rate: float = 0.3,
+        tool_registry: Any = None,
     ) -> None:
         self.registry = registry
         self.skill_dir = Path(skill_dir or str(Path.home() / ".tektos/skills/"))
         self.skill_dir.mkdir(parents=True, exist_ok=True)
         self.max_active_skills = max_active_skills
         self.min_success_rate = min_success_rate
+        #: Optional ToolRegistry used as the fallback dispatch target for
+        #: unknown skill-step actions in :meth:`_execute_inline`. Injected
+        #: from ``main.lifespan()``; None-safe for tests.
+        self._tool_registry: Any = tool_registry
+
+    def set_tool_registry(self, tool_registry: Any) -> None:
+        """Inject a ToolRegistry post-construction (used from lifespan)."""
+        self._tool_registry = tool_registry
 
     # ── Creation ─────────────────────────────────────────────────────────
 
@@ -462,8 +471,35 @@ class SkillManager:
                 # Store warning in working memory
                 self._store_in_working_memory(f"AVOID: {description}", skill)
             else:
-                # Unknown action — log but don't fail
-                log.debug("[SKILL:%s] Unknown action: %s", skill.name, action)
+                # Unknown action — try the injected ToolRegistry as a
+                # fallback dispatch target before giving up. Skill steps
+                # can therefore call arbitrary registered tools (bash,
+                # file_write, ...) by naming the action after the tool.
+                dispatched = False
+                tr = self._tool_registry
+                if tr is not None:
+                    dispatch = getattr(tr, "dispatch", None) or getattr(
+                        tr, "execute", None
+                    )
+                    if callable(dispatch):
+                        try:
+                            tool_input = step.get("input") or step.get("args") or {}
+                            dispatch(action, tool_input)
+                            dispatched = True
+                            log.info(
+                                "[SKILL:%s] Dispatched unknown action '%s' to ToolRegistry",
+                                skill.name,
+                                action,
+                            )
+                        except Exception as exc:
+                            log.warning(
+                                "[SKILL:%s] ToolRegistry dispatch failed for '%s': %s",
+                                skill.name,
+                                action,
+                                exc,
+                            )
+                if not dispatched:
+                    log.debug("[SKILL:%s] Unknown action: %s", skill.name, action)
 
     def _store_in_procedural_memory(self, content: str, skill: Skill) -> None:
         """Store content in procedural memory via the memory system."""
