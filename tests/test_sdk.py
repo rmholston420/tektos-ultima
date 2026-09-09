@@ -111,7 +111,8 @@ class TestToolDefinitions:
         assert set(fw["function"]["parameters"]["required"]) == {"path", "content"}
 
     def test_tools_schema_count(self):
-        assert len(TOOLS_SCHEMA) == 8
+        # Includes bash, file/directory ops, search, vision, web, rag, delegate.
+        assert len(TOOLS_SCHEMA) == 13
 
 
 # ── RuntimeSDK — Lifecycle ─────────────────────────────────────────────────
@@ -120,7 +121,7 @@ class TestRuntimeSDKLifecycle:
     @pytest.mark.asyncio
     async def test_sdk_creation_with_defaults(self):
         sdk = RuntimeSDK()
-        assert sdk._llm_model == "Qwen3.6-35B-A3B-Q4_K_M"
+        assert sdk._llm_model == "qwen3.8-27b-code"
         assert sdk._client is None
 
     @pytest.mark.asyncio
@@ -145,11 +146,21 @@ class TestRuntimeSDKLifecycle:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             instance = AsyncMock()
-            instance.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            healthy_resp = MagicMock(status_code=200, raise_for_status=lambda: None)
+            instance.get = AsyncMock(return_value=healthy_resp)
+            instance.request = AsyncMock(return_value=healthy_resp)
             MockClient.return_value = instance
             await sdk.start()
             assert sdk._client is not None
-            MockClient.assert_called_once()
+            # FailoverLLMClient instantiates two httpx.AsyncClient instances
+            # (primary + fallback). The important guarantee is that at least
+            # one was constructed with the SDK's primary base URL.
+            assert MockClient.called
+            primary_call = next(
+                (c for c in MockClient.call_args_list if c.kwargs.get("base_url") == sdk._llm_base_url),
+                None,
+            )
+            assert primary_call is not None
 
     @pytest.mark.asyncio
     async def test_start_survives_missing_llm_and_marks_unavailable(self):
@@ -234,7 +245,9 @@ class TestSubmitPrompt:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             instance = AsyncMock()
-            instance.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            healthy_resp = MagicMock(status_code=200, raise_for_status=lambda: None)
+            instance.get = AsyncMock(return_value=healthy_resp)
+            instance.request = AsyncMock(return_value=healthy_resp)
             MockClient.return_value = instance
             await sdk.start()
 
@@ -248,7 +261,7 @@ class TestSubmitPrompt:
         await sdk.submit_prompt(session, "test")
         assert len(hook_called) == 1
         assert hook_called[0].session_id == "s1"
-        assert hook_called[0].model == "Qwen3.6-35B-A3B-Q4_K_M"
+        assert hook_called[0].model == "qwen3.8-27b-code"
         assert hook_called[0].outcome == "success"
 
     @pytest.mark.asyncio
@@ -256,7 +269,9 @@ class TestSubmitPrompt:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             instance = AsyncMock()
-            instance.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            healthy_resp = MagicMock(status_code=200, raise_for_status=lambda: None)
+            instance.get = AsyncMock(return_value=healthy_resp)
+            instance.request = AsyncMock(return_value=healthy_resp)
             MockClient.return_value = instance
             await sdk.start()
 

@@ -1,33 +1,19 @@
 """Extended tests for RuntimeSDK -- _stream_llm, _handle_tool_completion, _execute_tool, _check_resources."""
 
-import asyncio
 import json as _json
-from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from tektos.protocol.envelope import (
-    assistant_completed,
-    assistant_delta,
-    loop_safety_warning,
-    session_failed,
-    tool_completed,
-    tool_permission_required,
-    tool_started,
-)
-from tektos.metabolism import MetabolismEngine
-from tektos.runtime.loop_safety import LoopSafetyConfig, LoopSafetyMonitor
+from tektos.runtime.loop_safety import LoopSafetyConfig
 from tektos.runtime.sdk import (
-    HookContext,
-    HookRegistry,
-    RuntimeSDK,
     TOOLS_SCHEMA,
+    HookContext,
+    RuntimeSDK,
     hooks,
 )
 from tektos.runtime.session import LiveSession
-
 
 # -- Fixtures --
 
@@ -56,6 +42,7 @@ async def _async_iter(lines):
 def _make_mock_sse_response(sse_lines):
     """Create a mock SSE response from a list of lines."""
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock()
     mock_response.aiter_lines = MagicMock(return_value=_async_iter(sse_lines))
     return mock_response
@@ -102,7 +89,8 @@ class TestStreamLlmTextCompletion:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -115,6 +103,10 @@ class TestStreamLlmTextCompletion:
             return _make_mock_sse_response(sse_lines)
 
         mock_client.post = mock_post
+        # FailoverLLMClient.post routes via client.request(); mirror there.
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = _mock_request
 
         events = []
         async def on_event(env):
@@ -135,7 +127,8 @@ class TestStreamLlmTextCompletion:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -161,6 +154,10 @@ class TestStreamLlmTextCompletion:
             return _make_mock_sse_response(turn2_sse)
 
         mock_client.post = mock_post
+        # FailoverLLMClient.post routes via client.request(); mirror there.
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = _mock_request
 
         events = []
         async def on_event(env):
@@ -184,7 +181,8 @@ class TestStreamLlmToolCalls:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1", loop_safety_config=config)
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -201,6 +199,10 @@ class TestStreamLlmToolCalls:
             return _make_mock_sse_response(sse_lines)
 
         mock_client.post = mock_post
+        # FailoverLLMClient.post routes via client.request(); mirror there.
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = _mock_request
 
         events = []
         async def on_event(env):
@@ -220,7 +222,8 @@ class TestStreamLlmToolCalls:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1", loop_safety_config=config)
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -236,6 +239,10 @@ class TestStreamLlmToolCalls:
             return _make_mock_sse_response(sse_lines)
 
         mock_client.post = mock_post
+        # FailoverLLMClient.post routes via client.request(); mirror there.
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = _mock_request
 
         events = []
         async def on_event(env):
@@ -258,7 +265,8 @@ class TestStreamLlmErrors:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -266,6 +274,10 @@ class TestStreamLlmErrors:
             raise httpx.ConnectError("Connection refused")
 
         mock_client.post = mock_post
+        # FailoverLLMClient.post routes via client.request(); mirror there.
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = _mock_request
 
         session = LiveSession(id="s1", model="test", cwd=".")
         events = []
@@ -281,7 +293,8 @@ class TestStreamLlmErrors:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -289,6 +302,10 @@ class TestStreamLlmErrors:
             raise httpx.TimeoutException("Timed out")
 
         mock_client.post = mock_post
+        # FailoverLLMClient.post routes via client.request(); mirror there.
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = _mock_request
 
         session = LiveSession(id="s1", model="test", cwd=".")
         # Use real on_event -- source calls it unconditionally at line 353
@@ -303,7 +320,8 @@ class TestStreamLlmErrors:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -311,6 +329,10 @@ class TestStreamLlmErrors:
             raise ValueError("Unexpected error")
 
         mock_client.post = mock_post
+        # FailoverLLMClient.post routes via client.request(); mirror there.
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = _mock_request
 
         session = LiveSession(id="s1", model="test", cwd=".")
         # Use real on_event -- source calls it unconditionally at line 353
@@ -539,7 +561,8 @@ class TestSubmitPromptFull:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -552,6 +575,10 @@ class TestSubmitPromptFull:
             return _make_mock_sse_response(sse_lines)
 
         mock_client.post = AsyncMock(side_effect=mock_post)
+        # FailoverLLMClient.post routes via client.request(method, url, ...)
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = AsyncMock(side_effect=_mock_request)
 
         events = []
         async def on_event(env):
@@ -562,7 +589,7 @@ class TestSubmitPromptFull:
 
         assert session.status == "ready"
         # Verify system prompt was included in the LLM payload
-        call_args = mock_client.post.call_args
+        call_args = mock_client.request.call_args
         payload = call_args[1]["json"]
         assert payload["messages"][0]["role"] == "system"
         assert payload["messages"][0]["content"] == "You are helpful."
@@ -573,7 +600,8 @@ class TestSubmitPromptFull:
         sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            mock_client.get = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
+            mock_client.request = AsyncMock(return_value=MagicMock(status_code=200, raise_for_status=lambda: None))
             MockClient.return_value = mock_client
             await sdk.start()
 
@@ -586,6 +614,10 @@ class TestSubmitPromptFull:
             return _make_mock_sse_response(sse_lines)
 
         mock_client.post = AsyncMock(side_effect=mock_post)
+        # FailoverLLMClient.post routes via client.request(method, url, ...)
+        async def _mock_request(method, url, json=None, headers=None):
+            return await mock_post(url, json=json, headers=headers)
+        mock_client.request = AsyncMock(side_effect=_mock_request)
 
         events = []
         async def on_event(env):
@@ -594,7 +626,7 @@ class TestSubmitPromptFull:
         session = LiveSession(id="s1", model="test", cwd=".")
         await sdk.submit_prompt(session, "test prompt", on_event=on_event)
 
-        call_args = mock_client.post.call_args
+        call_args = mock_client.request.call_args
         payload = call_args[1]["json"]
         assert "tools" in payload
         assert len(payload["tools"]) == len(TOOLS_SCHEMA)
