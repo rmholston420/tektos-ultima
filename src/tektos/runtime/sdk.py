@@ -29,6 +29,7 @@ from tektos.metabolism import MetabolismEngine
 from tektos.protocol.envelope import (
     assistant_completed,
     assistant_delta,
+    assistant_reasoning,
     loop_safety_warning,
     session_failed,
     tool_completed,
@@ -1397,16 +1398,33 @@ class RuntimeSDK:
                         except Exception:
                             pass  # Non-fatal — don't break streaming on store failure
 
-                    # Handle reasoning/thinking content (Qwen3.6, deep thinking models)
-                    # Stream reasoning_content as the actual response — this IS the model's output
-                    # Accumulate into current_text for message history
+                    # Handle reasoning/thinking content (Qwen3, Kimi, DeepSeek R1).
+                    # IMPORTANT: reasoning is the model's private scratchpad, NOT
+                    # its spoken output. Earlier this branch appended reasoning
+                    # into current_text, so at the next turn boundary the same
+                    # text was appended to `messages` as {role: assistant,
+                    # content: <reasoning>} and the model saw its own private
+                    # thoughts as though it had officially said them. Concretely
+                    # a first-turn reasoning trace of 'the bash command was
+                    # blocked by the immune system' became context on turn 2
+                    # and the model dutifully continued that narrative, which
+                    # showed up in the transcript as hallucinated sandbox
+                    # blocks even though the tool ran successfully.
+                    # Fix: stream reasoning to the UI (frontend renders it in
+                    # the reasoning panel) but keep it out of current_text and
+                    # thus out of the conversation history sent back to the
+                    # model on subsequent turns.
                     reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                     if reasoning:
-                        current_text += reasoning
-                        await on_event(assistant_delta(session.id, reasoning))
-                        # Persist assistant delta to event store for conversation history
+                        await on_event(assistant_reasoning(session.id, reasoning))
+                        # Persist as a distinct reasoning event so history
+                        # replay does not mistake it for spoken content.
                         try:
-                            await append_event(session.id, "assistant.delta", {"text": reasoning})
+                            await append_event(
+                                session.id,
+                                "assistant.reasoning",
+                                {"text": reasoning},
+                            )
                         except Exception:
                             pass  # Non-fatal — don't break streaming on store failure
 

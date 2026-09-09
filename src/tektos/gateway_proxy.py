@@ -442,8 +442,7 @@ async def _ws_reader_loop(sid, ws):
 
                 elif event_type == "assistant.delta":
                     text = payload.get("text", "") or payload.get("delta", "")
-                    reasoning = payload.get("reasoning")
-                    if text or reasoning:
+                    if text:
                         # Lazily allocate a message_id for this assistant turn;
                         # frontend keys deltas + completed by it.
                         msg_id = _assistant_msg_ids.get(sid)
@@ -457,8 +456,31 @@ async def _ws_reader_loop(sid, ws):
                                 "payload": {
                                     "session_id": sid,
                                     "message_id": msg_id,
-                                    "delta": text or "",
-                                    "reasoning": reasoning,
+                                    "delta": text,
+                                },
+                            },
+                        )
+                        await _broadcast_to_clients(event)
+
+                elif event_type == "assistant.reasoning":
+                    text = payload.get("text", "") or payload.get("delta", "")
+                    if text:
+                        # Reasoning is streamed on the SAME message_id as
+                        # deltas so the frontend can attach it to the current
+                        # assistant turn's reasoning panel.
+                        msg_id = _assistant_msg_ids.get(sid)
+                        if not msg_id:
+                            msg_id = f"msg_{uuid.uuid4().hex[:12]}"
+                            _assistant_msg_ids[sid] = msg_id
+                        event = _notification(
+                            "event",
+                            {
+                                "type": "assistant.delta",
+                                "payload": {
+                                    "session_id": sid,
+                                    "message_id": msg_id,
+                                    "delta": "",
+                                    "reasoning": text,
                                 },
                             },
                         )
