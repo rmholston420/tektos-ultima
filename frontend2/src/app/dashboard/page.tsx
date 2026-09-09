@@ -1,51 +1,77 @@
 "use client";
 
-import { useStore } from "@nanostores/react";
-import { $connectionState } from "@/lib/stores/connection";
-import { $sessionModel, $messages, $toolCalls, $artifactOrder } from "@/lib/stores/session";
-import { $persistedSessions } from "@/lib/stores/persisted-sessions";
+import { useMemo, useState } from "react";
+import { PANELS, getPanel } from "@/components/panels/registry";
+import { cn } from "@/lib/cn";
 
 /**
- * Dashboard destination. Phase 6 ships a KPI card grid; Phase 8 ports
- * the ~50 dynamic panels from the legacy dashboard into the panel
- * registry that plugs in here.
+ * Dashboard: sidebar-groups-by-section + main panel surface. Panels are
+ * dynamic-imported through the registry so only the active panel enters
+ * the bundle.
  */
 export default function DashboardPage() {
-  const connState = useStore($connectionState);
-  const model = useStore($sessionModel);
-  const messages = useStore($messages);
-  const tools = useStore($toolCalls);
-  const artifacts = useStore($artifactOrder);
-  const sessions = useStore($persistedSessions);
+  const [activeId, setActiveId] = useState<string>(PANELS[0]?.id ?? "overview");
+  const active = getPanel(activeId);
 
-  const kpis = [
-    { label: "Connection", value: connState },
-    { label: "Active model", value: model ?? "\u2014" },
-    { label: "Messages (session)", value: Object.keys(messages).length },
-    { label: "Tool calls (session)", value: Object.keys(tools).length },
-    { label: "Artifacts (session)", value: artifacts.length },
-    { label: "Persisted sessions", value: sessions.length },
-  ];
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof PANELS>();
+    for (const p of PANELS) {
+      const list = map.get(p.section) ?? [];
+      list.push(p);
+      map.set(p.section, list);
+    }
+    return Array.from(map.entries());
+  }, []);
+
+  const Panel = active?.Component;
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-auto scrollbar-thin bg-surface-1">
-      <div className="hairline px-4 py-3">
-        <h1 className="text-14 font-medium text-text-base">Dashboard</h1>
-        <div className="mt-1 text-11 text-text-muted">
-          Phase 6 preview. Full panel grid ports in Phase 8.
+    <div className="grid h-full min-h-0 grid-cols-[220px_1fr] bg-surface-1">
+      <nav
+        aria-label="Dashboard sections"
+        className="hairline min-h-0 overflow-auto scrollbar-thin bg-surface-2"
+      >
+        <div className="px-3 py-3">
+          <h1 className="text-11 uppercase tracking-wide text-text-muted">
+            Dashboard
+          </h1>
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 xl:grid-cols-4">
-        {kpis.map((k) => (
-          <div key={k.label} className="hairline rounded-md bg-surface-2 p-3">
-            <div className="text-11 uppercase tracking-wide text-text-muted">
-              {k.label}
+        <div className="flex flex-col gap-2 pb-4">
+          {grouped.map(([section, items]) => (
+            <div key={section}>
+              <div className="px-3 py-1 text-11 uppercase tracking-wide text-text-faint">
+                {section}
+              </div>
+              <ul>
+                {items.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveId(p.id)}
+                      className={cn(
+                        "flex w-full items-center gap-2 px-3 py-1.5 text-11",
+                        "transition-colors duration-fast ease",
+                        p.id === activeId
+                          ? "bg-surface-4 text-text-base"
+                          : "text-text-muted hover:bg-surface-3 hover:text-text-base",
+                      )}
+                      data-testid={`panel-tab-${p.id}`}
+                    >
+                      {p.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
-            <div className="mt-1 truncate font-mono text-16 text-text-base">
-              {String(k.value)}
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
+      </nav>
+      <div className="min-h-0 min-w-0 overflow-auto scrollbar-thin bg-surface-1">
+        {Panel ? (
+          <Panel />
+        ) : (
+          <div className="p-6 text-11 text-text-faint">panel not found</div>
+        )}
       </div>
     </div>
   );
