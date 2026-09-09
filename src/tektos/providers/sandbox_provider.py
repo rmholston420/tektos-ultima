@@ -254,10 +254,42 @@ class SandboxProvider:
     # ------------------------------------------------------------------
 
     def _file_read(self, params: dict[str, Any]) -> str:
-        """Read file content with path validation."""
+        """Read file content with path validation and paging.
+
+        Params:
+            path (str, required): file path to read.
+            offset (int, optional): 1-based starting line number. Default 1.
+            limit  (int, optional): maximum number of lines to return.
+                                    Default 2000. Use larger values for full-file reads.
+
+        The returned string is always prefixed with a machine-readable
+        header so the model can decide whether more paging is needed:
+
+            file_read path=<abs> total_lines=<N> total_bytes=<B> \
+                      start_line=<S> end_line=<E> truncated=<true|false>
+            --- content ---
+            <content>
+
+        This prevents the 'silent truncation loop' where the model reads
+        a large file, gets a truncated blob with no visible boundary, and
+        spins narrating 'let me read the rest' without knowing how.
+        """
         file_path = params.get("path", "")
         if not file_path:
             return "Error: No path provided"
+
+        # Coerce offset/limit — accept ints or numeric strings from the model.
+        def _int_or(default: int, value: Any) -> int:
+            try:
+                if value is None or value == "":
+                    return default
+                iv = int(value)
+                return iv if iv > 0 else default
+            except (TypeError, ValueError):
+                return default
+
+        offset = _int_or(1, params.get("offset"))
+        limit = _int_or(2000, params.get("limit"))
 
         # Terminal-Bench mode: read from the task container.
         if self.docker_container:
@@ -266,9 +298,7 @@ class SandboxProvider:
                 if result.returncode != 0:
                     return f"Error: File not found: {file_path}"
                 content = result.stdout or ""
-                if len(content) > self.max_output_size:
-                    content = content[: self.max_output_size] + "\n... (truncated)"
-                return content
+                return self._format_file_read(file_path, content, offset, limit)
             except Exception as exc:
                 return f"Error reading file in container: {exc}"
 
@@ -284,12 +314,62 @@ class SandboxProvider:
 
         try:
             content = resolved.read_text(encoding="utf-8", errors="replace")
-            # Truncate if too large
-            if len(content) > self.max_output_size:
-                content = content[: self.max_output_size] + "\n... (truncated)"
-            return content
+            return self._format_file_read(str(resolved), content, offset, limit)
         except Exception as exc:
             return f"Error reading file: {exc}"
+
+    def _format_file_read(
+        self, path: str, content: str, offset: int, limit: int
+    ) -> str:
+        """Return a paged, self-describing file_read result.
+
+        Splits `content` on newlines so `offset` and `limit` are line-based
+        (matches the model's mental model when it says 'read lines 200-400').
+        The header carries the total line count and the exact range served
+        so the model can page deterministically instead of guessing.
+        """
+        lines = content.splitlines()
+        total_lines = len(lines)
+        total_bytes = len(content)
+
+        # 1-based, inclusive slice. Clamp to file bounds.
+        start = max(1, offset)
+        if start > total_lines:
+            start = total_lines + 1  # empty slice; header still explains why
+        end = min(total_lines, start + max(1, limit) - 1)
+
+        selected = lines[start - 1 : end]
+        body = "\n".join(selected)
+
+        # Byte-level cap as a last-resort safety net so a pathological
+        # single-line file cannot blow the LLM context.
+        truncated_by_bytes = False
+        if len(body) > self.max_output_size:
+            body = body[: self.max_output_size]
+            truncated_by_bytes = True
+
+        truncated = truncated_by_bytes or end < total_lines
+
+        header = (
+            f"file_read path={path} total_lines={total_lines} "
+            f"total_bytes={total_bytes} start_line={start} end_line={end} "
+            f"truncated={'true' if truncated else 'false'}\n"
+            f"--- content ---\n"
+        )
+        footer = ""
+        if truncated and end < total_lines:
+            footer = (
+                f"\n--- end of window ---\n"
+                f"[{total_lines - end} more lines. Call file_read again with "
+                f"offset={end + 1} to continue.]"
+            )
+        elif truncated_by_bytes:
+            footer = (
+                f"\n--- end of window ---\n"
+                f"[Output byte cap reached ({self.max_output_size} bytes). "
+                f"Narrow the range with a smaller limit or a later offset.]"
+            )
+        return header + body + footer
 
     def _file_write(self, params: dict[str, Any]) -> str:
         """Write file content with path validation."""
