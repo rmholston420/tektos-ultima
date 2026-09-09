@@ -51,6 +51,7 @@ class EventType(str, Enum):
     SESSION_UPDATED = "session.updated"
 
     ASSISTANT_DELTA = "assistant.delta"
+    ASSISTANT_REASONING = "assistant.reasoning"
     ASSISTANT_COMPLETED = "assistant.completed"
 
     TOOL_STARTED = "tool.started"
@@ -191,6 +192,21 @@ def assistant_delta(session_id: str, text: str) -> WSEnvelope:
     return WSEnvelope(
         session_id=session_id,
         event_type=EventType.ASSISTANT_DELTA,
+        payload={"text": text},
+    )
+
+
+def assistant_reasoning(session_id: str, text: str) -> WSEnvelope:
+    """Model's private chain-of-thought.
+
+    Kept distinct from ``assistant_delta`` so the frontend can render it in
+    a reasoning panel and, more importantly, so history replay does not
+    round-trip the model's own thoughts back into its context on the next
+    turn.
+    """
+    return WSEnvelope(
+        session_id=session_id,
+        event_type=EventType.ASSISTANT_REASONING,
         payload={"text": text},
     )
 
