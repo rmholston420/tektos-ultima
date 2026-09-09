@@ -619,6 +619,34 @@ class TestModelFailoverDetector:
         threats = asyncio.run(det.detect(ctx))
         assert len(threats) == 1
 
+    def test_hermes_8093_base_url_is_safe(self):
+        """Setting TEKTOS_LLM_BASE_URL to the Hermes proxy port (8093) is the
+        recommended Topology A default and MUST NOT be flagged by the
+        immune system. See docs/HERMES_TOPOLOGY.md."""
+        det = ModelFailoverDetector()
+        ctx = ImmuneContext(
+            tool_name="bash",
+            tool_input={
+                "command": "export TEKTOS_LLM_BASE_URL=http://127.0.0.1:8093/v1"
+            },
+        )
+        threats = asyncio.run(det.detect(ctx))
+        assert threats == []
+
+    def test_direct_8090_base_url_still_flagged(self):
+        """Setting TEKTOS_LLM_BASE_URL directly at the primary llama-server
+        port (8090) bypasses any failover path and remains blocked."""
+        det = ModelFailoverDetector()
+        ctx = ImmuneContext(
+            tool_name="bash",
+            tool_input={
+                "command": "export TEKTOS_LLM_BASE_URL=http://127.0.0.1:8090/v1"
+            },
+        )
+        threats = asyncio.run(det.detect(ctx))
+        assert len(threats) == 1
+        assert threats[0].severity == ThreatSeverity.HIGH
+
 
 # ─── BodyProtectionDetector ───────────────────────────────────────────────────
 
