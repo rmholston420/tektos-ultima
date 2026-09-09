@@ -114,10 +114,6 @@ gui-test-traces/
 *.zip
 *.tar.gz
 
-# New Tektos modules (not yet committed)
-src/tektos/axioms/
-src/tektos/memory/hindsight_client.py
-
 # Frontend API routes (if generated or auto-generated)
 frontend/src/app/api/
 
