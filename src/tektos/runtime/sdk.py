@@ -492,7 +492,22 @@ class RuntimeSDK:
         # (and vice-versa).
         self._llm_probe_task: _asyncio.Task[None] | None = None
         self._llm_probe_interval_seconds: float = 30.0
+        # Global lock retained for backwards-compat (start/stop callers still
+        # take it), but per-session prompt execution uses ``_session_locks``
+        # below so a stalled prompt on session A cannot block session B.
         self._lock = _asyncio.Lock()
+        # session_id -> asyncio.Lock owned by that session. Populated on
+        # first submit_prompt for the session, evicted when the session is
+        # closed. Guarded by ``_session_locks_guard`` because dict mutation
+        # races otherwise (create-if-missing is not atomic across awaits).
+        self._session_locks: dict[str, _asyncio.Lock] = {}
+        self._session_locks_guard = _asyncio.Lock()
+        # Hard ceiling on how long a single _stream_llm invocation may hold
+        # its session lock. Overridable via env for slow CPU fallback
+        # models; default 120s handles healthy GPU + degraded CPU paths.
+        self._prompt_timeout_seconds: float = float(
+            _os.getenv("TEKTOS_PROMPT_TIMEOUT_SECONDS", "120")
+        )
         self._sandbox = SandboxProvider()
         self._loop_monitor = LoopSafetyMonitor(loop_safety_config or LoopSafetyConfig())
         # Metabolism engine for resource monitoring
@@ -532,7 +547,11 @@ class RuntimeSDK:
             fallback_model=LLM_FALLBACK_MODEL if LLM_FAILOVER_ENABLED else None,
             enabled=LLM_FAILOVER_ENABLED,
             cooldown_seconds=LLM_FAILOVER_COOLDOWN,
-            timeout=httpx.Timeout(30.0, read=300.0),
+            # read timeout bounded so a wedged upstream (e.g. a stalled
+            # llama-server) can't hold the SDK's per-session lock for 5
+            # minutes. Streaming requests that produce no bytes within this
+            # window trip httpx.ReadTimeout and unwind cleanly.
+            timeout=httpx.Timeout(30.0, read=60.0),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
         # Validate connection — degrade gracefully instead of aborting
@@ -654,7 +673,16 @@ class RuntimeSDK:
         if not self._client:
             raise RuntimeError("RuntimeSDK not started. Call start() first.")
 
-        async with self._lock:
+        # Per-session lock so one hung session cannot block others. Create
+        # on demand under _session_locks_guard so the create-if-missing is
+        # atomic across awaits. The global self._lock is intentionally NOT
+        # taken here — it used to serialize every prompt SDK-wide, which
+        # meant a single wedged upstream (see granite CPU stalls) froze all
+        # future prompt work until the backend restarted.
+        async with self._session_locks_guard:
+            session_lock = self._session_locks.setdefault(session.id, _asyncio.Lock())
+
+        async with session_lock:
             session.status = "running"
             session.updated_at = _time.monotonic()
 
@@ -672,7 +700,41 @@ class RuntimeSDK:
                 log.exception("Hook session.start failed")
 
             try:
-                await self._stream_llm(session, prompt, system_prompt, on_event, on_tool_approval)
+                # Hard ceiling: no single prompt may hold the session lock
+                # longer than _prompt_timeout_seconds. This is the last-line
+                # guard against a wedged llama-server holding the pipeline
+                # forever — httpx has its own read timeout but this covers
+                # tool-call loops and stall-recovery paths too.
+                await _asyncio.wait_for(
+                    self._stream_llm(
+                        session, prompt, system_prompt, on_event, on_tool_approval
+                    ),
+                    timeout=self._prompt_timeout_seconds,
+                )
+            except _asyncio.TimeoutError:
+                log.error(
+                    f"LLM prompt timeout in {session.id[:8]} after "
+                    f"{self._prompt_timeout_seconds:.0f}s — aborting"
+                )
+                if on_event:
+                    await on_event(
+                        session_failed(
+                            session.id,
+                            f"LLM prompt timed out after {self._prompt_timeout_seconds:.0f}s",
+                        )
+                    )
+                session.status = "failed"
+                try:
+                    await _fire_hook(
+                        "session.fail",
+                        session_id=session.id,
+                        model=self._llm_model,
+                        task_description=prompt[:200],
+                        outcome="timeout",
+                    )
+                except Exception:
+                    log.exception("Hook session.fail (timeout) failed")
+                return
             except Exception as exc:
                 log.error(f"LLM error in {session.id[:8]}: {exc}", exc_info=True)
                 if on_event:

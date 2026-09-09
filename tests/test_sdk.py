@@ -385,3 +385,122 @@ class TestInterrupt:
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock):
             await sdk.interrupt(session)
         assert session.status == "interrupted"
+
+
+# ── RuntimeSDK — Per-session lock & prompt timeout ─────────────────────────
+
+class TestSessionLocksAndTimeout:
+    """Guards the two bring-up bugs: SDK-wide lock and unbounded prompt.
+
+    Before this fix, RuntimeSDK.submit_prompt held a single ``self._lock``
+    across the whole SDK. A stalled upstream (e.g. a wedged CPU llama-server)
+    could hold that lock indefinitely and every future prompt request would
+    silently queue behind it. The fix uses per-session locks plus an
+    asyncio.wait_for ceiling on the LLM call itself.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stalled_session_does_not_block_other_sessions(self):
+        """Session A hangs; Session B must still complete promptly."""
+        sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
+        with patch("httpx.AsyncClient") as MockClient:
+            instance = AsyncMock()
+            instance.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            MockClient.return_value = instance
+            await sdk.start()
+
+        # Session A: _stream_llm hangs forever (simulates wedged upstream).
+        # Session B: _stream_llm returns immediately.
+        session_a = LiveSession(id="sess-a", model="test", cwd=".")
+        session_b = LiveSession(id="sess-b", model="test", cwd=".")
+
+        hang_event = asyncio.Event()
+
+        async def hang(*args, **kwargs):
+            await hang_event.wait()  # never set
+
+        async def fast(*args, **kwargs):
+            return None
+
+        # Route by session id.
+        async def per_session_stream(session, *args, **kwargs):
+            if session.id == "sess-a":
+                await hang(session, *args, **kwargs)
+            else:
+                await fast(session, *args, **kwargs)
+
+        sdk._stream_llm = per_session_stream  # type: ignore[assignment]
+
+        # Kick off A in background — it will hang.
+        task_a = asyncio.create_task(sdk.submit_prompt(session_a, "prompt A"))
+
+        # Give A a tick to acquire its lock and enter _stream_llm.
+        await asyncio.sleep(0.05)
+
+        # B must complete quickly — proves it did NOT queue behind A.
+        await asyncio.wait_for(
+            sdk.submit_prompt(session_b, "prompt B"), timeout=2.0
+        )
+        assert session_b.status == "ready"
+
+        # Cleanup: cancel the hanging task.
+        task_a.cancel()
+        try:
+            await task_a
+        except (asyncio.CancelledError, BaseException):
+            pass
+
+    @pytest.mark.asyncio
+    async def test_prompt_timeout_marks_session_failed_and_releases_lock(self):
+        """A prompt exceeding _prompt_timeout_seconds is aborted cleanly."""
+        sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
+        # Short timeout for the test.
+        sdk._prompt_timeout_seconds = 0.1
+
+        with patch("httpx.AsyncClient") as MockClient:
+            instance = AsyncMock()
+            instance.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
+            MockClient.return_value = instance
+            await sdk.start()
+
+        session = LiveSession(id="sess-timeout", model="test", cwd=".")
+
+        async def hang_forever(*args, **kwargs):
+            await asyncio.sleep(10)
+
+        sdk._stream_llm = hang_forever  # type: ignore[assignment]
+
+        events = []
+
+        async def on_event(env):
+            events.append(env)
+
+        # Should return within timeout+overhead, NOT after 10s.
+        await asyncio.wait_for(
+            sdk.submit_prompt(session, "will time out", on_event=on_event),
+            timeout=2.0,
+        )
+
+        assert session.status == "failed"
+        # At least one session_failed envelope emitted.
+        assert len(events) >= 1
+
+        # Follow-up prompt on the SAME session must succeed — proves the
+        # per-session lock was released after the timeout.
+        sdk._stream_llm = AsyncMock()  # type: ignore[assignment]
+        await asyncio.wait_for(
+            sdk.submit_prompt(session, "next prompt"), timeout=2.0
+        )
+        assert session.status == "ready"
+
+    @pytest.mark.asyncio
+    async def test_default_prompt_timeout_env_override(self):
+        """TEKTOS_PROMPT_TIMEOUT_SECONDS is honored at __init__."""
+        import os as _os
+
+        _os.environ["TEKTOS_PROMPT_TIMEOUT_SECONDS"] = "42"
+        try:
+            sdk = RuntimeSDK()
+            assert sdk._prompt_timeout_seconds == 42.0
+        finally:
+            _os.environ.pop("TEKTOS_PROMPT_TIMEOUT_SECONDS", None)
