@@ -86,10 +86,26 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "file_read",
-            "description": "Read file content",
+            "description": (
+                "Read file content. Returns a header line with total_lines, "
+                "total_bytes, start_line, end_line, and truncated=<true|false>. "
+                "When truncated=true, call file_read again with the offset shown "
+                "in the footer to page through the rest of the file. Default "
+                "window is 2000 lines starting at line 1."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "File path to read"}},
+                "properties": {
+                    "path": {"type": "string", "description": "File path to read"},
+                    "offset": {
+                        "type": "integer",
+                        "description": "1-based starting line number. Default 1.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to return. Default 2000.",
+                    },
+                },
                 "required": ["path"],
             },
         },
@@ -1011,7 +1027,27 @@ class RuntimeSDK:
                 "  1. What exactly am I trying to accomplish?\n"
                 "  2. What arguments does this tool need? (Check required fields!)\n"
                 "  3. What could go wrong?\n"
-                "  → Write your thinking in the text stream, THEN call the tool.\n"
+                "  → Do your thinking silently (reasoning), THEN call the tool.\n"
+                "\n"
+                "ACT, DO NOT NARRATE:\n"
+                "- The user sees your tool calls and their results directly. Do NOT\n"
+                "  write sentences like 'Let me read the file' or 'I will now list\n"
+                "  the directory' or 'The file was truncated, let me continue' —\n"
+                "  those are announcements, not actions. Just issue the tool call.\n"
+                "- Only write user-visible text when you are giving the FINAL answer\n"
+                "  (a summary, an explanation, or a report) after the tool work is\n"
+                "  done. Between tool calls, stay silent.\n"
+                "- If you find yourself typing 'Let me…' or 'I will…' in visible\n"
+                "  text, delete it and call the tool instead.\n"
+                "\n"
+                "READ TOOL RESULT HEADERS:\n"
+                "- file_read returns a header like 'total_lines=N start_line=S\n"
+                "  end_line=E truncated=<true|false>'. When truncated=true, do NOT\n"
+                "  narrate about it — call file_read again with offset=E+1 to\n"
+                "  continue paging. Repeat until truncated=false.\n"
+                "- bash returns 'Exit N' with stdout/stderr. If exit is non-zero,\n"
+                "  read the error and either fix the command or try a different\n"
+                "  approach — do not repeat the same failing command.\n"
                 "\n"
                 "STEP 1: QUICK RESEARCH (MAX 1 web_search call) — Search once for the key information you need.\n"
                 "  → AFTER 1 SEARCH, YOU MUST STOP AND WRITE CODE. No more searching.\n"
@@ -1094,6 +1130,24 @@ class RuntimeSDK:
                         "DO NOT skip this step. DO NOT keep researching. Once you have enough info, WRITE THE CODE.\n"
                         "STEP 3: EXECUTE — Run your code using bash.\n"
                         "STEP 4: VERIFY — Check the output and verify correctness.\n"
+                        "\n"
+                        "ACT, DO NOT NARRATE:\n"
+                        "- The user sees your tool calls and their results directly. Do NOT\n"
+                        "  write sentences like 'Let me read the file' or 'I will now list\n"
+                        "  the directory' or 'The file was truncated, let me continue' —\n"
+                        "  those are announcements, not actions. Just issue the tool call.\n"
+                        "- Only write user-visible text when you are giving the FINAL answer\n"
+                        "  (a summary, an explanation, or a report) after the tool work is\n"
+                        "  done. Between tool calls, stay silent.\n"
+                        "\n"
+                        "READ TOOL RESULT HEADERS:\n"
+                        "- file_read returns a header like 'total_lines=N start_line=S\n"
+                        "  end_line=E truncated=<true|false>'. When truncated=true, do NOT\n"
+                        "  narrate about it — call file_read again with offset=E+1 to\n"
+                        "  continue paging. Repeat until truncated=false.\n"
+                        "- bash returns 'Exit N' with stdout/stderr. If exit is non-zero,\n"
+                        "  read the error and either fix the command or try a different\n"
+                        "  approach — do not repeat the same failing command.\n"
                         "\n"
                         "RULES:\n"
                         "- ALWAYS write code to a file using file_write before running it.\n"
