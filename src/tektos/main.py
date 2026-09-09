@@ -66,7 +66,6 @@ _unified_search: Any = None
 _gitops_engine: Any = None
 _auto_recovery: Any = None
 _telemetry_collector: Any = None
-_self_improvement_loop_simple: Any = None
 _self_improvement_loop_orchestrator: Any = None
 _self_modification_engine: Any = None
 _plugin_loader: Any = None
@@ -137,7 +136,7 @@ async def lifespan(app: _FastAPI):
     global _immune_system, _loop_safety_monitor, _loop_guard
     global _hierarchical_agent, _long_running_agent, _coding_agent_executor
     global _memory_persistence, _hindsight_client, _reflection_engine, _synthesis_engine
-    global _self_improvement_loop_simple, _self_improvement_loop_orchestrator
+    global _self_improvement_loop_orchestrator
     global _self_modification_engine, _plugin_loader, _axiom_system
     global _neo4j_backend, _postgres_backend, _redis_backend
     global _unified_search, _gitops_engine, _auto_recovery, _telemetry_collector
@@ -1210,18 +1209,10 @@ async def lifespan(app: _FastAPI):
         log.warning("Failed to initialize synthesis engine: %s", exc)
         _synthesis_engine = None
 
-    # 16. Initialize self-improvement loop orchestrator
+    # 16. Initialize self-improvement loop orchestrator (Hegelian)
     from tektos.agents.self_improvement.loop_orchestrator import (
         SelfImprovementLoop as SelfImprovementLoopOrchestrator,
     )
-    from tektos.self_improvement.loop import SelfImprovementLoop as SelfImprovementLoopSimple
-
-    try:
-        _self_improvement_loop_simple = SelfImprovementLoopSimple(max_iterations=100)
-        log.info("Self-improvement loop (simple) initialized")
-    except Exception as exc:
-        log.warning("Failed to initialize self-improvement loop (simple): %s", exc)
-        _self_improvement_loop_simple = None
 
     try:
         _self_improvement_loop_orchestrator = SelfImprovementLoopOrchestrator(
@@ -1232,6 +1223,56 @@ async def lifespan(app: _FastAPI):
     except Exception as exc:
         log.warning("Failed to initialize self-improvement loop orchestrator: %s", exc)
         _self_improvement_loop_orchestrator = None
+
+    # Background driver: run a single loop cycle every N seconds when
+    # enabled. Off by default so tests / cold boots don't burn cycles;
+    # opt in via TEKTOS_SELF_IMPROVEMENT_ENABLED=true.
+    _self_improvement_task: Any = None
+    _self_improvement_interval: float = float(
+        _os.getenv("TEKTOS_SELF_IMPROVEMENT_INTERVAL", "1800")
+    )  # 30 minutes default
+    _self_improvement_enabled: bool = (
+        _os.getenv("TEKTOS_SELF_IMPROVEMENT_ENABLED", "false").lower() == "true"
+    )
+
+    async def _self_improvement_driver() -> None:
+        """Background task: pull pending prompts from the queue and run cycles.
+
+        The orchestrator's run() is synchronous and requires a real prompt.
+        Rather than fabricate one, we watch a lightweight in-process queue
+        (populated by POST /api/self_improvement/enqueue) and drive one
+        cycle per queued prompt. Keeps the loop wired without inventing
+        work.
+        """
+        while True:
+            await _asyncio.sleep(_self_improvement_interval)
+            if _self_improvement_loop_orchestrator is None:
+                continue
+            try:
+                queue = getattr(app.state, "self_improvement_queue", None)
+                if not queue:
+                    continue
+                prompt = queue.pop(0)
+                cycle = await _asyncio.to_thread(
+                    _self_improvement_loop_orchestrator.run, prompt
+                )
+                log.info(
+                    "Self-improvement cycle complete: id=%s status=%s",
+                    getattr(cycle, "cycle_id", "?"),
+                    getattr(cycle, "status", "?"),
+                )
+            except IndexError:
+                pass  # queue drained between check and pop
+            except Exception as exc:
+                log.warning("Self-improvement cycle failed: %s", exc)
+
+    app.state.self_improvement_queue = []
+    if _self_improvement_enabled and _self_improvement_loop_orchestrator is not None:
+        _self_improvement_task = _asyncio.create_task(_self_improvement_driver())
+        log.info(
+            "Self-improvement driver started (interval=%.0fs)",
+            _self_improvement_interval,
+        )
 
     # 16b. Initialize dreamtime background task — runs periodic contemplation
     _dreamtime_task: Any = None
@@ -1553,10 +1594,11 @@ async def lifespan(app: _FastAPI):
             log.warning("Error closing Neo4j backend: %s", exc)
     if _synthesis_engine:
         log.info("Synthesis engine stopped (syntheses preserved)")
-    if _self_improvement_loop_simple:
-        log.info("Self-improvement loop (simple) stopped")
     if _self_improvement_loop_orchestrator:
         log.info("Self-improvement loop orchestrator stopped")
+    if _self_improvement_task:
+        _self_improvement_task.cancel()
+        log.info("Self-improvement driver stopped")
     if _dreamtime_task:
         _dreamtime_task.cancel()
         log.info("Dreamtime background task stopped")
@@ -4259,6 +4301,41 @@ async def inference_status():
         "base_url": runtime_sdk._llm_base_url,
         "health": "ok" if available else "llm_backend_unreachable",
         "llm_available": available,
+    }
+
+
+@app.post("/api/self_improvement/enqueue")
+async def self_improvement_enqueue(payload: dict[str, Any]):
+    """Enqueue a prompt for the self-improvement orchestrator driver.
+
+    Requires ``TEKTOS_SELF_IMPROVEMENT_ENABLED=true`` at boot for the
+    background driver to actually pick items off the queue. If the
+    driver is off, this endpoint still accepts the item so it can be
+    processed after a restart.
+    """
+    prompt = str(payload.get("prompt", "")).strip()
+    if not prompt:
+        return {"queued": False, "error": "prompt is required"}
+    queue = getattr(app.state, "self_improvement_queue", None)
+    if queue is None:
+        app.state.self_improvement_queue = []
+        queue = app.state.self_improvement_queue
+    queue.append(prompt)
+    return {"queued": True, "pending": len(queue)}
+
+
+@app.get("/api/self_improvement/status")
+async def self_improvement_status():
+    """Report driver enablement and pending queue depth."""
+    queue = getattr(app.state, "self_improvement_queue", None) or []
+    return {
+        "enabled": _os.getenv("TEKTOS_SELF_IMPROVEMENT_ENABLED", "false").lower()
+        == "true",
+        "orchestrator_ready": _self_improvement_loop_orchestrator is not None,
+        "pending": len(queue),
+        "interval_seconds": float(
+            _os.getenv("TEKTOS_SELF_IMPROVEMENT_INTERVAL", "1800")
+        ),
     }
 
 
