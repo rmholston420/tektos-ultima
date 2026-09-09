@@ -157,30 +157,84 @@ export function applyEnvelope(env: WSEnvelope): void {
       return;
     }
 
-    case "assistant.delta": {
-      const p = env.payload as { message_id: string; delta: string; reasoning?: string };
-      const existing = $messages.get()[p.message_id];
-      if (existing) {
-        $messages.setKey(p.message_id, {
-          ...existing,
-          text: existing.text + p.delta,
-          reasoning:
-            (existing.reasoning ?? "") + (p.reasoning ?? ""),
-        });
-      } else {
-        const msg: AssistantMessage = {
-          id: p.message_id,
-          role: "assistant",
-          text: p.delta,
-          reasoning: p.reasoning,
-          created_at: now,
-          completed: false,
-          correlation_id: env.correlation_id,
-          tool_call_ids: [],
-        };
-        $messages.setKey(p.message_id, msg);
-        $messageOrder.set([...$messageOrder.get(), p.message_id]);
+    case "assistant.delta":
+    case "assistant.reasoning": {
+      // Backend envelopes (see protocol/envelope.py) are:
+      //   assistant.delta     → {"text": <spoken chunk>}
+      //   assistant.reasoning → {"text": <private chain-of-thought>}
+      // and never carry a message_id, so both streams for one turn share
+      // a single implicit assistant message. Earlier code read `p.delta`
+      // and `p.message_id`, both undefined, which appended the literal
+      // string "undefined" for every text chunk and keyed the message
+      // under the string key `undefined`. That is why the reasoning panel
+      // filled (via the completed handler's usage) while the final
+      // formatted answer vanished on end-of-turn.
+      //
+      // Model: one open assistant message per correlation_id at any time.
+      // If none exists yet for this correlation, create it (id derived
+      // from correlation_id so a repeat delta with the same correlation
+      // routes back to the same message).
+      const p = env.payload as {
+        message_id?: string;
+        text?: string;
+        delta?: string;
+        reasoning?: string;
+      };
+      const chunk = p.text ?? p.delta ?? "";
+      if (!chunk) return;
+
+      const isReasoning = env.event_type === "assistant.reasoning";
+      const correlationId = env.correlation_id ?? "";
+
+      // Resolve target message: explicit message_id > newest open message
+      // for this correlation_id > newest open assistant message overall.
+      let targetId: string | undefined = p.message_id;
+      const byId = $messages.get();
+      const order = $messageOrder.get();
+      if (!targetId && correlationId) {
+        for (let i = order.length - 1; i >= 0; i--) {
+          const m = byId[order[i]];
+          if (m && m.role === "assistant" && !m.completed && m.correlation_id === correlationId) {
+            targetId = order[i];
+            break;
+          }
+        }
       }
+      if (!targetId) {
+        for (let i = order.length - 1; i >= 0; i--) {
+          const m = byId[order[i]];
+          if (m && m.role === "assistant" && !m.completed) {
+            targetId = order[i];
+            break;
+          }
+        }
+      }
+
+      if (targetId) {
+        const existing = byId[targetId];
+        $messages.setKey(targetId, {
+          ...existing,
+          text: isReasoning ? existing.text : existing.text + chunk,
+          reasoning: isReasoning ? (existing.reasoning ?? "") + chunk : existing.reasoning,
+        });
+        return;
+      }
+
+      // No open assistant message yet — mint one keyed by correlation_id
+      // (or a fallback so we still get a stable key on unknown backends).
+      const newId = correlationId || `msg-${Date.now()}-${order.length}`;
+      const msg: AssistantMessage = {
+        id: newId,
+        role: "assistant",
+        text: isReasoning ? "" : chunk,
+        reasoning: isReasoning ? chunk : undefined,
+        created_at: now,
+        completed: false,
+        correlation_id: correlationId,
+        tool_call_ids: [],
+      };
+      $messages.setKey(newId, msg);
+      $messageOrder.set([...order, newId]);
       return;
     }
 
