@@ -123,28 +123,58 @@ def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def session_created(session_id: str) -> WSEnvelope:
-    """Session initialized. Store-only, visible on replay."""
+def session_created(
+    session_id: str,
+    *,
+    model: str | None = None,
+    cwd: str | None = None,
+) -> WSEnvelope:
+    """Session initialized. Store-only, visible on replay.
+
+    ``model`` and ``cwd`` are included so the frontend header can render
+    the active model and working directory on first receipt, without
+    needing a follow-up REST GET.
+    """
+    payload: dict[str, Any] = {
+        "subtype": "session.created",
+        "message": "Session created",
+        "since_seq": 0,
+    }
+    if model is not None:
+        payload["model"] = model
+    if cwd is not None:
+        payload["cwd"] = cwd
     return WSEnvelope(
         session_id=session_id,
         event_type=EventType.SESSION_CREATED,
-        payload={
-            "subtype": "session.created",
-            "message": "Session created",
-            "since_seq": 0,
-        },
+        payload=payload,
     )
 
 
-def session_ready(session_id: str, since_seq: int = 0) -> WSEnvelope:
-    """Connected to LLM, ready for prompts."""
+def session_ready(
+    session_id: str,
+    since_seq: int = 0,
+    *,
+    model: str | None = None,
+    cwd: str | None = None,
+) -> WSEnvelope:
+    """Connected to LLM, ready for prompts.
+
+    ``model`` and ``cwd`` are included so the frontend header can render
+    the active model and working directory on first receipt.
+    """
+    payload: dict[str, Any] = {
+        "message": "Session ready",
+        "since_seq": since_seq,
+    }
+    if model is not None:
+        payload["model"] = model
+    if cwd is not None:
+        payload["cwd"] = cwd
     return WSEnvelope(
         session_id=session_id,
         event_type=EventType.SESSION_READY,
-        payload={
-            "message": "Session ready",
-            "since_seq": since_seq,
-        },
+        payload=payload,
     )
 
 
