@@ -37,7 +37,7 @@ export function PlanRow() {
         </>
       }
     >
-      plan proposed — {pending.steps.length} step{pending.steps.length === 1 ? "" : "s"}
+      plan proposed — {(pending.steps?.length ?? 0)} step{(pending.steps?.length ?? 0) === 1 ? "" : "s"}
     </StatusRow>
   );
 }
