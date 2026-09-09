@@ -1605,9 +1605,10 @@ async def prompt_sse(body: _PromptSSEBody):
 
     async def event_generator():
         """Yield SSE events as OpenAI-compatible chat.completion.chunk frames."""
+        from tektos.runtime.approval_registry import get_approval_registry
+
         event_queue: _asyncio.Queue = _asyncio.Queue(maxsize=1024)
-        approved_tools: dict[str, bool] = {}
-        approval_event: _asyncio.Event = _asyncio.Event()
+        approval_registry = get_approval_registry()
 
         def _sse_frame(data: Any, *, event: str | None = None) -> str:
             """Encode one SSE frame, identical to Hermes Agent's _sse_frame."""
@@ -1787,12 +1788,11 @@ async def prompt_sse(body: _PromptSSEBody):
                 log.warning("SSE event conversion failed: %s", e)
 
         async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
+            approval_registry.register(session.id, tool_id, tool_name)
             try:
-                await _asyncio.wait_for(approval_event.wait(), timeout=30.0)
-                return approved_tools.get(tool_id, False)
-            except _asyncio.TimeoutError:
-                log.warning("Tool approval timeout for %s", tool_id)
-                return False
+                return await approval_registry.wait_for_decision(session.id, tool_id, timeout=30.0)
+            finally:
+                approval_registry.discard(session.id, tool_id)
 
         task = _asyncio.create_task(
             runtime_sdk.submit_prompt(
@@ -5090,8 +5090,9 @@ async def _handle_prompt(
     system_prompt: str | None,
 ) -> None:
     """Handle a prompt submission. Streams events to the WebSocket."""
-    approved_tools: dict[str, bool] = {}
-    approval_event: _asyncio.Event = _asyncio.Event()
+    from tektos.runtime.approval_registry import get_approval_registry
+
+    registry = get_approval_registry()
 
     async def on_event(envelope):
         """Send envelope to WebSocket."""
@@ -5101,13 +5102,17 @@ async def _handle_prompt(
             log.warning("WebSocket send failed (client may have disconnected): %s", e)
 
     async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
-        """Wait for user approval on a tool call."""
+        """Wait for user approval on a tool call.
+
+        Registers the pending approval in the process-wide registry so the
+        WebSocket approve/reject handlers can resolve it. Returns False on
+        timeout so the SDK rejects the tool call rather than hanging.
+        """
+        registry.register(session.id, tool_id, tool_name)
         try:
-            await _asyncio.wait_for(approval_event.wait(), timeout=30.0)
-            return approved_tools.get(tool_id, False)
-        except _asyncio.TimeoutError:
-            log.warning(f"Tool approval timeout for {tool_id}")
-            return False
+            return await registry.wait_for_decision(session.id, tool_id, timeout=30.0)
+        finally:
+            registry.discard(session.id, tool_id)
 
     await runtime_sdk.submit_prompt(
         session=session,
@@ -5235,22 +5240,11 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
             elif msg_type == "approve":
                 # Approve a tool call
                 tool_id = data.get("tool_id")
-                try:
-                    # Approve is handled in the runtime SDK's approval callback
-                    # For now, emit a system message
-                    await websocket.send_text(
-                        system_message(session_id, f"Tool {tool_id} approved", "info").to_json()
-                    )
-                    # Fire session.approve hook
-                    try:
-                        hm = app.state.hook_manager
-                        if hm:
-                            await hm.fire(
-                                "session.approve", session_id=session_id, tool_name=tool_id
-                            )
-                    except Exception:
-                        log.exception("Hook session.approve failed")
-                except KeyError:
+                from tektos.runtime.approval_registry import get_approval_registry
+
+                registry = get_approval_registry()
+                resolved = registry.approve(session_id, tool_id) if tool_id else False
+                if not resolved:
                     await websocket.send_text(
                         _json.dumps(
                             {
@@ -5260,24 +5254,26 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                             }
                         )
                     )
+                    continue
+                await websocket.send_text(
+                    system_message(session_id, f"Tool {tool_id} approved", "info").to_json()
+                )
+                # Fire session.approve hook
+                try:
+                    hm = app.state.hook_manager
+                    if hm:
+                        await hm.fire("session.approve", session_id=session_id, tool_name=tool_id)
+                except Exception:
+                    log.exception("Hook session.approve failed")
 
             elif msg_type == "reject":
                 # Reject a tool call
                 tool_id = data.get("tool_id")
-                try:
-                    await websocket.send_text(
-                        system_message(session_id, f"Tool {tool_id} rejected", "warning").to_json()
-                    )
-                    # Fire session.reject hook
-                    try:
-                        hm = app.state.hook_manager
-                        if hm:
-                            await hm.fire(
-                                "session.reject", session_id=session_id, tool_name=tool_id
-                            )
-                    except Exception:
-                        log.exception("Hook session.reject failed")
-                except KeyError:
+                from tektos.runtime.approval_registry import get_approval_registry
+
+                registry = get_approval_registry()
+                resolved = registry.reject(session_id, tool_id) if tool_id else False
+                if not resolved:
                     await websocket.send_text(
                         _json.dumps(
                             {
@@ -5287,6 +5283,17 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
                             }
                         )
                     )
+                    continue
+                await websocket.send_text(
+                    system_message(session_id, f"Tool {tool_id} rejected", "warning").to_json()
+                )
+                # Fire session.reject hook
+                try:
+                    hm = app.state.hook_manager
+                    if hm:
+                        await hm.fire("session.reject", session_id=session_id, tool_name=tool_id)
+                except Exception:
+                    log.exception("Hook session.reject failed")
 
             elif msg_type == "interrupt":
                 await session_manager.interrupt_session(session_id)
