@@ -1702,10 +1702,20 @@ class RuntimeSDK:
                     _readonly_tool_rounds += 1
                     if _readonly_tool_rounds >= _readonly_tool_round_budget:
                         _readonly_tools_disabled = True
+                        # Reset the loop-safety monitor. Without this,
+                        # check_turn at the top of the NEXT iteration sees
+                        # 3+ turns of repetitive tool-call history from the
+                        # exploration phase and escalates STOPPED before the
+                        # text-only turn ever runs — killing the session
+                        # exactly at the moment we've engineered it to
+                        # finally write the answer. Reset gives the forced
+                        # text-only turn a clean safety budget.
+                        self._loop_monitor.reset()
                         log.info(
                             f"[SDK] Read-only tool budget exhausted for "
                             f"{session.id[:8]} after {_readonly_tool_rounds} "
-                            f"rounds; forcing text-only completion on next turn"
+                            f"rounds; forcing text-only completion on next "
+                            f"turn (loop_safety monitor reset)"
                         )
 
                 # Capture this turn's text length for loop-safety repetition
