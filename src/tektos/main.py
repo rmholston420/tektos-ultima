@@ -186,7 +186,7 @@ async def lifespan(app: _FastAPI):
 
     # 5b. Initialize model router with running LLM as default
     llm_base_url = _os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1")
-    llm_model = _os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M")
+    llm_model = _os.getenv("TEKTOS_LLM_MODEL", "qwen3.8-27b-code")
     if llm_base_url and llm_model:
         try:
             from tektos.routing import ModelProfile, ModelRouter, ModelTier
@@ -916,25 +916,33 @@ async def lifespan(app: _FastAPI):
     # 11. Start runtime SDK — moved to after RuntimeSDK creation (~line 1120)
     # await runtime_sdk.start()  # Called after RuntimeSDK is instantiated
 
-    # 9. Initialize vision client (optional — only if VISION_LLM_URL is set)
-    vision_url = _os.getenv("TEKTOS_VISION_LLM_URL")
-    vision_model = _os.getenv("TEKTOS_VISION_MODEL", "Qwen2.5-VL-3B-Instruct-Q4_K_M")
+    # 9. Initialize vision client
+    # Env var: TEKTOS_VISION_URL (canonical). TEKTOS_VISION_LLM_URL is the
+    # legacy name and is still honored for one release for back-compat.
+    vision_url = _os.getenv("TEKTOS_VISION_URL") or _os.getenv("TEKTOS_VISION_LLM_URL")
+    if not vision_url:
+        vision_url = "http://127.0.0.1:8094/v1"
+    vision_model = _os.getenv("TEKTOS_VISION_MODEL", "qwen3-vl-4b")
     if vision_url:
         global vision_client
         try:
             from tektos.providers.vision_client import VisionClient
 
+            # Only append /v1 if the URL doesn't already have a version suffix.
+            base = vision_url.rstrip("/")
+            if not base.endswith("/v1"):
+                base = f"{base}/v1"
             vision_client = VisionClient(
-                base_url=f"{vision_url.rstrip('/')}/v1",
+                base_url=base,
                 model=vision_model,
             )
             await vision_client.start()
-            log.info("Vision client initialized: %s (model: %s)", vision_url, vision_model)
+            log.info("Vision client initialized: %s (model: %s)", base, vision_model)
         except Exception as exc:
             log.warning("Failed to initialize vision client: %s", exc)
             vision_client = None
     else:
-        log.info("Vision client skipped (TEKTOS_VISION_LLM_URL not set)")
+        log.info("Vision client skipped (TEKTOS_VISION_URL not set)")
 
     # 10. Initialize memory persistence layer
     global memory_system
@@ -1380,9 +1388,16 @@ async def lifespan(app: _FastAPI):
     try:
         from tektos.runtime.embedder import EmbedderClient
 
+        # Canonical env var is TEKTOS_EMBEDDER_BASE_URL; TEKTOS_EMBEDDER_URL
+        # is the older name and is still honored for back-compat.
+        _embedder_url = (
+            _os.getenv("TEKTOS_EMBEDDER_BASE_URL")
+            or _os.getenv("TEKTOS_EMBEDDER_URL")
+            or "http://127.0.0.1:8091/v1"
+        )
         _embedder_client = EmbedderClient(
-            llm_base_url=_os.getenv("TEKTOS_EMBEDDER_URL", "http://127.0.0.1:8091/v1"),
-            model=_os.getenv("TEKTOS_EMBEDDER_MODEL", "Qwen3-Embedding-0.6B-Q8_0"),
+            llm_base_url=_embedder_url,
+            model=_os.getenv("TEKTOS_EMBEDDER_MODEL", "qwen3-embedding-0.6b"),
         )
         await _embedder_client.start()
         log.info("Embedder client initialized")
@@ -1650,7 +1665,7 @@ app.add_middleware(
 
 
 class CreateSessionRequest(_BaseModel):
-    model: str = "Qwen_Qwen3.6-35B-A3B-Q4_K_M"
+    model: str = "qwen3.8-27b-code"
     cwd: str = "."
     provider: str = "local"
     permission_mode: str = "auto"
@@ -3661,91 +3676,71 @@ async def optimize_db():
 
 @app.get("/api/models")
 async def list_models():
-    """List all available models with their roles and descriptions."""
-    models = [
+    """List models built from the currently-configured backend endpoints.
+
+    The list reflects the four llama-server endpoints Tektos-Ultima is wired
+    to on Colossus:
+
+        - primary coder    (TEKTOS_LLM_BASE_URL, default 8090)
+        - fallback coder   (TEKTOS_LLM_FALLBACK_URL, default 8092)
+        - embedder         (TEKTOS_EMBEDDER_BASE_URL, default 8091)
+        - vision           (TEKTOS_VISION_URL, default 8094)
+
+    Model IDs mirror the ``--alias`` set on each llama-server so the payload
+    the client sends is honored by the backend without translation.
+    """
+    primary_url = _os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1")
+    primary_model = _os.getenv("TEKTOS_LLM_MODEL", "qwen3.8-27b-code")
+    fallback_url = _os.getenv("TEKTOS_LLM_FALLBACK_URL", "http://127.0.0.1:8092/v1")
+    fallback_model = _os.getenv("TEKTOS_LLM_FALLBACK_MODEL", "granite4.1-8b-instruct")
+    embedder_url = (
+        _os.getenv("TEKTOS_EMBEDDER_BASE_URL")
+        or _os.getenv("TEKTOS_EMBEDDER_URL")
+        or "http://127.0.0.1:8091/v1"
+    )
+    embedder_model = _os.getenv("TEKTOS_EMBEDDER_MODEL", "qwen3-embedding-0.6b")
+    vision_url = (
+        _os.getenv("TEKTOS_VISION_URL")
+        or _os.getenv("TEKTOS_VISION_LLM_URL")
+        or "http://127.0.0.1:8094/v1"
+    )
+    vision_model = _os.getenv("TEKTOS_VISION_MODEL", "qwen3-vl-4b")
+
+    return [
         {
-            "id": "qwen3-coder:30b",
-            "name": "qwen3-coder:30b",
+            "id": primary_model,
+            "name": primary_model,
             "role": "coder",
-            "description": "30.5B params. RL-trained on SWE-bench. Fast code generation, file editing, tool use. Best for implementation tasks.",
-            "params": "30.5B",
-            "capabilities": ["tools", "completion"],
-        },
-        {
-            "id": "qwen3.6:35b-a3b-mtp-coder",
-            "name": "qwen3.6:35b-a3b",
-            "role": "coder",
-            "description": "35.5B params. Multi-token prediction optimized for agentic coding. Strongest coding model available.",
-            "params": "35.5B",
-            "capabilities": ["tools", "completion"],
+            "description": "Primary coding model \u2014 GPU. Long-context agentic coding.",
+            "endpoint": primary_url,
+            "capabilities": ["tools", "completion", "thinking"],
             "recommended": True,
         },
         {
-            "id": "deepseek-r1:32b",
-            "name": "deepseek-r1:32b",
-            "role": "planner",
-            "description": "32.8B params. Deep reasoning model. Best for decomposition, planning, architecture, and chain-of-thought tasks.",
-            "params": "32.8B",
-            "capabilities": ["completion", "thinking"],
+            "id": fallback_model,
+            "name": fallback_model,
+            "role": "fallback",
+            "description": "CPU fallback coder \u2014 used automatically when the primary endpoint is unavailable.",
+            "endpoint": fallback_url,
+            "capabilities": ["tools", "completion"],
         },
         {
-            "id": "glm-4.7-flash",
-            "name": "glm-4.7-flash",
-            "role": "planner",
-            "description": "29.9B params. Strong reasoning with tool use. Good balance of speed and depth for planning tasks.",
-            "params": "29.9B",
-            "capabilities": ["tools", "completion", "thinking"],
+            "id": embedder_model,
+            "name": embedder_model,
+            "role": "embedder",
+            "description": "Embedding model for vector search and RAG.",
+            "endpoint": embedder_url,
+            "capabilities": ["embeddings"],
         },
         {
-            "id": "qwen3.6:35b-a3b-mtp-q4_K_M",
-            "name": "qwen3.6:35b-a3b (Q4)",
-            "role": "general",
-            "description": "35.5B params. Balanced generalist with multi-token prediction. Good for diverse tasks.",
-            "params": "35.5B",
-            "capabilities": ["tools", "completion", "thinking"],
-        },
-        {
-            "id": "qwen3.6:35b",
-            "name": "qwen3.6:35b",
-            "role": "general",
-            "description": "36.0B params. Full Qwen 3.6. Vision-capable, tool-use, thinking. Versatile all-rounder.",
-            "params": "36.0B",
-            "capabilities": ["tools", "completion", "thinking"],
-        },
-        {
-            "id": "qwen3.6:27b-coder",
-            "name": "qwen3.6:27b-coder",
+            "id": vision_model,
+            "name": vision_model,
             "role": "vision",
-            "description": "27.8B params. Code-specialized with vision. Read diagrams, screenshots, and code together.",
-            "params": "27.8B",
-            "capabilities": ["tools", "completion", "thinking"],
-        },
-        {
-            "id": "qwen3.5:9b-q8_0",
-            "name": "qwen3.5:9b",
-            "role": "fast",
-            "description": "9.7B params. Fast and responsive. Good for quick tasks, brainstorming, and iterative refinement.",
-            "params": "9.7B",
-            "capabilities": ["tools", "completion", "thinking"],
-        },
-        {
-            "id": "lfm2.5:8b",
-            "name": "lfm2.5:8b",
-            "role": "fast",
-            "description": "8.5B params. High context (256K). Fast responses with deep context retention.",
-            "params": "8.5B",
-            "capabilities": ["tools", "completion", "thinking"],
-        },
-        {
-            "id": "qwen3.5:2b-q8_0",
-            "name": "qwen3.5:2b",
-            "role": "fast",
-            "description": "2.3B params. Lightning fast. Best for simple Q&A and quick tasks.",
-            "params": "2.3B",
-            "capabilities": ["tools", "completion", "thinking"],
+            "description": "Vision-language model \u2014 diagrams, screenshots, and multimodal input.",
+            "endpoint": vision_url,
+            "capabilities": ["vision", "completion"],
         },
     ]
-    return models
 
 
 @app.get("/api/sessions")
@@ -4177,7 +4172,7 @@ async def vision_analyze(req: VisionAnalyzeRequest):
     if vision_client is None:
         raise _HTTPException(
             status_code=503,
-            detail="Vision client not initialized. Set TEKTOS_VISION_LLM_URL to enable.",
+            detail="Vision client not initialized. Set TEKTOS_VISION_URL to enable."
         )
 
     try:
@@ -4225,7 +4220,7 @@ async def vision_analyze_url(req: VisionAnalyzeUrlRequest):
     if vision_client is None:
         raise _HTTPException(
             status_code=503,
-            detail="Vision client not initialized. Set TEKTOS_VISION_LLM_URL to enable.",
+            detail="Vision client not initialized. Set TEKTOS_VISION_URL to enable."
         )
 
     try:
@@ -4257,7 +4252,7 @@ async def vision_status():
         return {
             "ok": False,
             "initialized": False,
-            "detail": "Vision client not initialized. Set TEKTOS_VISION_LLM_URL to enable.",
+            "detail": "Vision client not initialized. Set TEKTOS_VISION_URL to enable.",
         }
 
     try:
@@ -5050,7 +5045,7 @@ async def get_config():
             },
             {
                 "key": "vision_url",
-                "value": os.getenv("TEKTOS_VISION_LLM_URL", "not set"),
+                "value": os.getenv("TEKTOS_VISION_URL", os.getenv("TEKTOS_VISION_LLM_URL", "not set")),
                 "type": "string",
                 "description": "Vision LLM URL",
                 "sensitive": False,
@@ -5085,7 +5080,7 @@ async def update_config(body: _UpdateConfigBody):
         "llm_model": ("TEKTOS_LLM_MODEL", "env"),
         "gpu_power_limit": ("GPU_POWER_LIMIT", "env"),
         "log_level": ("TEKTOS_LOG_LEVEL", "env"),
-        "vision_url": ("TEKTOS_VISION_LLM_URL", "env"),
+        "vision_url": ("TEKTOS_VISION_URL", "env"),
     }
 
     if key in config_map:

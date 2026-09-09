@@ -21,8 +21,14 @@ from tektos.utils.db_utils import validate_table_name, escape_sql_identifier
 class TestLLMConfig:
     def test_default_values(self):
         config = LLMConfig()
-        assert config.base_url == "http://127.0.0.1:8091/v1"
+        assert config.base_url == "http://127.0.0.1:8090/v1"
+        assert config.model == "qwen3.8-27b-code"
         assert config.timeout == 300.0
+        # Failover defaults — primary/fallback layout on Colossus
+        assert config.fallback_url == "http://127.0.0.1:8092/v1"
+        assert config.fallback_model == "granite4.1-8b-instruct"
+        assert config.failover_enabled is True
+        assert config.failover_cooldown_seconds == 30.0
 
     def test_custom_values(self):
         config = LLMConfig(base_url="http://custom:9000/v1", timeout=60.0)
@@ -33,7 +39,7 @@ class TestLLMConfig:
 class TestHindsightConfig:
     def test_default_values(self):
         config = HindsightConfig()
-        assert config.base_url == "http://127.0.0.1:9177"
+        assert config.base_url == "http://127.0.0.1:9000"
         assert config.timeout == 30.0
 
 
@@ -48,7 +54,8 @@ class TestSearXNGConfig:
 class TestVisionConfig:
     def test_default_values(self):
         config = VisionConfig()
-        assert config.base_url == "http://127.0.0.1:8083"
+        assert config.base_url == "http://127.0.0.1:8094/v1"
+        assert config.model == "qwen3-vl-4b"
         assert config.timeout == 300.0
 
 
@@ -67,26 +74,44 @@ class TestAPIKeyConfig:
 class TestTektosConfig:
     def test_from_env_defaults(self):
         config = TektosConfig.from_env()
-        assert config.llm.base_url == "http://127.0.0.1:8091/v1"
-        assert config.hindsight.base_url == "http://127.0.0.1:9177"
+        assert config.llm.base_url == "http://127.0.0.1:8090/v1"
+        assert config.llm.model == "qwen3.8-27b-code"
+        assert config.llm.fallback_url == "http://127.0.0.1:8092/v1"
+        assert config.llm.fallback_model == "granite4.1-8b-instruct"
+        assert config.embedder.base_url == "http://127.0.0.1:8091/v1"
+        assert config.embedder.model == "qwen3-embedding-0.6b"
+        assert config.hindsight.base_url == "http://127.0.0.1:9000"
         assert config.searxng.base_url == "http://localhost:8888/search"
-        assert config.vision.base_url == "http://127.0.0.1:8083"
+        assert config.vision.base_url == "http://127.0.0.1:8094/v1"
+        assert config.vision.model == "qwen3-vl-4b"
         assert config.api_key.enabled is False
 
     @patch.dict(os.environ, {
         "TEKTOS_LLM_BASE_URL": "http://llm:8091/v1",
-        "TEKTOS_HINDSIGHT_URL": "http://127.0.0.1:9000",
+        "TEKTOS_LLM_MODEL": "custom-coder",
+        "TEKTOS_LLM_FALLBACK_URL": "http://fallback:8092/v1",
+        "TEKTOS_LLM_FALLBACK_MODEL": "custom-fallback",
+        "TEKTOS_EMBEDDER_BASE_URL": "http://emb:8091/v1",
+        "TEKTOS_EMBEDDER_MODEL": "custom-embedder",
+        "TEKTOS_HINDSIGHT_URL": "http://hindsight:9000",
         "TEKTOS_SEARXNG_URL": "http://search:8888/search",
-        "TEKTOS_VISION_URL": "http://vision:8083",
+        "TEKTOS_VISION_URL": "http://vision:8094/v1",
+        "TEKTOS_VISION_MODEL": "custom-vision",
         "TEKTOS_API_KEY_ENABLED": "true",
         "TEKTOS_API_KEY": "my-secret-key",
     })
     def test_from_env_custom(self):
         config = TektosConfig.from_env()
         assert config.llm.base_url == "http://llm:8091/v1"
-        assert config.hindsight.base_url == "http://hindsight:9177"
+        assert config.llm.model == "custom-coder"
+        assert config.llm.fallback_url == "http://fallback:8092/v1"
+        assert config.llm.fallback_model == "custom-fallback"
+        assert config.embedder.base_url == "http://emb:8091/v1"
+        assert config.embedder.model == "custom-embedder"
+        assert config.hindsight.base_url == "http://hindsight:9000"
         assert config.searxng.base_url == "http://search:8888/search"
-        assert config.vision.base_url == "http://vision:8083"
+        assert config.vision.base_url == "http://vision:8094/v1"
+        assert config.vision.model == "custom-vision"
         assert config.api_key.enabled is True
         assert config.api_key.api_key == "my-secret-key"
 

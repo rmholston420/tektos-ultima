@@ -56,9 +56,14 @@ from tektos.store.event_store import append_event
 
 log = _log.getLogger("tektos.runtime")
 
-# LLM endpoint configuration — configurable via environment
+# LLM endpoint configuration — configurable via environment.
+# Defaults intentionally point at the current llama-server layout on Colossus.
 LLM_BASE_URL = _os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1")
-LLM_MODEL = "Qwen3.6-35B-A3B-Q4_K_M"
+LLM_MODEL = _os.getenv("TEKTOS_LLM_MODEL", "qwen3.8-27b-code")
+LLM_FALLBACK_URL = _os.getenv("TEKTOS_LLM_FALLBACK_URL", "http://127.0.0.1:8092/v1")
+LLM_FALLBACK_MODEL = _os.getenv("TEKTOS_LLM_FALLBACK_MODEL", "granite4.1-8b-instruct")
+LLM_FAILOVER_ENABLED = _os.getenv("TEKTOS_LLM_FAILOVER_ENABLED", "true").lower() == "true"
+LLM_FAILOVER_COOLDOWN = float(_os.getenv("TEKTOS_LLM_FAILOVER_COOLDOWN_SECONDS", "30"))
 
 # Tool definitions for function calling
 TOOLS_SCHEMA = [
@@ -495,9 +500,26 @@ class RuntimeSDK:
         self._task_decomposer = task_decomposer
 
     async def start(self) -> None:
-        """Create the httpx client and start the immune system."""
-        self._client = httpx.AsyncClient(
-            base_url=self._llm_base_url,
+        """Create the httpx client and start the immune system.
+
+        Uses :class:`FailoverLLMClient` when a fallback endpoint is configured
+        (see ``TEKTOS_LLM_FALLBACK_URL``); falls back to a plain
+        ``httpx.AsyncClient`` when no fallback is set.
+        """
+        from tektos.runtime.llm_client import FailoverLLMClient
+
+        # The wrapper below presents get/post/aclose/base_url like an
+        # httpx.AsyncClient, but routes to a Granite CPU fallback whenever
+        # the primary endpoint fails. When failover is disabled or no
+        # fallback URL is configured, it behaves like a plain client
+        # pointed at the primary.
+        self._client = FailoverLLMClient(  # type: ignore[assignment]
+            primary_url=self._llm_base_url,
+            primary_model=self._llm_model,
+            fallback_url=LLM_FALLBACK_URL if LLM_FAILOVER_ENABLED else None,
+            fallback_model=LLM_FALLBACK_MODEL if LLM_FAILOVER_ENABLED else None,
+            enabled=LLM_FAILOVER_ENABLED,
+            cooldown_seconds=LLM_FAILOVER_COOLDOWN,
             timeout=httpx.Timeout(30.0, read=300.0),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )

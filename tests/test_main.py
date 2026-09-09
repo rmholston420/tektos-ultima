@@ -180,7 +180,7 @@ def _mock_search_events(return_value=None):
 class TestCreateSessionRequest:
     def test_defaults(self):
         req = CreateSessionRequest()
-        assert req.model == "Qwen_Qwen3.6-35B-A3B-Q4_K_M"
+        assert req.model == "qwen3.8-27b-code"
         assert req.cwd == "."
         assert req.provider == "local"
         assert req.permission_mode == "auto"
@@ -278,22 +278,32 @@ class TestListModels:
         assert "capabilities" in m
 
     def test_model_roles(self):
+        # The /api/models endpoint now reflects the four llama-server
+        # endpoints Tektos is wired to (primary coder, CPU fallback,
+        # embedder, vision) rather than a hand-curated list.
         app, _ = _build_mocked_app()
         client = TestClient(app, raise_server_exceptions=False)
         models = client.get("/api/models").json()
         roles = set(m["role"] for m in models)
-        assert "coder" in roles
-        assert "planner" in roles
-        assert "general" in roles
-        assert "fast" in roles
+        assert roles == {"coder", "fallback", "embedder", "vision"}
 
     def test_recommended_model(self):
         app, _ = _build_mocked_app()
         client = TestClient(app, raise_server_exceptions=False)
         models = client.get("/api/models").json()
         recommended = [m for m in models if m.get("recommended")]
-        assert len(recommended) >= 1
-        assert recommended[0]["id"] == "qwen3.6:35b-a3b-mtp-coder"
+        assert len(recommended) == 1
+        # The primary coder is the recommended default.
+        assert recommended[0]["role"] == "coder"
+        assert recommended[0]["id"] == "qwen3.8-27b-code"
+
+    def test_endpoint_field_present(self):
+        app, _ = _build_mocked_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        models = client.get("/api/models").json()
+        for m in models:
+            assert "endpoint" in m
+            assert m["endpoint"].startswith("http")
 
 
 # ---------------------------------------------------------------------------
