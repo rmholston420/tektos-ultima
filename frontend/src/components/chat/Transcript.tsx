@@ -37,7 +37,9 @@ export function Transcript() {
         {messages.length === 0 ? (
           <EmptyState />
         ) : (
-          messages.map((m) => <MessageBubble key={m.id} message={m} />)
+          messages
+            .filter((m) => m && m.id)
+            .map((m, i) => <MessageBubble key={m.id ?? `msg-${i}`} message={m} />)
         )}
       </div>
     </div>
