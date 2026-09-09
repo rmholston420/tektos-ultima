@@ -355,7 +355,7 @@ class ThermalGuardrail:
             )
         elif temp >= self.cap:
             zone = ThermalZone.RED
-            action = Action.HALT_WORKLOAD | Action.ALERT_USER
+            action = Action(Action.HALT_WORKLOAD | Action.ALERT_USER)
             msg = (
                 f"RED: GPU at {temp:.1f}°C "
                 f"(threshold {self.cap}°C). "
@@ -363,7 +363,7 @@ class ThermalGuardrail:
             )
         elif temp >= self.warning:
             zone = ThermalZone.CAP
-            action = Action.THROTTLE_WORKLOAD | Action.INCREASE_FAN
+            action = Action(Action.THROTTLE_WORKLOAD | Action.INCREASE_FAN)
             msg = (
                 f"WARNING: GPU at {temp:.1f}°C "
                 f"(threshold {self.warning}°C). "

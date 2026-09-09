@@ -417,7 +417,7 @@ class ACEFramework:
         return {
             "session_constraints": len(self._session_constraints),
             "session_context_tokens": len(self._session_context) // 4,
-            "health": self.get_health().to_dict()
+            "health": self.get_health().to_dict()  # type: ignore[attr-defined]
             if hasattr(self.get_health(), "to_dict")
             else {
                 "score": self.get_health().score,

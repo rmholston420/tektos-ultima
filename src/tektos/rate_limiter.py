@@ -26,7 +26,7 @@ def create_limiter() -> Limiter | None:
     """Create a rate limiter instance."""
     if not _SLOWAPI_AVAILABLE:
         return None
-    return Limiter(key_func=get_remote_address, default_limits=[_DEFAULT_LIMIT])
+    return Limiter(key_func=get_remote_address, default_limits=[_DEFAULT_LIMIT])  # type: ignore[misc]
 
 
 def enable_rate_limiting(limit: str = "100/minute") -> None:

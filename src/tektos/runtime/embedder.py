@@ -82,6 +82,7 @@ class EmbedderClient:
         """Generate an embedding for a single text."""
         if not self._client:
             await self.start()
+        assert self._client is not None
 
         resp = await self._client.post(
             f"{self._base_url}/embeddings",
@@ -101,6 +102,7 @@ class EmbedderClient:
         """Generate embeddings for multiple texts in one call."""
         if not self._client:
             await self.start()
+        assert self._client is not None
 
         resp = await self._client.post(
             f"{self._base_url}/embeddings",

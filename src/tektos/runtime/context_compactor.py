@@ -230,8 +230,8 @@ class ContextCompactor:
             return "No context to abstract"
 
         # Extract key topics and decisions
-        topics = set()
-        decisions = []
+        topics: set[str] = set()
+        decisions: list[str] = []
 
         for msg in messages:
             content = msg.get("content", "").lower()

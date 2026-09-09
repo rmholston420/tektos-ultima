@@ -39,6 +39,8 @@ class DiffScope:
 class TestPlanData:
     """Plan for test generation/extension (renamed from TestGenerationPlan to avoid pytest collection)."""
 
+    __test__ = False  # tell pytest this dataclass isn't a test class
+
     module_path: str
     file_path: str
     tests_to_create: list[str] = field(default_factory=list)  # new test class/function names

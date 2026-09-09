@@ -22,7 +22,7 @@ FROM python:3.12-slim AS backend
 LABEL org.opencontainers.image.title="tektos-backend" \
       org.opencontainers.image.description="Tektos AI agent backend" \
       org.opencontainers.image.version="1.0" \
-      org.opencontainers.image.source="https://github.com/nousresearch/tektos-ultima-v1"
+      org.opencontainers.image.source="https://github.com/rmholston420/tektos-ultima"
 
 # Create non-root user for security
 RUN groupadd --gid 1000 tektos \

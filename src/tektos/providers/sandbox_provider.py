@@ -380,7 +380,9 @@ class SandboxProvider:
             if resolved.is_file():
                 matches = self._search_file(resolved, pattern, max_results)
             elif resolved.is_dir():
-                for root, dirs, files in resolved.walk():
+                # Path.walk() is only Python 3.12+; use os.walk for 3.10+ compatibility.
+                for root_str, _dirs, files in os.walk(resolved):
+                    root = Path(root_str)
                     for name in files:
                         if name.startswith("."):
                             continue

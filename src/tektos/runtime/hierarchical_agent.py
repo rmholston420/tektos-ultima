@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -186,7 +187,7 @@ class HierarchicalAgent:
             elif task.role == AgentRole.DEPLOYER:
                 output = await self._execute_deployer(task)
             else:
-                output = f"Unknown role: {task.role.value}"
+                output = f"Unknown role: {task.role.value}"  # type: ignore[unreachable]
 
             task.status = AgentStatus.COMPLETED
             task.completed_at = time.time()
@@ -260,7 +261,7 @@ class HierarchicalAgent:
             List of AgentResults.
         """
         # Limit concurrency
-        tasks = []
+        tasks: list[Awaitable[AgentResult]] = []
         for task_id in task_ids:
             if len(tasks) >= self.max_concurrent_agents:
                 break

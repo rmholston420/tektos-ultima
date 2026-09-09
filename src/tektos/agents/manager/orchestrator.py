@@ -175,7 +175,7 @@ class Manager:
 
         return None
 
-    def _generate_archetype_feedback(self, category: str) -> ManagerFeedback:
+    def _generate_archetype_feedback(self, category: str) -> ManagerFeedback | None:
         """Generate feedback when an archetype hits threshold.
 
         This is the re-direction pattern:

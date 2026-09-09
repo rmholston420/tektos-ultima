@@ -14,6 +14,8 @@ from tektos.plugin import Plugin, PluginConfig, PluginRegistry
 class TestPluginImpl(Plugin):
     """Concrete plugin for testing."""
 
+    __test__ = False  # tell pytest this is a fixture class, not a test class
+
     @property
     def name(self) -> str:
         return "test_plugin"

@@ -147,7 +147,7 @@ class GitIntegration:
 
     def get_commits(self, count: int = 10, since: str | None = None) -> list[GitCommit]:
         """Get recent commits."""
-        commits = []
+        commits: list[GitCommit] = []
         try:
             cmd = ["git", "log", f"-n{count}", "--format=%H|%h|%s|%an|%aI", "--numstat"]
             if since:

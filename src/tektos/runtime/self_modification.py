@@ -66,7 +66,7 @@ class ModificationRequest:
     created_at: float = field(default_factory=time.time)
     completed_at: float = 0.0
     error: str | None = None
-    rollback_plan: str | None = None
+    rollback_plan: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""

@@ -11,6 +11,8 @@ used in context. The Disambiguator finds the context, then determines meaning.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from .language_game import LanguageGame
 from .models import (
     Ambiguity,
@@ -138,7 +140,7 @@ def find_ambiguities(text: str, language_game: LanguageGame) -> list[Ambiguity]:
             if len(other_meanings) > 0:
                 all_meanings = [primary_meaning] + other_meanings
                 # Critical if the term appears in a systems architecture context
-                criticality = "moderate"
+                criticality: Literal["critical", "moderate", "minor"] = "moderate"
                 if language_game == LanguageGame.SYSTEMS_ARCHITECTURE and term in (
                     "system",
                     "control",

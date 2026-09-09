@@ -151,7 +151,7 @@ class SchemaMigrationEngine:
 
                 # The forward function runs backward logic too —
                 # implement reverse in the function itself
-                fn(self, reverse=True)
+                fn(self, reverse=True)  # type: ignore[call-arg]
 
                 self._remove_migration_record(conn, version)
 
@@ -164,7 +164,7 @@ class SchemaMigrationEngine:
 
     def get_schema(self) -> dict[str, Any]:
         """Get the current schema as a dict (for self-improvement introspection)."""
-        schema = {"tables": {}, "version": self.get_current_version()}
+        schema: dict[str, Any] = {"tables": {}, "version": self.get_current_version()}
 
         with self._connect() as conn:
             # Get all tables
