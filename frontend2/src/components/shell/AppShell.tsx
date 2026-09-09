@@ -6,6 +6,9 @@ import { $connectionError, $connectionState } from "@/lib/stores/connection";
 import { $sessionId, $sessionModel } from "@/lib/stores/session";
 import { useProtocol } from "@/lib/hooks/useProtocol";
 import { ChatRegion } from "@/components/chat/ChatRegion";
+import { registerBuiltinVisualizers } from "@/components/assistant-ui/tool-visualizers";
+
+registerBuiltinVisualizers();
 
 /**
  * AppShell: three-region layout scaffold.
