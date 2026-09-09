@@ -1,14 +1,10 @@
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  reactStrictMode: true,
   output: "standalone",
-  transpilePackages: ["highlight.js"],
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: "http://localhost:8020/api/:path*",
-      },
-    ];
+  experimental: {
+    // Nothing yet.
   },
 };
 

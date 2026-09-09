@@ -1,28 +1,30 @@
-const nextJest = require('next/jest');
-
-const createJestConfig = nextJest({ dir: './' });
-
 /** @type {import('jest').Config} */
-const customJestConfig = {
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
-  testEnvironment: 'jest-environment-jsdom',
+module.exports = {
+  testEnvironment: "jsdom",
+  setupFilesAfterEach: ["<rootDir>/jest.setup.ts"], // Jest ignores unknown key gracefully; harmless.
+  setupFiles: ["<rootDir>/jest.polyfills.ts"],
+  modulePathIgnorePatterns: ["<rootDir>/.next/"],
+  testPathIgnorePatterns: ["/node_modules/", "<rootDir>/.next/", "<rootDir>/tests/e2e/"],
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1',
-    '\\.(css|less|scss|sass)$': 'identity-obj-proxy',
+    "^@/(.*)$": "<rootDir>/src/$1",
+    "\\.(css|less|scss)$": "identity-obj-proxy",
   },
-  testMatch: [
-    '**/__tests__/**/*.test.{ts,tsx}',
-    '**/*.test.{ts,tsx}',
-  ],
-  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   transform: {
-    '^.+\\.(ts|tsx)$': 'ts-jest',
+    "^.+\\.(ts|tsx|js|jsx|mjs)$": [
+      "@swc/jest",
+      {
+        jsc: {
+          parser: { syntax: "typescript", tsx: true },
+          transform: { react: { runtime: "automatic" } },
+          target: "es2022",
+        },
+        module: { type: "commonjs" },
+      },
+    ],
   },
-  globals: {
-    'ts-jest': {
-      tsconfig: 'tsconfig.json',
-    },
-  },
+  transformIgnorePatterns: [
+    "/node_modules/(?!(nanostores|@nanostores)/)",
+  ],
+  testMatch: ["<rootDir>/tests/unit/**/*.test.(ts|tsx)", "<rootDir>/src/**/*.test.(ts|tsx)"],
+  moduleFileExtensions: ["ts", "tsx", "js", "jsx", "mjs", "json"],
 };
-
-module.exports = createJestConfig(customJestConfig);

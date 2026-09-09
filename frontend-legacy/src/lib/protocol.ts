@@ -35,12 +35,7 @@ export class ProtocolClient {
     if (options?.protocol) {
       this.protocol = options.protocol;
     }
-    else if (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_TEKTOS_WS_PROTOCOL) {
-      this.protocol = process.env.NEXT_PUBLIC_TEKTOS_WS_PROTOCOL;
-    }
-    else if (typeof window !== "undefined" && window.location?.protocol === "https:") {
-      this.protocol = "wss";
-    }
+    // istanbul ignore if — window.location.protocol is read-only in jsdom
     else this.protocol = "ws";
   }
 

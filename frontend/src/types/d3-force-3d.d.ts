@@ -1,10 +1,17 @@
-declare module 'd3-force-3d' {
-  import { Simulation, SimulationNodeDatum, SimulationLinkDatum, ForceLink, ForceManyBody, ForceCenter, ForceCollide, ForceRadial, Force } from 'd3';
-
-  export function forceSimulation<Node extends SimulationNodeDatum>(nodes: Node[]): Simulation<Node, SimulationLinkDatum<Node>>;
-  export function forceLink<Node extends SimulationNodeDatum, Link extends SimulationLinkDatum<Node>>(links?: Link[]): ForceLink<Node, Link>;
-  export function forceManyBody(): ForceManyBody<SimulationNodeDatum>;
-  export function forceCenter(x?: number, y?: number, z?: number): ForceCenter<SimulationNodeDatum>;
-  export function forceCollide<Node extends SimulationNodeDatum>(radius?: number | ((d: Node) => number)): ForceCollide<Node>;
-  export function forceRadial<Node extends SimulationNodeDatum>(radius: number | ((d: Node) => number), x: number, y: number, z: number): ForceRadial<Node>;
+// Loose typing shim for d3-force-3d. Each factory is typed as a generic
+// call returning `any` so the legacy BiologicalGraph panel keeps building
+// with its `.forceSimulation<GraphNode>()` and `.forceLink<A,B>()` calls.
+declare module "d3-force-3d" {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  type F = <A = any, B = any>(...args: any[]) => any;
+  export const forceSimulation: F;
+  export const forceLink: F;
+  export const forceManyBody: F;
+  export const forceCenter: F;
+  export const forceCollide: F;
+  export const forceRadial: F;
+  export const forceX: F;
+  export const forceY: F;
+  export const forceZ: F;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
 }
