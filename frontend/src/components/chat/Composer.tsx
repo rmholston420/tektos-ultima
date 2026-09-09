@@ -9,8 +9,10 @@ import {
   $activeToolIds,
   $messages,
   $messageOrder,
+  $sessionId,
 } from "@/lib/stores/session";
 import { getProtocolClient } from "@/lib/hooks/useProtocol";
+import { api } from "@/lib/api";
 
 /**
  * Composer: single textarea + submit/interrupt. Autosize up to ~40vh.
@@ -99,10 +101,11 @@ export function Composer() {
     }
   }, []);
 
-  const submit = useCallback(() => {
+  const submit = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed) return;
     const client = getProtocolClient();
+
     // Optimistic user message so the transcript reflects submit immediately.
     const now = new Date().toISOString();
     const id = `local-user-${crypto.randomUUID()}`;
@@ -115,8 +118,28 @@ export function Composer() {
       tool_call_ids: [],
     });
     $messageOrder.set([...$messageOrder.get(), id]);
-    client.sendPrompt(trimmed);
     setText("");
+
+    // Lazily create a session on first prompt. The gateway proxy rejects
+    // prompt.submit without a session_id, so we must POST /api/sessions
+    // first and hand the id to the protocol client before sending.
+    let sid = $sessionId.get();
+    if (!sid) {
+      try {
+        const s = await api.createSession();
+        sid = s.id;
+        $sessionId.set(sid);
+        client.setSessionId(sid);
+      } catch (err) {
+        console.error("Failed to create session:", err);
+        return;
+      }
+    } else {
+      // Session existed (e.g. via palette) but client may not have been told.
+      client.setSessionId(sid);
+    }
+
+    client.sendPrompt(trimmed);
   }, [text]);
 
   const interrupt = useCallback(() => {
