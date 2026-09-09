@@ -1286,8 +1286,14 @@ class RuntimeSDK:
         # early-completion branch below actually fire. Only applies when the
         # prompt-intent classifier flagged the prompt as read-only.
         # Configurable via TEKTOS_READONLY_TOOL_ROUNDS.
+        # Default 3 (not 6). loop_safety_monitor's repetition detector fires
+        # a hard STOP around turn 4-5 when the model keeps emitting the same
+        # kind of tool call, so budgets above 3 never get to run — the loop
+        # monitor kills the session before the read-only completion branch
+        # can fire. 3 lets us cap tool use BEFORE loop_safety decides to
+        # hard-stop, giving the model one text-only turn to write the answer.
         _readonly_tool_round_budget = int(
-            _os.getenv("TEKTOS_READONLY_TOOL_ROUNDS", "6")
+            _os.getenv("TEKTOS_READONLY_TOOL_ROUNDS", "3")
         )
         _readonly_tool_rounds = 0
         _readonly_tools_disabled = False
@@ -1333,6 +1339,22 @@ class RuntimeSDK:
                                 "warnings": safety_report.warnings,
                             },
                         )
+                    )
+                # Also emit assistant.completed so the frontend generating
+                # indicator stops spinning and downstream SSE consumers see
+                # the turn terminate. Without this the UI hangs on the last
+                # partial delta and the session appears frozen forever.
+                if on_event:
+                    stop_reason = (
+                        safety_report.stop_reason.value
+                        if safety_report.stop_reason
+                        else "loop_safety"
+                    )
+                    await on_event(assistant_completed(session.id, stop_reason))
+                    await append_event(
+                        session.id,
+                        "assistant.completed",
+                        {"stop_reason": stop_reason},
                     )
                 # Break out of the loop — safety mechanism activated
                 break
