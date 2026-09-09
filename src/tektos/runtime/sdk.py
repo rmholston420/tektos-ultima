@@ -1242,11 +1242,22 @@ class RuntimeSDK:
                 if TOOLS_SCHEMA:
                     payload["tools"] = TOOLS_SCHEMA
 
-                resp = await self._client.post(
+                # Use client.stream() so we get an incremental SSE response.
+                # The previous .post() awaited the entire response body before
+                # returning, which for stream=true bodies buffers everything
+                # server-side until the completion finishes — defeating the
+                # whole point of streaming and, in the failover case, hanging
+                # long enough that the caller gave up before ever seeing
+                # tokens. The SSE-consuming block below runs inside this
+                # ``async with`` so ``resp`` stays open while ``aiter_lines()``
+                # is being iterated.
+                _llm_stream_cm = self._client.stream(
+                    "POST",
                     "/chat/completions",
                     json=payload,
                     headers={"Content-Type": "application/json"},
                 )
+                resp = await _llm_stream_cm.__aenter__()
                 # Check status immediately (don't wait for full response for streaming)
                 resp.raise_for_status()
                 log.info(f"[SDK] LLM request started for session {session.id[:8]}")
@@ -1848,6 +1859,17 @@ class RuntimeSDK:
                 raise RuntimeError(f"LLM request timed out: {exc}")
             except Exception as exc:
                 raise RuntimeError(f"LLM streaming error: {exc}")
+            finally:
+                # Always close the streaming context manager so the underlying
+                # HTTP connection is released. ``_llm_stream_cm`` may be unset
+                # if the try block raised before it was assigned; guard for
+                # that. ``__aexit__`` on a not-yet-entered CM is a no-op.
+                _cm = locals().get("_llm_stream_cm")
+                if _cm is not None:
+                    try:
+                        await _cm.__aexit__(None, None, None)
+                    except Exception:
+                        log.debug("LLM stream teardown raised", exc_info=True)
 
     async def _handle_tool_completion(
         self,
