@@ -2375,8 +2375,18 @@ class RuntimeSDK:
                 immune_ctx
             )
             if self_mod_threats:
+                _t0 = self_mod_threats[0]
+                _ev = _t0.evidence or {}
+                _cmd = _ev.get("command") or _ev.get("path") or ""
+                _wt = _ev.get("write_target", "")
+                # Include the actual command AND resolved write target so
+                # false positives from the self-mod detector can be
+                # diagnosed from log alone (earlier the log had only the
+                # description and we had to guess what the model ran).
                 log.warning(
-                    f"[SDK] Self-modification attempt in {session.id[:8]}: {self_mod_threats[0].description}"
+                    f"[SDK] Self-modification attempt in {session.id[:8]}: {_t0.description}"
+                    + (f" | write_target={_wt!r}" if _wt else "")
+                    + (f" | cmd={_cmd[:200]!r}" if _cmd else "")
                 )
                 for t in self_mod_threats:
                     await self._immune_system.responses.respond(t)
