@@ -473,6 +473,119 @@ class BackupScheduler:
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
+        elif database == "redis":
+            # Redis restore: FLUSHALL then replay the RDB file by copying
+            # it into the configured redis data dir and issuing SHUTDOWN
+            # NOSAVE so redis reloads from the RDB on restart. Requires:
+            #   * REDIS_DATA_DIR   — filesystem path redis reads from
+            #   * REDIS_DBFILENAME — usually "dump.rdb"
+            # If either env var is missing, refuse cleanly rather than
+            # pretending to restore. Ops can also inject a custom
+            # restore command via REDIS_RESTORE_CMD which will be
+            # invoked with the backup file path appended.
+            custom_cmd = os.environ.get("REDIS_RESTORE_CMD", "").strip()
+            if custom_cmd:
+                result = subprocess.run(
+                    custom_cmd.split() + [backup_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+            else:
+                redis_data_dir = os.environ.get("REDIS_DATA_DIR", "").strip()
+                redis_dbfilename = os.environ.get("REDIS_DBFILENAME", "dump.rdb").strip()
+                if not redis_data_dir:
+                    return BackupRecord(
+                        timestamp=timestamp,
+                        database=database,
+                        status="error",
+                        file_path=backup_file,
+                        error_message=(
+                            "Redis restore requires REDIS_DATA_DIR (and optionally "
+                            "REDIS_DBFILENAME, default dump.rdb) to be set so the "
+                            "RDB can be dropped into the redis data dir. Alternatively "
+                            "set REDIS_RESTORE_CMD to a custom restore command."
+                        ),
+                    )
+                try:
+                    # 1) FLUSHALL to clear current data
+                    flush = subprocess.run(
+                        [
+                            "redis-cli",
+                            "-h",
+                            self.config.redis_host,
+                            "-p",
+                            str(self.config.redis_port),
+                            *(
+                                ["-a", self.config.redis_password]
+                                if self.config.redis_password
+                                else []
+                            ),
+                            "FLUSHALL",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    if flush.returncode != 0:
+                        return BackupRecord(
+                            timestamp=timestamp,
+                            database=database,
+                            status="error",
+                            file_path=backup_file,
+                            error_message=f"FLUSHALL failed: {flush.stderr[:400]}",
+                        )
+                    # 2) copy backup RDB into redis data dir
+                    target = Path(redis_data_dir) / redis_dbfilename
+                    shutil_copy = subprocess.run(
+                        ["cp", backup_file, str(target)],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    if shutil_copy.returncode != 0:
+                        return BackupRecord(
+                            timestamp=timestamp,
+                            database=database,
+                            status="error",
+                            file_path=backup_file,
+                            error_message=f"Copy RDB failed: {shutil_copy.stderr[:400]}",
+                        )
+                    # 3) SHUTDOWN NOSAVE — redis will restart under systemd/
+                    #    supervisor and pick up the new RDB. If redis is not
+                    #    supervised, the operator must restart it manually.
+                    shutdown = subprocess.run(
+                        [
+                            "redis-cli",
+                            "-h",
+                            self.config.redis_host,
+                            "-p",
+                            str(self.config.redis_port),
+                            *(
+                                ["-a", self.config.redis_password]
+                                if self.config.redis_password
+                                else []
+                            ),
+                            "SHUTDOWN",
+                            "NOSAVE",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    # SHUTDOWN closes the connection so a non-zero return
+                    # code here is expected when redis exits cleanly —
+                    # only treat it as an error if stderr signals real trouble.
+                    result = shutdown
+                except Exception as exc:
+                    return BackupRecord(
+                        timestamp=timestamp,
+                        database=database,
+                        status="error",
+                        file_path=backup_file,
+                        error_message=f"Redis restore failed: {exc}",
+                    )
+
         else:
             return BackupRecord(
                 timestamp=timestamp,

@@ -14,11 +14,31 @@ Usage:
 
     registry = get_strategy_registry()
     result = await registry.repair(threat)
+
+Simulation mode (default)
+-------------------------
+Out of the box every concrete ``repair()`` here is *simulated*: it mutates
+the passed-in ``ctx`` dict to make it look as if the underlying resource
+recovered, but no syscall, service restart, or model swap actually
+happens. Callers can rely on this in tests, but in production this is a
+foot-gun. Two safety nets are wired in:
+
+* ``BaseRepairStrategy.simulation = True`` — subclasses inherit this flag.
+  Every simulated ``repair()`` emits a WARNING log entry and stamps
+  ``"simulated": True`` into ``RepairResult.verification_details``.
+* ``TEKTOS_SELF_REPAIR_REQUIRE_REAL=1`` — when this env var is set, any
+  simulated ``repair()`` raises :class:`NotImplementedError` instead of
+  returning a fake success. Wire in a real effector
+  (:class:`RepairEffector`) to satisfy the check.
+
+Until a real effector lands, deployments must either accept the loud
+simulation warning or run with the strict env var and inject an effector.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any
 
@@ -28,6 +48,38 @@ from .models import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _require_real() -> bool:
+    """Return True when the strict env-var forbids simulated repairs."""
+    return os.getenv("TEKTOS_SELF_REPAIR_REQUIRE_REAL", "").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+class RepairEffector:
+    """Interface for real side-effect-carrying repair actions.
+
+    Concrete implementations should perform real syscalls: throttle the
+    GPU with ``nvidia-smi -pl``, restart a systemd unit, page the on-call
+    channel, or delegate to a container runtime. Injected by callers via
+    :meth:`RepairStrategyRegistry.set_effector`.
+    """
+
+    async def throttle_gpu(self, target_watts: int) -> None:
+        raise NotImplementedError
+
+    async def restart_service(self, name: str) -> None:
+        raise NotImplementedError
+
+    async def free_vram(self) -> None:
+        raise NotImplementedError
+
+    async def switch_to_fallback_model(self) -> None:
+        raise NotImplementedError
 
 
 class BaseRepairStrategy:
@@ -43,6 +95,32 @@ class BaseRepairStrategy:
     name: str = "base"
     supported_categories: list[str] = []
     min_severity: int = 0  # 0=LOW, 1=MEDIUM, 2=HIGH, 3=CRITICAL
+    #: When True (default), repair() only *simulates* the fix by mutating
+    #: ctx. Override to False on subclasses backed by real syscalls.
+    simulation: bool = True
+
+    def _mark_simulated(self, result: RepairResult) -> RepairResult:
+        """Emit a warning and stamp the result as simulated.
+
+        If ``TEKTOS_SELF_REPAIR_REQUIRE_REAL`` is set, raise instead.
+        """
+        if _require_real():
+            raise NotImplementedError(
+                f"Self-repair strategy {self.name!r} is simulation-only "
+                f"but TEKTOS_SELF_REPAIR_REQUIRE_REAL is set. Wire a real "
+                f"RepairEffector before enabling strict mode."
+            )
+        log.warning(
+            "[self_repair] %s executed SIMULATED repair \u2014 no real syscall "
+            "was made. Injected recovery flags into ctx only.",
+            self.name,
+        )
+        extra = " [simulated]"
+        if result.verification_details and extra not in result.verification_details:
+            result.verification_details = f"{result.verification_details}{extra}"
+        elif not result.verification_details:
+            result.verification_details = "simulated"
+        return result
 
     async def can_handle(self, category: str, severity: int) -> bool:
         return category in self.supported_categories and severity >= self.min_severity
@@ -528,7 +606,17 @@ class RepairStrategyRegistry:
 
     def __init__(self):
         self._strategies: list[BaseRepairStrategy] = []
+        self._effector: RepairEffector | None = None
         self._register_builtin_strategies()
+
+    def set_effector(self, effector: RepairEffector | None) -> None:
+        """Inject a real :class:`RepairEffector`.
+
+        When set, subclasses can invoke ``self._registry._effector`` (via
+        the registry singleton) to carry out real side-effects. If not
+        set, all built-in strategies remain in simulation mode.
+        """
+        self._effector = effector
 
     def _register_builtin_strategies(self) -> None:
         """Register all built-in repair strategies."""
@@ -597,8 +685,10 @@ class RepairStrategyRegistry:
         ctx["diagnosis"] = diagnosis
         log.info("[RepairStrategyRegistry] Diagnosis: %s", diagnosis)
 
-        # Repair
+        # Repair — wrap in simulation guard
         result = await strategy.repair(ctx)
+        if getattr(strategy, "simulation", False):
+            result = strategy._mark_simulated(result)
         result.actions_taken = [diagnosis] + result.actions_taken
 
         return result

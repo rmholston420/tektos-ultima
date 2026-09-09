@@ -19,7 +19,6 @@ This module provides:
 from __future__ import annotations
 
 import logging
-import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -90,16 +89,6 @@ class MCPToolResult:
             return f"## Tool: {self.tool_name}\n\n{self.content}"
         else:
             return f"## Tool: {self.tool_name} (FAILED)\n\nError: {self.error}"
-
-
-@dataclass
-class MCPToolCall:
-    """A tool call to an MCP tool."""
-
-    tool_name: str
-    arguments: dict[str, Any]
-    source: str  # Which MCP server provides this tool
-    timestamp: float = field(default_factory=time.time)
 
 
 class MCPClient:

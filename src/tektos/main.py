@@ -66,7 +66,6 @@ _unified_search: Any = None
 _gitops_engine: Any = None
 _auto_recovery: Any = None
 _telemetry_collector: Any = None
-_self_improvement_loop_simple: Any = None
 _self_improvement_loop_orchestrator: Any = None
 _self_modification_engine: Any = None
 _plugin_loader: Any = None
@@ -137,7 +136,7 @@ async def lifespan(app: _FastAPI):
     global _immune_system, _loop_safety_monitor, _loop_guard
     global _hierarchical_agent, _long_running_agent, _coding_agent_executor
     global _memory_persistence, _hindsight_client, _reflection_engine, _synthesis_engine
-    global _self_improvement_loop_simple, _self_improvement_loop_orchestrator
+    global _self_improvement_loop_orchestrator
     global _self_modification_engine, _plugin_loader, _axiom_system
     global _neo4j_backend, _postgres_backend, _redis_backend
     global _unified_search, _gitops_engine, _auto_recovery, _telemetry_collector
@@ -224,6 +223,10 @@ async def lifespan(app: _FastAPI):
         skill_dir=str(_Path.home() / ".tektos/skills/"),
     )
     _skill_manager = SkillManager(registry=_skill_registry)
+    # ToolRegistry is created a few lines below; wire it into the
+    # SkillManager after construction so unknown skill-step actions can
+    # fall back to tool dispatch instead of silently no-op'ing.
+    # (set_tool_registry() call happens after _tool_registry init below.)
     # tool_registry is initialized later at step 9; pass None for now
     _skill_executor = SkillExecutor(
         runtime_sdk=runtime_sdk,
@@ -287,6 +290,7 @@ async def lifespan(app: _FastAPI):
     _sandbox = SandboxProvider()
     _tool_registry = ToolRegistry(event_bus=_event_bus)
     _tool_registry.load_built_in(_sandbox)
+    _skill_manager.set_tool_registry(_tool_registry)
     _mcp_client = MCPClient(registry=_tool_registry)
     try:
         _mcp_client.connect(
@@ -297,6 +301,59 @@ async def lifespan(app: _FastAPI):
     except Exception as exc:
         log.warning("MCP client connection failed (non-fatal): %s", exc)
     _mcp_client = _mcp_client  # keep reference
+
+    # ── Wire runtime MCP registry (stdio + HTTP) ─────────────────────────
+    # The runtime SDK's _execute_tool() consults the runtime MCP registry
+    # first (runtime/mcp_integration.py) — but until this block, nothing
+    # ever populated it, so the MCP-priority branch was inert. Load MCP
+    # server configs from TEKTOS_MCP_SERVERS (JSON) or a single
+    # TEKTOS_MCP_SERVER_URL, register them, and connect.
+    try:
+        import json as _json
+
+        from tektos.runtime.mcp_integration import MCPClient as _RTMCPClient
+        from tektos.runtime.mcp_integration import add_mcp_client, get_mcp_registry
+
+        _rt_registry = get_mcp_registry()
+        _mcp_servers_json = _os.getenv("TEKTOS_MCP_SERVERS", "").strip()
+        _mcp_configs: list[dict[str, Any]] = []
+        if _mcp_servers_json:
+            try:
+                parsed = _json.loads(_mcp_servers_json)
+                if isinstance(parsed, list):
+                    _mcp_configs = [c for c in parsed if isinstance(c, dict)]
+            except Exception as _exc:
+                log.warning("TEKTOS_MCP_SERVERS is not valid JSON: %s", _exc)
+        # Backwards-compat: if the legacy single-server env var is set and
+        # no JSON list was provided, register that single HTTP server.
+        if not _mcp_configs:
+            _legacy_url = _os.getenv("TEKTOS_MCP_SERVER_URL", "").strip()
+            if _legacy_url:
+                _mcp_configs = [{"name": "default", "url": _legacy_url}]
+
+        for _cfg in _mcp_configs:
+            _name = _cfg.get("name") or _cfg.get("url") or _cfg.get("command") or "unnamed"
+            add_mcp_client(
+                _RTMCPClient(
+                    server_name=_name,
+                    command=_cfg.get("command"),
+                    url=_cfg.get("url"),
+                    args=_cfg.get("args") or [],
+                    env=_cfg.get("env"),
+                )
+            )
+        _connected = await _rt_registry.connect_all() if _mcp_configs else 0
+        if _mcp_configs:
+            log.info(
+                "Runtime MCP registry: %d/%d servers connected (%d tools)",
+                _connected,
+                len(_mcp_configs),
+                len(_rt_registry.tools),
+            )
+        else:
+            log.info("Runtime MCP registry: no MCP servers configured")
+    except Exception as _exc:
+        log.warning("Runtime MCP registry init failed (non-fatal): %s", _exc)
 
     # Register database management tools (need db_manager instance)
     _db_tools_registered = False
@@ -1157,18 +1214,10 @@ async def lifespan(app: _FastAPI):
         log.warning("Failed to initialize synthesis engine: %s", exc)
         _synthesis_engine = None
 
-    # 16. Initialize self-improvement loop orchestrator
+    # 16. Initialize self-improvement loop orchestrator (Hegelian)
     from tektos.agents.self_improvement.loop_orchestrator import (
         SelfImprovementLoop as SelfImprovementLoopOrchestrator,
     )
-    from tektos.self_improvement.loop import SelfImprovementLoop as SelfImprovementLoopSimple
-
-    try:
-        _self_improvement_loop_simple = SelfImprovementLoopSimple(max_iterations=100)
-        log.info("Self-improvement loop (simple) initialized")
-    except Exception as exc:
-        log.warning("Failed to initialize self-improvement loop (simple): %s", exc)
-        _self_improvement_loop_simple = None
 
     try:
         _self_improvement_loop_orchestrator = SelfImprovementLoopOrchestrator(
@@ -1179,6 +1228,56 @@ async def lifespan(app: _FastAPI):
     except Exception as exc:
         log.warning("Failed to initialize self-improvement loop orchestrator: %s", exc)
         _self_improvement_loop_orchestrator = None
+
+    # Background driver: run a single loop cycle every N seconds when
+    # enabled. Off by default so tests / cold boots don't burn cycles;
+    # opt in via TEKTOS_SELF_IMPROVEMENT_ENABLED=true.
+    _self_improvement_task: Any = None
+    _self_improvement_interval: float = float(
+        _os.getenv("TEKTOS_SELF_IMPROVEMENT_INTERVAL", "1800")
+    )  # 30 minutes default
+    _self_improvement_enabled: bool = (
+        _os.getenv("TEKTOS_SELF_IMPROVEMENT_ENABLED", "false").lower() == "true"
+    )
+
+    async def _self_improvement_driver() -> None:
+        """Background task: pull pending prompts from the queue and run cycles.
+
+        The orchestrator's run() is synchronous and requires a real prompt.
+        Rather than fabricate one, we watch a lightweight in-process queue
+        (populated by POST /api/self_improvement/enqueue) and drive one
+        cycle per queued prompt. Keeps the loop wired without inventing
+        work.
+        """
+        while True:
+            await _asyncio.sleep(_self_improvement_interval)
+            if _self_improvement_loop_orchestrator is None:
+                continue
+            try:
+                queue = getattr(app.state, "self_improvement_queue", None)
+                if not queue:
+                    continue
+                prompt = queue.pop(0)
+                cycle = await _asyncio.to_thread(
+                    _self_improvement_loop_orchestrator.run, prompt
+                )
+                log.info(
+                    "Self-improvement cycle complete: id=%s status=%s",
+                    getattr(cycle, "cycle_id", "?"),
+                    getattr(cycle, "status", "?"),
+                )
+            except IndexError:
+                pass  # queue drained between check and pop
+            except Exception as exc:
+                log.warning("Self-improvement cycle failed: %s", exc)
+
+    app.state.self_improvement_queue = []
+    if _self_improvement_enabled and _self_improvement_loop_orchestrator is not None:
+        _self_improvement_task = _asyncio.create_task(_self_improvement_driver())
+        log.info(
+            "Self-improvement driver started (interval=%.0fs)",
+            _self_improvement_interval,
+        )
 
     # 16b. Initialize dreamtime background task — runs periodic contemplation
     _dreamtime_task: Any = None
@@ -1451,6 +1550,13 @@ async def lifespan(app: _FastAPI):
     yield
 
     # Cleanup
+    try:
+        from tektos.runtime.mcp_integration import get_mcp_registry as _get_mcp_registry
+
+        await _get_mcp_registry().close_all()
+        log.info("Runtime MCP registry closed")
+    except Exception as exc:
+        log.warning("Error closing runtime MCP registry: %s", exc)
     if telegram_gateway:
         try:
             await telegram_gateway.stop()
@@ -1493,10 +1599,11 @@ async def lifespan(app: _FastAPI):
             log.warning("Error closing Neo4j backend: %s", exc)
     if _synthesis_engine:
         log.info("Synthesis engine stopped (syntheses preserved)")
-    if _self_improvement_loop_simple:
-        log.info("Self-improvement loop (simple) stopped")
     if _self_improvement_loop_orchestrator:
         log.info("Self-improvement loop orchestrator stopped")
+    if _self_improvement_task:
+        _self_improvement_task.cancel()
+        log.info("Self-improvement driver stopped")
     if _dreamtime_task:
         _dreamtime_task.cancel()
         log.info("Dreamtime background task stopped")
@@ -4192,11 +4299,64 @@ async def evaluation_status():
 @app.get("/api/inference/status")
 async def inference_status():
     """Inference engine status."""
+    available = getattr(runtime_sdk, "_llm_available", False)
     return {
-        "status": "active",
+        "status": "active" if available else "unavailable",
         "model": runtime_sdk._llm_model,
         "base_url": runtime_sdk._llm_base_url,
-        "health": "ok",
+        "health": "ok" if available else "llm_backend_unreachable",
+        "llm_available": available,
+    }
+
+
+@app.post("/api/self_improvement/enqueue")
+async def self_improvement_enqueue(payload: dict[str, Any]):
+    """Enqueue a prompt for the self-improvement orchestrator driver.
+
+    Requires ``TEKTOS_SELF_IMPROVEMENT_ENABLED=true`` at boot for the
+    background driver to actually pick items off the queue. If the
+    driver is off, this endpoint still accepts the item so it can be
+    processed after a restart.
+    """
+    prompt = str(payload.get("prompt", "")).strip()
+    if not prompt:
+        return {"queued": False, "error": "prompt is required"}
+    queue = getattr(app.state, "self_improvement_queue", None)
+    if queue is None:
+        app.state.self_improvement_queue = []
+        queue = app.state.self_improvement_queue
+    queue.append(prompt)
+    return {"queued": True, "pending": len(queue)}
+
+
+@app.get("/api/self_improvement/status")
+async def self_improvement_status():
+    """Report driver enablement and pending queue depth."""
+    queue = getattr(app.state, "self_improvement_queue", None) or []
+    return {
+        "enabled": _os.getenv("TEKTOS_SELF_IMPROVEMENT_ENABLED", "false").lower()
+        == "true",
+        "orchestrator_ready": _self_improvement_loop_orchestrator is not None,
+        "pending": len(queue),
+        "interval_seconds": float(
+            _os.getenv("TEKTOS_SELF_IMPROVEMENT_INTERVAL", "1800")
+        ),
+    }
+
+
+@app.post("/api/llm/probe")
+async def llm_probe():
+    """Re-probe the LLM endpoint and return current availability.
+
+    Lets the frontend recover from a transient LLM outage without
+    restarting the server. Runs a real ``GET /models`` against the
+    configured backend.
+    """
+    available = await runtime_sdk.probe_llm()
+    return {
+        "llm_available": available,
+        "base_url": runtime_sdk._llm_base_url,
+        "model": runtime_sdk._llm_model,
     }
 
 
@@ -5353,16 +5513,86 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
 # ---------------------------------------------------------------------------
 
 
-def main():
-    """Run the server."""
+def main() -> None:
+    """Tektos-Ultima CLI entry point.
+
+    Subcommands:
+        serve   Run the FastAPI server (default).
+        check   Validate configuration and imports without opening a socket.
+        version Print the installed package version.
+    """
+    import argparse
+    import importlib.metadata as _md
+
+    parser = argparse.ArgumentParser(
+        prog="tektos",
+        description="Tektos-Ultima autonomous coding agent.",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    serve = sub.add_parser("serve", help="Run the FastAPI server (default).")
+    serve.add_argument("--host", default=_os.getenv("TEKTOS_HOST", "127.0.0.1"))
+    serve.add_argument(
+        "--port",
+        type=int,
+        default=int(_os.getenv("TEKTOS_PORT", "8020")),
+    )
+    serve.add_argument("--log-level", default=_os.getenv("TEKTOS_LOG_LEVEL", "info"))
+    serve.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable uvicorn autoreload (development only).",
+    )
+
+    sub.add_parser(
+        "check",
+        help="Import every module and print a config summary, then exit.",
+    )
+    sub.add_parser("version", help="Print the installed package version.")
+
+    args = parser.parse_args()
+    command = args.command or "serve"
+
+    if command == "version":
+        try:
+            print(_md.version("tektos-ultima"))
+        except _md.PackageNotFoundError:
+            print("unknown (editable install without dist-info)")
+        return
+
+    if command == "check":
+        import importlib
+        import pkgutil
+
+        import tektos
+
+        failures: list[tuple[str, str]] = []
+        modules = 0
+        for mod_info in pkgutil.walk_packages(tektos.__path__, prefix="tektos."):
+            modules += 1
+            try:
+                importlib.import_module(mod_info.name)
+            except Exception as exc:  # noqa: BLE001
+                failures.append((mod_info.name, f"{type(exc).__name__}: {exc}"))
+
+        print(f"Modules attempted: {modules}")
+        print(f"Import failures:   {len(failures)}")
+        for name, err in failures:
+            print(f"  FAIL {name}: {err}")
+
+        print(f"LLM base URL:      {_os.getenv('TEKTOS_LLM_BASE_URL', 'http://127.0.0.1:8090/v1')}")
+        print(f"Log level:         {_os.getenv('TEKTOS_LOG_LEVEL', 'info')}")
+        raise SystemExit(1 if failures else 0)
+
+    # serve (default)
     import uvicorn
 
     uvicorn.run(
         "tektos.main:app",
-        host="127.0.0.1",
-        port=8020,
-        reload=False,
-        log_level="info",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level=args.log_level,
     )
 
 
