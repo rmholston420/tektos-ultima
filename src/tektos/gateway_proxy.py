@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import uuid
 import os
 import sys
 import time
@@ -47,6 +48,10 @@ _tektos_ws: dict[str, websockets.WebSocketClientProtocol] = {}
 _tektos_readers: dict[str, asyncio.Task] = {}
 # Maps gateway client WS to Tektos session ID
 _client_to_session: dict = {}
+# Per-session assistant-turn message_id — synthesized so the frontend can
+# key deltas/completed by a stable id (Tektos backend doesn't emit one).
+# Rotated after each assistant.completed so the next turn starts fresh.
+_assistant_msg_ids: dict[str, str] = {}
 # HTTP client
 _http_client: httpx.AsyncClient | None = None
 
@@ -389,23 +394,41 @@ async def _ws_reader_loop(sid, ws):
 
                 elif event_type == "assistant.delta":
                     text = payload.get("text", "") or payload.get("delta", "")
-                    if text:
+                    reasoning = payload.get("reasoning")
+                    if text or reasoning:
+                        # Lazily allocate a message_id for this assistant turn;
+                        # frontend keys deltas + completed by it.
+                        msg_id = _assistant_msg_ids.get(sid)
+                        if not msg_id:
+                            msg_id = f"msg_{uuid.uuid4().hex[:12]}"
+                            _assistant_msg_ids[sid] = msg_id
                         event = _notification(
                             "event",
                             {
                                 "type": "assistant.delta",
-                                "payload": {"session_id": sid, "text": text},
+                                "payload": {
+                                    "session_id": sid,
+                                    "message_id": msg_id,
+                                    "delta": text or "",
+                                    "reasoning": reasoning,
+                                },
                             },
                         )
                         await _broadcast_to_clients(event)
 
                 elif event_type == "assistant.completed":
+                    # Close out the current assistant-turn message and rotate.
+                    msg_id = _assistant_msg_ids.pop(sid, None) or f"msg_{uuid.uuid4().hex[:12]}"
                     event = _notification(
                         "event",
                         {
                             "type": "assistant.completed",
                             "payload": {
                                 "session_id": sid,
+                                "message_id": msg_id,
+                                "text": payload.get("text", ""),
+                                "reasoning": payload.get("reasoning"),
+                                "usage": payload.get("usage"),
                                 "stop_reason": payload.get("stop_reason", "end_turn"),
                             },
                         },
@@ -419,8 +442,12 @@ async def _ws_reader_loop(sid, ws):
                             "type": "tool.started",
                             "payload": {
                                 "session_id": sid,
+                                "tool_call_id": payload.get("tool_call_id")
+                                or payload.get("tool_id")
+                                or payload.get("id", ""),
                                 "tool_name": payload.get("tool_name", ""),
-                                "tool_input": payload.get("tool_input", {}),
+                                "arguments": payload.get("arguments")
+                                or payload.get("tool_input", {}),
                             },
                         },
                     )
@@ -433,8 +460,14 @@ async def _ws_reader_loop(sid, ws):
                             "type": "tool.completed",
                             "payload": {
                                 "session_id": sid,
+                                "tool_call_id": payload.get("tool_call_id")
+                                or payload.get("tool_id")
+                                or payload.get("id", ""),
                                 "tool_name": payload.get("tool_name", ""),
-                                "result": payload.get("output", ""),
+                                "result": payload.get("result")
+                                or payload.get("output", ""),
+                                "error": payload.get("error"),
+                                "duration_ms": payload.get("duration_ms"),
                             },
                         },
                     )
