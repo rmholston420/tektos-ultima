@@ -6,20 +6,24 @@ fallback, stats, singleton).
 """
 
 import asyncio
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from tektos.recovery.auto_recovery import (
-    ServiceStatus,
-    ServiceHealth,
-    RecoveryEvent,
     AutoRecovery,
+    CallbackRestartStrategy,
+    NoopRestartStrategy,
+    RecoveryEvent,
+    ServiceHealth,
+    ServiceStatus,
+    ShellRestartStrategy,
     get_auto_recovery,
     reset_auto_recovery,
 )
 
-
 # ── Enums & Data Classes ──────────────────────────────────────────────────────
+
 
 class TestServiceStatus:
     def test_values(self):
@@ -74,6 +78,7 @@ class TestRecoveryEvent:
 
 # ── AutoRecovery ──────────────────────────────────────────────────────────────
 
+
 class TestAutoRecovery:
     def setup_method(self):
         reset_auto_recovery()
@@ -106,7 +111,12 @@ class TestAutoRecovery:
 
     def test_register_service_with_params(self):
         ar = AutoRecovery()
-        ar.register_service("llm", health_check=lambda: True, restart_command="systemctl restart llm", fallback_service="llm_fallback")
+        ar.register_service(
+            "llm",
+            health_check=lambda: True,
+            restart_command="systemctl restart llm",
+            fallback_service="llm_fallback",
+        )
         assert "llm" in ar._services
 
     @pytest.mark.asyncio
@@ -131,7 +141,7 @@ class TestAutoRecovery:
     async def test_check_health_healthy(self):
         ar = AutoRecovery()
         ar.register_service("llm")
-        with patch.object(ar, '_is_service_available', return_value=True):
+        with patch.object(ar, "_is_service_available", return_value=True):
             results = await ar.check_health("llm")
         assert results["llm"].status == ServiceStatus.HEALTHY
         assert results["llm"].error == ""
@@ -140,8 +150,8 @@ class TestAutoRecovery:
     async def test_check_health_failed(self):
         ar = AutoRecovery()
         ar.register_service("llm")
-        with patch.object(ar, '_is_service_available', return_value=False):
-            with patch.object(ar, '_attempt_recovery', new_callable=AsyncMock):
+        with patch.object(ar, "_is_service_available", return_value=False):
+            with patch.object(ar, "_attempt_recovery", new_callable=AsyncMock):
                 results = await ar.check_health("llm")
         assert results["llm"].status == ServiceStatus.FAILED
         assert "not available" in results["llm"].error
@@ -150,7 +160,7 @@ class TestAutoRecovery:
     async def test_check_health_exception(self):
         ar = AutoRecovery()
         ar.register_service("llm")
-        with patch.object(ar, '_is_service_available', side_effect=RuntimeError("boom")):
+        with patch.object(ar, "_is_service_available", side_effect=RuntimeError("boom")):
             results = await ar.check_health("llm")
         assert results["llm"].status == ServiceStatus.FAILED
         assert results["llm"].error == "boom"
@@ -158,9 +168,8 @@ class TestAutoRecovery:
     @pytest.mark.asyncio
     async def test_attempt_recovery_success(self):
         ar = AutoRecovery(restart_delay=0.01)
-        ar.register_service("llm")
-        with patch.object(ar, '_simulate_restart', return_value=True):
-            await ar._attempt_recovery("llm")
+        ar.register_service("llm", restart_callback=lambda _name: True)
+        await ar._attempt_recovery("llm")
         assert ar._services["llm"].status == ServiceStatus.HEALTHY
         assert ar._services["llm"].restart_count == 1
         assert len(ar._recovery_events) == 1
@@ -169,13 +178,49 @@ class TestAutoRecovery:
     @pytest.mark.asyncio
     async def test_attempt_recovery_failure(self):
         ar = AutoRecovery(restart_delay=0.01)
-        ar.register_service("llm")
-        with patch.object(ar, '_simulate_restart', return_value=False):
-            await ar._attempt_recovery("llm")
+        ar.register_service("llm", restart_callback=lambda _name: False)
+        await ar._attempt_recovery("llm")
         assert ar._services["llm"].status == ServiceStatus.FAILED
         assert ar._services["llm"].restart_count == 1
         assert len(ar._recovery_events) == 1
         assert ar._recovery_events[0].action == "restart_failed"
+
+    @pytest.mark.asyncio
+    async def test_default_noop_strategy_records_failure(self):
+        """With no restart strategy configured, recovery must be reported as failed."""
+        ar = AutoRecovery(restart_delay=0.01)
+        ar.register_service("llm")
+        await ar._attempt_recovery("llm")
+        assert ar._services["llm"].status == ServiceStatus.FAILED
+        assert ar._recovery_events[-1].action == "restart_failed"
+
+    @pytest.mark.asyncio
+    async def test_async_restart_callback(self):
+        """Async restart callbacks are awaited."""
+        calls: list[str] = []
+
+        async def _cb(name: str) -> bool:
+            calls.append(name)
+            return True
+
+        ar = AutoRecovery(restart_delay=0.01)
+        ar.register_service("llm", restart_callback=_cb)
+        await ar._attempt_recovery("llm")
+        assert calls == ["llm"]
+        assert ar._services["llm"].status == ServiceStatus.HEALTHY
+
+    @pytest.mark.asyncio
+    async def test_callback_exception_reported_as_failure(self):
+        """Restart callbacks that raise must not crash the loop."""
+
+        def _cb(_name: str) -> bool:
+            raise RuntimeError("boom")
+
+        ar = AutoRecovery(restart_delay=0.01)
+        ar.register_service("llm", restart_callback=_cb)
+        await ar._attempt_recovery("llm")
+        assert ar._services["llm"].status == ServiceStatus.FAILED
+        assert ar._recovery_events[-1].action == "restart_failed"
 
     @pytest.mark.asyncio
     async def test_attempt_recovery_max_restarts(self):
@@ -195,11 +240,63 @@ class TestAutoRecovery:
         await ar._attempt_recovery("unknown")
         # Should not raise
 
-    def test_simulate_restart(self):
+    def test_simulate_restart_is_deprecated_noop(self):
+        """The legacy _simulate_restart shim now always returns False."""
         ar = AutoRecovery()
-        # _simulate_restart uses random, so just check it returns bool
-        result = ar._simulate_restart("llm")
-        assert isinstance(result, bool)
+        assert ar._simulate_restart("llm") is False
+
+    @pytest.mark.asyncio
+    async def test_shell_restart_strategy_success(self):
+        """ShellRestartStrategy reports success when the command exits 0."""
+        strat = ShellRestartStrategy("true")
+        assert await strat.restart("llm") is True
+
+    @pytest.mark.asyncio
+    async def test_shell_restart_strategy_failure(self):
+        """ShellRestartStrategy reports failure when the command exits non-zero."""
+        strat = ShellRestartStrategy("false")
+        assert await strat.restart("llm") is False
+
+    @pytest.mark.asyncio
+    async def test_shell_restart_strategy_missing_binary(self):
+        """Missing binaries are reported as failure, not raised."""
+        strat = ShellRestartStrategy("/nonexistent/binary/that/does/not/exist")
+        assert await strat.restart("llm") is False
+
+    def test_shell_restart_strategy_rejects_empty(self):
+        with pytest.raises(ValueError):
+            ShellRestartStrategy("")
+
+    @pytest.mark.asyncio
+    async def test_noop_strategy_returns_false(self):
+        assert await NoopRestartStrategy().restart("anything") is False
+
+    @pytest.mark.asyncio
+    async def test_callback_strategy_wraps_sync_and_async(self):
+        sync_strat = CallbackRestartStrategy(lambda _n: True)
+
+        async def _async(_n: str) -> bool:
+            return True
+
+        async_strat = CallbackRestartStrategy(_async)
+        assert await sync_strat.restart("a") is True
+        assert await async_strat.restart("a") is True
+
+    @pytest.mark.asyncio
+    async def test_register_service_wires_shell_command(self):
+        ar = AutoRecovery(restart_delay=0.01)
+        ar.register_service("llm", restart_command="true")
+        await ar._attempt_recovery("llm")
+        assert ar._services["llm"].status == ServiceStatus.HEALTHY
+
+    @pytest.mark.asyncio
+    async def test_set_default_restart_strategy(self):
+        """Fallback strategy applies to services registered without one."""
+        ar = AutoRecovery(restart_delay=0.01)
+        ar.register_service("llm")
+        ar.set_default_restart_strategy(CallbackRestartStrategy(lambda _n: True))
+        await ar._attempt_recovery("llm")
+        assert ar._services["llm"].status == ServiceStatus.HEALTHY
 
     def test_get_fallback_service(self):
         ar = AutoRecovery()
@@ -265,7 +362,7 @@ class TestAutoRecovery:
     async def test_monitoring_loop_runs(self):
         ar = AutoRecovery(check_interval=0.01)
         ar.register_service("llm")
-        with patch.object(ar, '_is_service_available', return_value=True):
+        with patch.object(ar, "_is_service_available", return_value=True):
             await ar.start_monitoring()
             await asyncio.sleep(0.05)
             await ar.stop_monitoring()
@@ -275,7 +372,7 @@ class TestAutoRecovery:
     async def test_monitoring_loop_error_handling(self):
         ar = AutoRecovery(check_interval=0.01)
         ar.register_service("llm")
-        with patch.object(ar, '_is_service_available', side_effect=RuntimeError("boom")):
+        with patch.object(ar, "_is_service_available", side_effect=RuntimeError("boom")):
             await ar.start_monitoring()
             await asyncio.sleep(0.05)
             await ar.stop_monitoring()

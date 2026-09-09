@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
+import shlex
+import shutil
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +50,118 @@ class ServiceHealth:
     def __post_init__(self) -> None:
         if not self.last_check:
             self.last_check = datetime.now(timezone.utc).isoformat()
+
+
+# ── Restart strategies ────────────────────────────────────────────────────
+
+
+@runtime_checkable
+class RestartStrategy(Protocol):
+    """Pluggable strategy for restarting a service.
+
+    Implementations decide *how* to restart a service (systemctl,
+    docker, k8s, in-process supervisor, etc.) and return True on
+    success. The engine never assumes success.
+    """
+
+    async def restart(self, service_name: str) -> bool:  # pragma: no cover - protocol
+        ...
+
+
+class NoopRestartStrategy:
+    """Default strategy: refuse to guess and let the operator wire a real one.
+
+    Returns False and logs a warning. This is the safe default so
+    ``check_health`` records an accurate ``restart_failed`` event
+    instead of pretending recovery worked.
+    """
+
+    async def restart(self, service_name: str) -> bool:
+        log.warning(
+            "NoopRestartStrategy: no restart strategy configured for %r; "
+            "register a callback via register_service(restart_callback=...) or "
+            "pass restart_command=... to use ShellRestartStrategy.",
+            service_name,
+        )
+        return False
+
+
+class ShellRestartStrategy:
+    """Restart via a shell command (systemctl, docker, custom script, …).
+
+    The command is parsed with :func:`shlex.split` and executed with
+    :func:`asyncio.create_subprocess_exec`, so it does not require a
+    shell interpreter. A zero exit status is treated as success.
+    """
+
+    def __init__(self, command: str, *, timeout: float = 30.0) -> None:
+        self._argv = shlex.split(command)
+        if not self._argv:
+            raise ValueError("restart command must be non-empty")
+        self._timeout = timeout
+
+    async def restart(self, service_name: str) -> bool:
+        exe = shutil.which(self._argv[0]) or self._argv[0]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                exe,
+                *self._argv[1:],
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            log.error(
+                "ShellRestartStrategy(%s): executable %r not found",
+                service_name,
+                self._argv[0],
+            )
+            return False
+        try:
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                await proc.wait()
+            log.error(
+                "ShellRestartStrategy(%s): restart command timed out after %.1fs",
+                service_name,
+                self._timeout,
+            )
+            return False
+        if proc.returncode == 0:
+            return True
+        log.error(
+            "ShellRestartStrategy(%s): exit=%s stderr=%s",
+            service_name,
+            proc.returncode,
+            (stderr or b"").decode(errors="replace").strip()[:500],
+        )
+        return False
+
+
+class CallbackRestartStrategy:
+    """Restart by invoking a user-supplied callable (sync or async).
+
+    The callable receives the service name and must return a truthy
+    value on success. Exceptions are logged and reported as failure so
+    they never crash the monitor loop.
+    """
+
+    def __init__(
+        self,
+        callback: Callable[[str], bool | Awaitable[bool]],
+    ) -> None:
+        self._callback = callback
+
+    async def restart(self, service_name: str) -> bool:
+        try:
+            result = self._callback(service_name)
+            if inspect.isawaitable(result):
+                result = await result
+            return bool(result)
+        except Exception as exc:
+            log.exception("CallbackRestartStrategy(%s) raised: %s", service_name, exc)
+            return False
 
 
 @dataclass
@@ -87,6 +203,9 @@ class AutoRecovery:
         self._recovery_events: list[RecoveryEvent] = []
         self._running = False
         self._monitor_task: asyncio.Task | None = None
+        # Per-service restart strategies (default: no-op)
+        self._restart_strategies: dict[str, RestartStrategy] = {}
+        self._default_restart_strategy: RestartStrategy = NoopRestartStrategy()
 
     def register_service(
         self,
@@ -94,20 +213,42 @@ class AutoRecovery:
         health_check: Any = None,
         restart_command: str | None = None,
         fallback_service: str | None = None,
+        restart_strategy: RestartStrategy | None = None,
+        restart_callback: Callable[[str], bool | Awaitable[bool]] | None = None,
     ) -> None:
         """Register a service for monitoring.
 
         Args:
             name: Service name.
             health_check: Callable that returns True if service is healthy.
-            restart_command: Shell command to restart the service.
+            restart_command: Shell command to restart the service. When
+                provided, wraps :class:`ShellRestartStrategy`.
             fallback_service: Name of a fallback service to use if this one fails.
+            restart_strategy: Explicit :class:`RestartStrategy` instance.
+                Takes precedence over ``restart_callback`` and
+                ``restart_command``.
+            restart_callback: Sync or async callable ``(service_name) -> bool``
+                to invoke on restart. Wrapped in
+                :class:`CallbackRestartStrategy`.
         """
         self._services[name] = ServiceHealth(
             name=name,
             status=ServiceStatus.UNKNOWN,
         )
+        strategy: RestartStrategy | None = None
+        if restart_strategy is not None:
+            strategy = restart_strategy
+        elif restart_callback is not None:
+            strategy = CallbackRestartStrategy(restart_callback)
+        elif restart_command:
+            strategy = ShellRestartStrategy(restart_command)
+        if strategy is not None:
+            self._restart_strategies[name] = strategy
         log.info(f"Registered service for monitoring: {name}")
+
+    def set_default_restart_strategy(self, strategy: RestartStrategy) -> None:
+        """Override the fallback strategy for services with no per-service one."""
+        self._default_restart_strategy = strategy
 
     async def check_health(self, service_name: str | None = None) -> dict[str, ServiceHealth]:
         """Check health of one or all services.
@@ -201,9 +342,13 @@ class AutoRecovery:
         # Wait before restarting
         await asyncio.sleep(self.restart_delay)
 
-        # Attempt restart (placeholder for real restart logic)
-        # In production, this would use systemctl, docker, or direct process management
-        success = self._simulate_restart(service_name)
+        # Dispatch to the registered restart strategy (default: NoopRestartStrategy).
+        strategy = self._restart_strategies.get(service_name, self._default_restart_strategy)
+        try:
+            success = await strategy.restart(service_name)
+        except Exception as exc:
+            log.exception("Restart strategy for %s raised: %s", service_name, exc)
+            success = False
 
         if success:
             health.status = ServiceStatus.HEALTHY
@@ -229,15 +374,19 @@ class AutoRecovery:
             log.error(f"Service {service_name} restart failed")
 
     def _simulate_restart(self, service_name: str) -> bool:
-        """Simulate a service restart.
+        """Deprecated shim retained for backward compatibility.
 
-        In production, this would actually restart the service.
-        For now, returns True for known services to simulate recovery.
+        The engine now dispatches to a :class:`RestartStrategy`. Callers
+        that used to override ``_simulate_restart`` in tests should
+        register a :class:`CallbackRestartStrategy` (or pass
+        ``restart_callback=`` to :meth:`register_service`) instead.
+        Kept as an alias so any external subclass overrides still work.
         """
-        # Simulate 80% recovery rate
-        import random
-
-        return random.random() < 0.8
+        log.warning(
+            "_simulate_restart is deprecated; wire a RestartStrategy via "
+            "register_service(restart_callback=...) or set_default_restart_strategy()."
+        )
+        return False
 
     async def start_monitoring(self) -> None:
         """Start the health monitoring loop."""
