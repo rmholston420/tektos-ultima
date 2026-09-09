@@ -437,15 +437,22 @@ async def _emit_artifact_from_tool(
             log.debug("artifact_updated emit failed", exc_info=True)
 
 
-def _fire_hook(event_type: str, **kwargs) -> None:
+async def _fire_hook(event_type: str, **kwargs) -> None:
     """Fire a hook through the global HookManager (set during lifespan).
 
-    Errors are silently caught so hooks never break the main flow.
+    Errors are silently caught so hooks never break the main flow. This is
+    ``async`` so callers can ``await _fire_hook(...)`` uniformly — whether or
+    not the hook manager is wired up yet. If it isn't (tests, cold start
+    before lifespan finished), this is a no-op.
     """
     if _hook_manager is None:
         return
     try:
-        _asyncio.create_task(_hook_manager.fire(event_type, **kwargs, stop_on_abort=False))  # type: ignore[union-attr]
+        # Schedule the hook fire without blocking the caller. Errors inside
+        # the hook itself are captured by the HookManager.
+        _asyncio.create_task(
+            _hook_manager.fire(event_type, **kwargs, stop_on_abort=False)  # type: ignore[union-attr]
+        )
     except Exception:
         log.exception("Hook fire failed for %s", event_type)
 
