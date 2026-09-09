@@ -31,6 +31,11 @@ voice = [
     # Audio format conversion used before feeding audio into Whisper.
     "pydub>=0.25.1",
 ]
+mcp = [
+    # Official Anthropic Model Context Protocol Python SDK. Only needed
+    # for stdio-based external MCP servers; HTTP MCP works without it.
+    "mcp>=1.0.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.23.0",
@@ -46,6 +51,8 @@ dev = [
     "faster-whisper>=1.0.0",
     "edge-tts>=6.1.9",
     "pydub>=0.25.1",
+    # Mirror mcp so tests can import stdio_client / ClientSession symbols.
+    "mcp>=1.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
