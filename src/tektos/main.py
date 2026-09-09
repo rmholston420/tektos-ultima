@@ -1650,7 +1650,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3003",
-        "http://localhost:3006",
+        "http://localhost:3004",  # Redesigned frontend (post-cutover)
+        "http://localhost:3006",  # Legacy frontend port
         "http://localhost:5555",
     ],  # Frontend URLs
     allow_credentials=True,
@@ -5506,7 +5507,8 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
     allowed_origins = [
         "http://localhost:3000",
         "http://localhost:3003",
-        "http://localhost:3006",
+        "http://localhost:3004",  # Redesigned frontend (post-cutover)
+        "http://localhost:3006",  # Legacy frontend port
         "http://localhost:5555",
     ]
     if origin in allowed_origins:

@@ -32,7 +32,7 @@ export function ConnectionRow() {
       }
     >
       gateway {state}
-      {error && <> \u00b7 {error}</>}
+      {error && <> · {error}</>}
     </StatusRow>
   );
 }

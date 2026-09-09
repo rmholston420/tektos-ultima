@@ -40,7 +40,7 @@ export function PermissionRow() {
         </>
       }
     >
-      permission needed \u2014 <span className="font-mono">{current.tool_name}</span>
+      permission needed — <span className="font-mono">{current.tool_name}</span>
       {queue.length > 1 && <span className="ml-1 text-text-faint">(+{queue.length - 1})</span>}
     </StatusRow>
   );
