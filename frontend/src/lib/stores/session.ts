@@ -188,14 +188,22 @@ export function applyEnvelope(env: WSEnvelope): void {
       // The backend's assistant.completed payload is intentionally sparse
       // (see sdk.py — it emits just {stop_reason} on natural completion and
       // on loop_safety break). The full text lives in the accumulated
-      // assistant.delta stream, not in this event. Prior code overwrote
-      // `text: p.text` unconditionally, which erased the whole visible
-      // message the instant completion fired.
+      // assistant.delta stream, not in this event.
       //
-      // Fix: keep the accumulated delta text (and reasoning) unless the
-      // completion payload explicitly carries a replacement. Also fall back
-      // to the newest open assistant message when message_id is missing so
-      // we don't create a ghost message keyed under `undefined`.
+      // Historical bugs both fixed here:
+      //   1) `text: p.text` unconditionally erased the accumulated text.
+      //   2) Falling back to a single "newest open" message id can pick
+      //      the wrong message when the backend allocates one message_id
+      //      for reasoning-phase deltas and a different message_id for
+      //      text-phase deltas — leaving the text-phase message never
+      //      marked completed and letting us wipe the reasoning one.
+      //
+      // Robust fix: if the payload carries a message_id, close that one.
+      // Otherwise close EVERY open assistant message: mark completed,
+      // preserve accumulated text and reasoning, apply usage if present.
+      // This is safe because assistant.completed only fires at end of a
+      // full turn — there are no other assistant messages that legitimately
+      // stay open past that point.
       const p = env.payload as {
         message_id?: string;
         text?: string;
@@ -204,41 +212,54 @@ export function applyEnvelope(env: WSEnvelope): void {
         usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       };
 
-      let msgId = p.message_id;
-      if (!msgId) {
-        const order = $messageOrder.get();
-        const byId = $messages.get();
-        for (let i = order.length - 1; i >= 0; i--) {
-          const m = byId[order[i]];
-          if (m && m.role === "assistant" && !m.completed) {
-            msgId = order[i];
-            break;
+      const usage = p.usage
+        ? {
+            prompt: p.usage.prompt_tokens,
+            completion: p.usage.completion_tokens,
+            total: p.usage.total_tokens,
           }
-        }
-      }
-      if (!msgId) return;
+        : undefined;
 
-      const existing = $messages.get()[msgId];
-      const msg: AssistantMessage = {
-        id: msgId,
-        role: "assistant",
-        text: p.text ?? existing?.text ?? "",
-        reasoning: p.reasoning ?? existing?.reasoning,
-        created_at: existing?.created_at ?? now,
-        completed: true,
-        correlation_id: env.correlation_id ?? existing?.correlation_id,
-        tool_call_ids: existing?.tool_call_ids ?? [],
-        usage: p.usage
-          ? {
-              prompt: p.usage.prompt_tokens,
-              completion: p.usage.completion_tokens,
-              total: p.usage.total_tokens,
-            }
-          : existing?.usage,
+      const closeOne = (msgId: string, override: { text?: string; reasoning?: string }) => {
+        const existing = $messages.get()[msgId];
+        const msg: AssistantMessage = {
+          id: msgId,
+          role: "assistant",
+          text: override.text ?? existing?.text ?? "",
+          reasoning: override.reasoning ?? existing?.reasoning,
+          created_at: existing?.created_at ?? now,
+          completed: true,
+          correlation_id: env.correlation_id ?? existing?.correlation_id,
+          tool_call_ids: existing?.tool_call_ids ?? [],
+          usage: usage ?? existing?.usage,
+        };
+        $messages.setKey(msgId, msg);
+        if (!$messageOrder.get().includes(msgId)) {
+          $messageOrder.set([...$messageOrder.get(), msgId]);
+        }
       };
-      $messages.setKey(msgId, msg);
-      if (!$messageOrder.get().includes(msgId)) {
-        $messageOrder.set([...$messageOrder.get(), msgId]);
+
+      if (p.message_id) {
+        closeOne(p.message_id, { text: p.text, reasoning: p.reasoning });
+        return;
+      }
+
+      const order = $messageOrder.get();
+      const byId = $messages.get();
+      const openIds = order.filter((id) => {
+        const m = byId[id];
+        return m && m.role === "assistant" && !m.completed;
+      });
+      if (openIds.length === 0) return;
+      // If payload carries a text override, apply it to the newest open message
+      // (preserves prior semantics for backends that DO send text on completion).
+      const newestOpen = openIds[openIds.length - 1];
+      for (const id of openIds) {
+        if (id === newestOpen) {
+          closeOne(id, { text: p.text, reasoning: p.reasoning });
+        } else {
+          closeOne(id, {}); // preserve accumulated text/reasoning as-is
+        }
       }
       return;
     }
