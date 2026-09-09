@@ -299,3 +299,152 @@ def test_build_llm_client_from_config():
     assert client.base_url == cfg.base_url
     assert client.model == cfg.model
     assert client.failover_enabled is True
+
+
+# -- Streaming (client.stream) ----------------------------------------------
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_healthy_primary_streams_chunks():
+    """Streaming should route through the primary and yield chunks incrementally."""
+    sse_body = (
+        b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    respx.post(f"{PRIMARY}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, content=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    client = make_client()
+    lines = []
+    async with client.stream(
+        "POST",
+        "/chat/completions",
+        json={
+            "model": "primary-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line:
+                lines.append(line)
+
+    assert any("Hello" in l for l in lines), f"expected content chunk, got: {lines}"
+    assert client.is_on_fallback is False
+    await client.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_primary_connect_error_falls_over():
+    """When primary raises ConnectError on stream entry, fallback should be tried."""
+    respx.post(f"{PRIMARY}/chat/completions").mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+    sse_body = (
+        b'data: {"choices":[{"delta":{"content":"from fallback"}}]}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    respx.post(f"{FALLBACK}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, content=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    client = make_client()
+    lines = []
+    async with client.stream(
+        "POST",
+        "/chat/completions",
+        json={
+            "model": "primary-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line:
+                lines.append(line)
+
+    assert any("from fallback" in l for l in lines), f"expected fallback chunk, got: {lines}"
+    assert client.is_on_fallback is True
+    await client.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_during_cooldown_bypasses_primary():
+    """If primary is in cooldown, stream() should go straight to fallback."""
+    sse_body = (
+        b'data: {"choices":[{"delta":{"content":"cooling"}}]}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    respx.post(f"{FALLBACK}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, content=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    client = make_client()
+    # Force cooldown state.
+    client._primary_down_until = time.monotonic() + 30.0
+    client._active_is_fallback = True
+
+    lines = []
+    async with client.stream(
+        "POST",
+        "/chat/completions",
+        json={
+            "model": "primary-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line:
+                lines.append(line)
+
+    assert any("cooling" in l for l in lines)
+    await client.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_rewrites_model_field_on_fallback():
+    """When failover routes to fallback, the streamed request body should carry
+    the fallback model alias, not the primary's."""
+    respx.post(f"{PRIMARY}/chat/completions").mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+    captured: dict = {}
+
+    def capture(request):
+        import json as _json
+
+        captured.update(_json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=b"data: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    respx.post(f"{FALLBACK}/chat/completions").mock(side_effect=capture)
+
+    client = make_client()
+    async with client.stream(
+        "POST",
+        "/chat/completions",
+        json={"model": "primary-model", "messages": [], "stream": True},
+    ) as resp:
+        async for _ in resp.aiter_lines():
+            pass
+
+    assert captured.get("model") == "fallback-model"
+    await client.aclose()

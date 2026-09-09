@@ -141,6 +141,19 @@ class FailoverLLMClient:
         # primary attempt fails.
         return await self._request("POST", path, **kwargs)
 
+    def stream(self, method: str, path: str, **kwargs: Any) -> "_FailoverStream":
+        """Return an async context manager that streams a request through the
+        primary→fallback logic. Use for endpoints where the caller wants to
+        consume the response body incrementally (``aiter_lines()``,
+        ``aiter_bytes()``, etc.) instead of buffering the whole body.
+
+        The returned object mirrors ``httpx.AsyncClient.stream``: it must be
+        used with ``async with client.stream(...) as resp: ...``. Failover
+        happens on entry; once a streaming response is yielded, the caller
+        owns it and further failover is not possible.
+        """
+        return _FailoverStream(self, method, path, kwargs)
+
     async def aclose(self) -> None:
         await self._primary.aclose()
         if self._fallback is not None:
@@ -286,6 +299,150 @@ class FailoverLLMClient:
             )
             # Chain the primary exception so callers see both.
             raise fallback_exc from primary_exc
+
+
+class _FailoverStream:
+    """Async context manager that opens a streaming request through the
+    :class:`FailoverLLMClient` primary→fallback logic.
+
+    Failover is tried once on entry (``__aenter__``). Once the response is
+    yielded, the caller owns it — mid-stream failover is not supported
+    because the caller may already have consumed partial output.
+    """
+
+    def __init__(
+        self,
+        client: FailoverLLMClient,
+        method: str,
+        path: str,
+        kwargs: dict[str, Any],
+    ) -> None:
+        self._client = client
+        self._method = method
+        self._path = path
+        self._kwargs = kwargs
+        # These are populated by __aenter__ and torn down by __aexit__.
+        self._httpx_stream_cm: Any = None
+        self._resp: httpx.Response | None = None
+
+    async def __aenter__(self) -> httpx.Response:
+        c = self._client
+        method, path, kwargs = self._method, self._path, self._kwargs
+
+        # Fast path: failover disabled — stream straight from primary.
+        if not c._enabled or c._fallback is None:
+            log.info(
+                "LLM %s %s -> primary stream (failover disabled): %s",
+                method, path, c._primary_url,
+            )
+            call_kwargs = dict(kwargs)
+            c._rewrite_model_field(call_kwargs, c._primary_model)
+            self._httpx_stream_cm = c._primary.stream(method, path, **call_kwargs)
+            self._resp = await self._httpx_stream_cm.__aenter__()
+            return self._resp
+
+        # If primary is cooling, go straight to fallback stream.
+        if c._primary_is_cooling():
+            log.info(
+                "LLM %s %s -> fallback stream (primary cooling): %s (model=%s)",
+                method, path, c._fallback_url, c._fallback_model,
+            )
+            call_kwargs = dict(kwargs)
+            c._rewrite_model_field(call_kwargs, c._fallback_model or "")
+            try:
+                self._httpx_stream_cm = c._fallback.stream(method, path, **call_kwargs)
+                self._resp = await self._httpx_stream_cm.__aenter__()
+                c._active_is_fallback = True
+                log.info(
+                    "LLM %s %s -> fallback stream OK: status=%d",
+                    method, path, self._resp.status_code,
+                )
+                return self._resp
+            except Exception as exc:
+                log.error(
+                    "LLM fallback stream %s failed with %s: %s",
+                    c._fallback_url, type(exc).__name__, exc,
+                )
+                raise
+
+        # Try primary first.
+        primary_exc: Exception | None = None
+        log.info(
+            "LLM %s %s -> primary stream attempt: %s",
+            method, path, c._primary_url,
+        )
+        try:
+            call_kwargs = dict(kwargs)
+            c._rewrite_model_field(call_kwargs, c._primary_model)
+            self._httpx_stream_cm = c._primary.stream(method, path, **call_kwargs)
+            self._resp = await self._httpx_stream_cm.__aenter__()
+            # Treat 5xx as failover-worthy; 4xx passes through.
+            if self._resp.status_code >= 500:
+                status = self._resp.status_code
+                # Close the primary stream cleanly before falling over.
+                await self._httpx_stream_cm.__aexit__(None, None, None)
+                self._httpx_stream_cm = None
+                self._resp = None
+                primary_exc = httpx.HTTPStatusError(
+                    f"primary returned {status}", request=None, response=None  # type: ignore[arg-type]
+                )
+                log.warning(
+                    "LLM primary stream %s returned %d — attempting fallback",
+                    c._primary_url, status,
+                )
+            else:
+                log.info(
+                    "LLM %s %s -> primary stream OK: status=%d",
+                    method, path, self._resp.status_code,
+                )
+                c._mark_primary_recovered()
+                return self._resp
+        except _TRANSIENT_EXCEPTIONS as exc:
+            primary_exc = exc
+            log.warning(
+                "LLM primary stream %s failed with %s: %s — attempting fallback",
+                c._primary_url, type(exc).__name__, exc,
+            )
+            # If __aenter__ succeeded partially, tear it down.
+            if self._httpx_stream_cm is not None:
+                try:
+                    await self._httpx_stream_cm.__aexit__(type(exc), exc, exc.__traceback__)
+                except Exception:
+                    log.debug("primary stream teardown after failure raised", exc_info=True)
+                self._httpx_stream_cm = None
+            self._resp = None
+
+        # Primary failed — mark down and stream from fallback.
+        c._mark_primary_down()
+        log.info(
+            "LLM %s %s -> fallback stream attempt: %s (model=%s)",
+            method, path, c._fallback_url, c._fallback_model,
+        )
+        try:
+            call_kwargs = dict(kwargs)
+            c._rewrite_model_field(call_kwargs, c._fallback_model or "")
+            self._httpx_stream_cm = c._fallback.stream(method, path, **call_kwargs)
+            self._resp = await self._httpx_stream_cm.__aenter__()
+            log.info(
+                "LLM %s %s -> fallback stream OK: status=%d",
+                method, path, self._resp.status_code,
+            )
+            c._active_is_fallback = True
+            return self._resp
+        except Exception as fallback_exc:
+            log.error(
+                "LLM fallback stream %s also failed with %s: %s",
+                c._fallback_url, type(fallback_exc).__name__, fallback_exc,
+            )
+            raise fallback_exc from primary_exc
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._httpx_stream_cm is not None:
+            try:
+                await self._httpx_stream_cm.__aexit__(exc_type, exc, tb)
+            finally:
+                self._httpx_stream_cm = None
+                self._resp = None
 
 
 def build_llm_client(cfg: Any) -> FailoverLLMClient:
