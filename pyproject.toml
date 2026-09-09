@@ -23,6 +23,14 @@ dependencies = [
 gpu = [
     "pynvml>=11.5.0",
 ]
+voice = [
+    # STT: faster-whisper wraps whisper.cpp; large-v3-turbo is the target.
+    "faster-whisper>=1.0.0",
+    # TTS: Microsoft Edge neural voices via edge-tts.
+    "edge-tts>=6.1.9",
+    # Audio format conversion used before feeding audio into Whisper.
+    "pydub>=0.25.1",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.23.0",
@@ -33,6 +41,11 @@ dev = [
     # end users to install them for a plain Tektos install.
     "aiogram>=3.0.0",
     "requests>=2.31.0",
+    # Voice test doubles patch symbols from the voice extra; keep parity so
+    # `pip install -e .[dev]` exercises the full test suite.
+    "faster-whisper>=1.0.0",
+    "edge-tts>=6.1.9",
+    "pydub>=0.25.1",
 ]
 
 [tool.hatch.build.targets.wheel]
