@@ -48,11 +48,11 @@ export function MessageBubble({ message }: Props) {
         )}
       </header>
 
-      {message.text.length > 0 && <Markdown>{message.text}</Markdown>}
+      {(message.text?.length ?? 0) > 0 && <Markdown>{message.text}</Markdown>}
 
-      {message.tool_call_ids.length > 0 && (
+      {(message.tool_call_ids?.length ?? 0) > 0 && (
         <div className="flex flex-col gap-2 pl-3">
-          {message.tool_call_ids.map((id) =>
+          {(message.tool_call_ids ?? []).map((id) =>
             tools[id] ? <ToolCallCard key={id} tool={tools[id]} /> : null,
           )}
         </div>
