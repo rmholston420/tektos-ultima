@@ -775,6 +775,64 @@ def _bash_command_writes(command: str) -> bool:
     return False
 
 
+# Extract concrete write TARGETS from a bash command so a
+# self-modification guard can check whether the write lands on a
+# protected path (e.g. src/tektos/main.py) rather than on scratch
+# space like /tmp/foo. Earlier the guard treated 'grep ... main.py > 
+# /tmp/out' as a self-modification of main.py because it saw the
+# protected filename anywhere in the command and *some* write
+# elsewhere — killing read-only exploration.
+_REDIRECT_TARGET_RE = re.compile(r">>?\s*([^\s|;&<>]+)")
+_MODIFYING_CMD_TARGET_RES: tuple[re.Pattern, ...] = (
+    # mv/cp/ln: the LAST arg is the destination. Simple heuristic: last
+    # whitespace-separated token after the command keyword.
+    re.compile(r"\b(?:mv|cp|ln)\b(?:\s+-\S+)*\s+\S+\s+([^\s|;&<>]+)"),
+    # rm/rmdir: every non-flag arg is a target.
+    re.compile(r"\b(?:rm|rmdir|trash)\b(?:\s+-\S+)*\s+([^\s|;&<>]+)"),
+    # touch/mkdir: every non-flag arg is a target.
+    re.compile(r"\b(?:touch|mkdir)\b(?:\s+-\S+)*\s+([^\s|;&<>]+)"),
+    # chmod/chown: last arg is target.
+    re.compile(r"\b(?:chmod|chown)\b(?:\s+\S+)+?\s+([^\s|;&<>]+)"),
+    # sed -i / perl -i / awk -i inplace: file args after flags.
+    re.compile(r"\bsed\s+-i(?:\s+-\S+)*\s+\S+\s+([^\s|;&<>]+)"),
+    re.compile(r"\bperl\s+-i\S*\s+[^\s|;&<>]+\s+([^\s|;&<>]+)"),
+    re.compile(r"\bawk\s+-i\s+inplace(?:\s+\S+)+?\s+([^\s|;&<>]+)"),
+    # tee: last positional arg is the target file.
+    re.compile(r"\btee\b(?:\s+-\S+)*\s+([^\s|;&<>]+)"),
+    # patch < file (target is the file being patched, given by -p arg or
+    # via context) — use a broad safe fallback: patch alone is treated
+    # as writing UNKNOWN; conservatively return the sentinel '?' below.
+)
+
+
+def _bash_write_targets(command: str) -> list[str]:
+    """Return every concrete filesystem TARGET a bash command writes to.
+
+    Recognizes shell redirects (``> file``, ``>> file``) and the destination
+    argument of common mutating commands (mv/cp/rm/touch/mkdir/chmod/chown/
+    sed -i/perl -i/awk -i inplace/tee). Returns [] when the command is
+    read-only. Returns ['?'] for shapes we can't decompose (patch, dd, git
+    apply, obscure redirects) so the caller can decide whether to fall
+    back to a stricter check.
+    """
+    targets: list[str] = []
+    if not command:
+        return targets
+
+    for m in _REDIRECT_TARGET_RE.finditer(command):
+        targets.append(m.group(1))
+
+    for pat in _MODIFYING_CMD_TARGET_RES:
+        for m in pat.finditer(command):
+            targets.append(m.group(1))
+
+    # Unknown-shape mutation: still classify as writing but with no known target.
+    if not targets and _bash_command_writes(command):
+        targets.append("?")
+
+    return targets
+
+
 class SelfModificationDetector:
     """Detects attempts to modify core system files (self-modification guard).
 
@@ -836,19 +894,34 @@ class SelfModificationDetector:
             command = ctx.tool_input.get("command", "") or ""
             if not _bash_command_writes(command):
                 return threats
+            # Only fire when the write TARGET matches a protected path. A
+            # protected filename appearing merely as an *input* argument
+            # (e.g. `grep foo src/tektos/main.py > /tmp/out`) is not a
+            # self-modification and used to blow up read-only exploration.
+            write_targets = _bash_write_targets(command)
             for pattern, desc in self._compiled:
-                if pattern.search(command):
-                    threats.append(
-                        Threat(
-                            category=ThreatCategory.GUARDRAIL_VIOLATION,
-                            severity=ThreatSeverity.HIGH,
-                            description=f"Attempt to modify protected file via bash: {desc}",
-                            source=self.name,
-                            evidence={"command": command[:200], "protected": desc},
-                            affected_components=["S3 Manager", "S5 Identity"],
-                            recommended_action="Block command, require user approval, log for immune memory",
+                for target in write_targets:
+                    # Unknown-shape mutation ('?'): fall back to scanning the
+                    # full command — conservative but preserves protection
+                    # against uncategorized write shapes.
+                    haystack = command if target == "?" else target
+                    if pattern.search(haystack):
+                        threats.append(
+                            Threat(
+                                category=ThreatCategory.GUARDRAIL_VIOLATION,
+                                severity=ThreatSeverity.HIGH,
+                                description=f"Attempt to modify protected file via bash: {desc}",
+                                source=self.name,
+                                evidence={
+                                    "command": command[:200],
+                                    "protected": desc,
+                                    "write_target": target,
+                                },
+                                affected_components=["S3 Manager", "S5 Identity"],
+                                recommended_action="Block command, require user approval, log for immune memory",
+                            )
                         )
-                    )
+                        break
 
         return threats
 
