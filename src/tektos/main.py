@@ -2129,6 +2129,27 @@ _tektos_log_handler = _TektosLogHandler()
 _tektos_log_handler.setLevel(_root_log_level)
 _log.getLogger().addHandler(_tektos_log_handler)
 
+# Also mirror everything to stdout so `tmux capture-pane` / `tail -f` /
+# `journalctl` show tektos.* records alongside uvicorn's access log. Before
+# this handler existed, tektos.runtime.sdk log lines (Prompt intent,
+# Stream complete, Stall recovery, Read-only tool budget, etc.) only lived
+# in the in-memory /api/logs ring, which forced every diagnostic session
+# to curl the API instead of reading the log file the tmux runbook points
+# at. Filter out uvicorn's own access logger — it already writes its own
+# INFO: lines and would double-log.
+class _NoUvicornAccess(_log.Filter):
+    def filter(self, record):
+        return not record.name.startswith("uvicorn")
+
+
+_tektos_stdout_handler = _log.StreamHandler()
+_tektos_stdout_handler.setLevel(_root_log_level)
+_tektos_stdout_handler.setFormatter(
+    _log.Formatter("%(levelname)s:%(name)s: %(message)s")
+)
+_tektos_stdout_handler.addFilter(_NoUvicornAccess())
+_log.getLogger().addHandler(_tektos_stdout_handler)
+
 
 @app.get("/api/logs")
 async def get_logs(level: str | None = None, count: int = 200):

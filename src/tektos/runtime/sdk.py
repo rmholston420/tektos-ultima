@@ -1278,6 +1278,20 @@ class RuntimeSDK:
         # same failing command (e.g. re-checking a bad download) for 8+ turns.
         # After 3 identical runs, inject a strategy-change nudge.
         _bash_cmd_counts: dict[str, int] = {}
+        # Read-only tool-round budget (Qwen3.8 fix): on read-only prompts
+        # (summarize / explain / explore) the model tends to keep grepping and
+        # opening files instead of writing the summary. After this many
+        # tool-emitting rounds we strip `tools` from the payload so the next
+        # stream MUST end with finish_reason=stop, which lets the read-only
+        # early-completion branch below actually fire. Only applies when the
+        # prompt-intent classifier flagged the prompt as read-only.
+        # Configurable via TEKTOS_READONLY_TOOL_ROUNDS.
+        _readonly_tool_round_budget = int(
+            _os.getenv("TEKTOS_READONLY_TOOL_ROUNDS", "6")
+        )
+        _readonly_tool_rounds = 0
+        _readonly_tools_disabled = False
+        _readonly_nudge_sent = False
         while True:
             # Check loop safety before this turn — pass REAL tool data from the
             # previous turn so repetition detection can see actual commands.
@@ -1437,9 +1451,30 @@ class RuntimeSDK:
                     "chat_template_kwargs": _chat_template_kwargs,
                 }
 
-                # Enable function calling with available tools
-                if TOOLS_SCHEMA:
+                # Enable function calling with available tools.
+                #
+                # For read-only prompts, once we've spent the tool-round
+                # budget we drop `tools` entirely so the model can no longer
+                # request another read/grep and MUST answer in text. Without
+                # this cap Qwen3.8 will keep calling grep/read tools on a
+                # summarize prompt indefinitely, so finish_reason stays
+                # "tool_calls" forever and the read-only completion branch
+                # below never fires.
+                if TOOLS_SCHEMA and not _readonly_tools_disabled:
                     payload["tools"] = TOOLS_SCHEMA
+                elif _readonly_tools_disabled and not _readonly_nudge_sent:
+                    # Nudge the model to write the answer now that it can't
+                    # call any more tools. Appended once, then flagged so we
+                    # don't spam the same nudge on every subsequent turn.
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have gathered enough information. Do not call "
+                            "any more tools. Write the final answer now as "
+                            "plain text based on what you have already read."
+                        ),
+                    })
+                    _readonly_nudge_sent = True
 
                 # Use client.stream() so we get an incremental SSE response.
                 # The previous .post() awaited the entire response body before
@@ -1631,6 +1666,25 @@ class RuntimeSDK:
                 log.info(
                     f"[SDK] Stream complete. finish_reason={finish_reason} text_len={len(current_text)} tool_calls={len(tool_calls_acc)}"
                 )
+
+                # Read-only tool-round accounting. If this was a tool-call
+                # turn on a read-only prompt, count it toward the budget.
+                # When the budget is hit we set the disabled flag; the NEXT
+                # iteration's payload-build sees it and drops `tools` +
+                # appends the "write your answer now" nudge exactly once.
+                if (
+                    not _prompt_requires_file
+                    and not _readonly_tools_disabled
+                    and tool_calls_acc
+                ):
+                    _readonly_tool_rounds += 1
+                    if _readonly_tool_rounds >= _readonly_tool_round_budget:
+                        _readonly_tools_disabled = True
+                        log.info(
+                            f"[SDK] Read-only tool budget exhausted for "
+                            f"{session.id[:8]} after {_readonly_tool_rounds} "
+                            f"rounds; forcing text-only completion on next turn"
+                        )
 
                 # Capture this turn's text length for loop-safety repetition
                 # detection (consumed by check_turn at the top of the NEXT iteration).
