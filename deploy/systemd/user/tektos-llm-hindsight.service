@@ -1,0 +1,65 @@
+[Unit]
+Description=Tektos-Ultima local LLM server for Hindsight (llama-server on :8095)
+Documentation=https://github.com/rmholston420/tektos-ultima
+# Dedicated small-model llama.cpp server that hindsight talks to. Separate
+# from Hermes' :8090 GPU/CPU failover endpoint so hindsight's high-volume
+# memory summarization does not queue behind interactive coding-agent work.
+#
+# Model: IBM Granite 4.0 H Tiny (7B-A1B, ~1B activated params) — small,
+# fast, Apache-2.0, long context. Aligns with active Granite 4.1 benchmarking.
+#
+# Model download (one-time, before first start):
+#   cd ~/dev/tektos-ultima-v1/models
+#   huggingface-cli download unsloth/granite-4.0-h-tiny-GGUF \
+#       'granite-4.0-h-tiny-Q4_K_M.gguf' --local-dir . --local-dir-use-symlinks False
+#
+# If your filename or quantization differs, override in .env:
+#   TEKTOS_HINDSIGHT_LLM_MODEL_PATH=/full/path/to/your.gguf
+After=network-online.target
+Wants=network-online.target
+PartOf=tektos.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/tektos-ultima-v1
+EnvironmentFile=%h/dev/tektos-ultima-v1/.env
+# Defaults; override any of these in .env.
+Environment=TEKTOS_HINDSIGHT_LLM_HOST=127.0.0.1
+Environment=TEKTOS_HINDSIGHT_LLM_PORT=8095
+Environment=TEKTOS_HINDSIGHT_LLM_MODEL_PATH=%h/dev/tektos-ultima-v1/models/granite-4.0-h-tiny-Q4_K_M.gguf
+Environment=TEKTOS_HINDSIGHT_LLM_CTX=16384
+# Number of layers to offload to GPU. -1 means all layers (fits in 32GB
+# VRAM for a 7B-A1B Q4_K_M easily; set to 0 for pure CPU if you want
+# the RTX 5090 fully reserved for interactive agent work).
+Environment=TEKTOS_HINDSIGHT_LLM_GPU_LAYERS=-1
+# llama-server flags:
+#   --host / --port      bind
+#   --model              GGUF path
+#   --ctx-size           context window
+#   --n-gpu-layers       GPU offload
+#   --parallel 2         allow 2 concurrent hindsight requests
+#   --cont-batching      efficient batching across requests
+#   --log-disable        silence per-token log spam; systemd captures startup + errors
+ExecStart=/bin/bash -lc 'exec llama-server \
+    --host ${TEKTOS_HINDSIGHT_LLM_HOST} \
+    --port ${TEKTOS_HINDSIGHT_LLM_PORT} \
+    --model ${TEKTOS_HINDSIGHT_LLM_MODEL_PATH} \
+    --ctx-size ${TEKTOS_HINDSIGHT_LLM_CTX} \
+    --n-gpu-layers ${TEKTOS_HINDSIGHT_LLM_GPU_LAYERS} \
+    --parallel 2 \
+    --cont-batching \
+    --log-disable'
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+# Model load + CUDA init can take a while on cold start.
+TimeoutStartSec=180
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tektos-llm-hindsight
+
+[Install]
+WantedBy=tektos.target
