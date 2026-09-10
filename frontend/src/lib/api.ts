@@ -105,6 +105,16 @@ export interface PluginInfo {
   description: string;
 }
 
+export interface MemorySummary {
+  sensory_count?: number;
+  working_count?: number;
+  long_term_count?: number;
+  procedural_count?: number;
+  novelty_count?: number;
+  hemisphere_balance?: { left?: number; right?: number };
+  transfer_count?: number;
+}
+
 export interface MemorySystemStats {
   working_count?: number;
   working_novel?: number;
@@ -113,7 +123,8 @@ export interface MemorySystemStats {
   procedural_count?: number;
   procedural_novel?: number;
   transfers?: number;
-  summary?: string;
+  // Backend returns an object; keep string as a legacy fallback.
+  summary?: MemorySummary | string;
   error?: string;
 }
 

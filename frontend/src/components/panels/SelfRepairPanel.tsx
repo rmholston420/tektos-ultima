@@ -32,6 +32,15 @@ interface RepairRecord {
   error?: string;
 }
 
+interface HealthTrend {
+  trend?: string;
+  average?: number;
+  min?: number;
+  max?: number;
+  sample_count?: number;
+  window_minutes?: number;
+}
+
 interface SelfRepairStatus {
   running: boolean;
   uptime_seconds: number;
@@ -43,7 +52,22 @@ interface SelfRepairStatus {
   workflows_registered: number;
   effectiveness?: Record<string, unknown>;
   latest_health?: Record<string, unknown>;
-  health_trend?: string;
+  // Backend HealthMonitor.get_trend() returns a HealthTrend object; older
+  // versions may still return a bare string label — accept both.
+  health_trend?: HealthTrend | string;
+}
+
+function formatHealthTrend(ht: SelfRepairStatus["health_trend"]): string {
+  if (ht === undefined || ht === null) return "—";
+  if (typeof ht === "string") return ht || "—";
+  if (typeof ht === "object") {
+    const label = ht.trend ?? "—";
+    if (typeof ht.average === "number") {
+      return `${label} (avg ${ht.average.toFixed(2)})`;
+    }
+    return String(label);
+  }
+  return String(ht);
 }
 
 interface SelfRepairState {
@@ -242,7 +266,7 @@ export function SelfRepairPanel() {
               </div>
               <div className="bg-surface rounded-lg p-3 border border-border">
                 <div className="text-xs text-text-muted mb-1">Health Trend</div>
-                <div className="text-lg font-mono text-text-primary">{s.health_trend || "—"}</div>
+                <div className="text-lg font-mono text-text-primary">{formatHealthTrend(s.health_trend)}</div>
               </div>
             </div>
 

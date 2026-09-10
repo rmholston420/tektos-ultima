@@ -14,6 +14,16 @@
 
 import React, { useState, useEffect } from "react";
 
+interface MemorySummary {
+  sensory_count?: number;
+  working_count?: number;
+  long_term_count?: number;
+  procedural_count?: number;
+  novelty_count?: number;
+  hemisphere_balance?: { left?: number; right?: number };
+  transfer_count?: number;
+}
+
 interface MemoryStatsRaw {
   working_count?: number;
   working_novel?: number;
@@ -22,7 +32,8 @@ interface MemoryStatsRaw {
   procedural_count?: number;
   procedural_novel?: number;
   transfers?: number;
-  summary?: string;
+  // Backend returns summary as an object, not a string.
+  summary?: MemorySummary | string;
   error?: string;
 }
 
@@ -149,7 +160,38 @@ export function MemorySystemPanel() {
     <div className="flex flex-col gap-4 p-6 max-w-4xl mx-auto">
       <h2 className="text-2xl font-bold text-text-primary">Memory System</h2>
 
-      {s.summary && (
+      {s.summary && typeof s.summary === "object" && (
+        <div className="text-xs text-text-muted border border-border rounded-md p-3 bg-surface">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {(
+              [
+                ["Sensory", s.summary.sensory_count],
+                ["Working", s.summary.working_count],
+                ["Long-term", s.summary.long_term_count],
+                ["Procedural", s.summary.procedural_count],
+                ["Novelty", s.summary.novelty_count],
+                ["Transfers", s.summary.transfer_count],
+              ] as Array<[string, number | undefined]>
+            ).map(([label, value]) => (
+              <div key={label} className="flex justify-between">
+                <span>{label}</span>
+                <span className="font-mono text-text-primary">{(value ?? 0).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+          {s.summary.hemisphere_balance && (
+            <div className="mt-2 pt-2 border-t border-border flex justify-between">
+              <span>Hemisphere balance</span>
+              <span className="font-mono text-text-primary">
+                L {(s.summary.hemisphere_balance.left ?? 0).toLocaleString()}
+                {" / "}
+                R {(s.summary.hemisphere_balance.right ?? 0).toLocaleString()}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+      {typeof s.summary === "string" && s.summary && (
         <div className="text-xs text-text-muted border border-border rounded-md p-3 bg-surface">
           {s.summary}
         </div>
