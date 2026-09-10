@@ -83,7 +83,7 @@ export function ModelRouterPanel() {
         {decision && (
           <div className="mt-4 p-4 rounded-lg bg-surface-active border border-border">
             <div className="flex items-center gap-3 mb-2">
-              <div className={`px-2 py-1 rounded-md text-xs font-medium ${TIER_STYLES[decision.tier]?.bg || ""}`}>
+              <div className={`px-2 py-1 rounded-md text-xs font-medium ${TIER_STYLES[decision.tier]?.bg || "bg-gray-500/20"} ${TIER_STYLES[decision.tier]?.text || "text-gray-300"}`}>
                 {TIER_STYLES[decision.tier]?.label || decision.tier}
               </div>
               <span className="text-sm font-medium text-text-primary">{decision.selected_model}</span>
@@ -110,7 +110,7 @@ export function ModelRouterPanel() {
               <div key={model.name} className="p-3 rounded-lg bg-bg-3 border border-border">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-text-primary">{model.model_name}</span>
-                  <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${TIER_STYLES[model.tier]?.bg || "bg-gray-500/20"}`}>
+                  <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${TIER_STYLES[model.tier]?.bg || "bg-gray-500/20"} ${TIER_STYLES[model.tier]?.text || "text-gray-300"}`}>
                     {TIER_STYLES[model.tier]?.label || model.tier}
                   </span>
                 </div>

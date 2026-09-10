@@ -152,6 +152,7 @@ export function TelemetryPanel() {
         const raw: TelemetryData = await res.json();
         setData(raw);
         setHistory((prev) => [...prev.slice(-maxHistory + 1), raw]);
+        setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to fetch telemetry");
       }

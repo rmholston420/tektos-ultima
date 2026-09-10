@@ -314,15 +314,42 @@ function draw3D(
     .alphaDecay(0.015)
     .velocityDecay(0.4);
 
-  // Projection
-  const projection = d3
-    .geoConicEqualArea()
-    .rotate([90, 0, 0])
-    .parallels([0, 0])
-    .fitExtent([[40, 40], [w - 40, h - 40]], { type: "Sphere" })
-    .scale(Math.min(w, h) * 0.45);
+  // Simple 3D->2D projection.
+  //
+  // d3-force-3d produces raw x/y/z coordinates centered on (0,0,0); the old
+  // implementation piped them through d3.geoConicEqualArea, which expects
+  // [longitude, latitude] inputs and therefore returned null/garbage for
+  // physics-simulation coordinates, so nothing was rendered. We instead use a
+  // plain isometric-ish projection: center on the container, use z for depth
+  // scaling and a slow y-axis rotation for the sense of orbit.
+  const cx = w / 2;
+  const cy = h / 2;
+  const scale = Math.min(w, h) * 0.35 / 200;
+  let yaw = 0; // rotated by the animation loop below
 
-  const path = d3.geoPath(projection);
+  interface ProjectedPoint {
+    x: number;
+    y: number;
+    depth: number; // -1..1, higher = closer to viewer
+  }
+
+  const project = (n: { x?: number; y?: number; z?: number }): ProjectedPoint => {
+    const nx = n.x ?? 0;
+    const ny = n.y ?? 0;
+    const nz = n.z ?? 0;
+    // yaw around y-axis (mixes x and z)
+    const rx = nx * Math.cos(yaw) + nz * Math.sin(yaw);
+    const rz = -nx * Math.sin(yaw) + nz * Math.cos(yaw);
+    // depth: normalize by expected simulation extent (~200)
+    const depth = Math.max(-1, Math.min(1, rz / 200));
+    // parallel projection with a mild z-based zoom for depth cueing
+    const zoom = 1 + depth * 0.25;
+    return {
+      x: cx + rx * scale * zoom,
+      y: cy + ny * scale * zoom,
+      depth,
+    };
+  };
 
   // Sphere background
   svg
@@ -353,25 +380,27 @@ function draw3D(
     .data(data.links)
     .join("path")
     .attr("fill", "none")
-    .attr("stroke", (d: GraphEdge) => {
-      const srcColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === d.source)?.category || "core"]?.fill || "#3b82f6";
-      const tgtColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === d.target)?.category || "core"]?.fill || "#3b82f6";
-      return `url(#edge3d-${d.source}-${d.target})`;
-    })
+    // Use index-based gradient IDs. Force-3d rewrites d.source/d.target from
+    // string IDs into GraphNode objects once the simulation starts, so URL
+    // fragments built from them become `url(#edge3d-[object Object]-...)`,
+    // which does not exist. Indexes are stable across the frame lifecycle.
+    .attr("stroke", (_d: GraphEdge, i: number) => `url(#edge3d-${i})`)
     .attr("stroke-width", (d: GraphEdge) => 1 + d.strength * 1.5)
     .attr("stroke-opacity", 0.25)
     .attr("stroke-linecap", "round");
 
-  // Edge gradients
-  data.links.forEach((link) => {
-    const srcColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === link.source)?.category || "core"]?.fill || "#3b82f6";
-    const tgtColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === link.target)?.category || "core"]?.fill || "#3b82f6";
+  // Edge gradients — keyed by index for stable URL fragments (see note above).
+  data.links.forEach((link, i) => {
+    const srcId = typeof link.source === "string" ? link.source : (link.source as GraphNode).id;
+    const tgtId = typeof link.target === "string" ? link.target : (link.target as GraphNode).id;
+    const srcColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === srcId)?.category || "core"]?.fill || "#3b82f6";
+    const tgtColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === tgtId)?.category || "core"]?.fill || "#3b82f6";
     const grad = defs
       .append("linearGradient")
-      .attr("id", `edge3d-${link.source}-${link.target}`)
+      .attr("id", `edge3d-${i}`)
       .attr("gradientUnits", "userSpaceOnUse");
-    grad.append("stop").attr("offset", "0%").attr("stop-color", srcColor).attr("stop-opacity", 0.5);
-    grad.append("stop").attr("offset", "100%").attr("stop-color", tgtColor).attr("stop-opacity", 0.5);
+    grad.append("stop").attr("offset", "0%").attr("stop-color", srcColor).attr("stop-opacity", 0.6);
+    grad.append("stop").attr("offset", "100%").attr("stop-color", tgtColor).attr("stop-opacity", 0.6);
   });
 
   // Nodes
@@ -422,34 +451,53 @@ function draw3D(
     .attr("font-family", "Inter, system-ui, sans-serif")
     .text((d) => d.name);
 
-  simulation.on("tick", () => {
+  const render = () => {
     node.attr("transform", (d) => {
-      const p = projection([d.x || 0, d.y || 0]);
-      return p ? `translate(${p[0]}, ${p[1]})` : "";
+      const p = project(d);
+      return `translate(${p.x}, ${p.y})`;
+    });
+    // Opacity + radius scale by depth so nearer nodes read stronger.
+    node.select<SVGCircleElement>(".outer-3d").attr("opacity", (d) => {
+      const p = project(d);
+      return 0.35 + (p.depth + 1) * 0.25;
+    });
+    node.select<SVGCircleElement>(".core-3d").attr("opacity", (d) => {
+      const p = project(d);
+      return 0.6 + (p.depth + 1) * 0.2;
     });
 
-    // Sort by z-depth for painter's algorithm
-    node.attr("z-index", (d) => (d.z || 0));
+    // Painter’s-algorithm ordering: re-append back-to-front so nearer nodes
+    // paint over farther ones.
+    (node.nodes() as SVGGElement[])
+      .map((el, i) => ({ el, depth: project(data.nodes[i]).depth }))
+      .sort((a, b) => a.depth - b.depth)
+      .forEach(({ el }) => el.parentNode?.appendChild(el));
 
     link.attr("d", (d) => {
       const s = d.source as unknown as GraphNode;
       const t = d.target as unknown as GraphNode;
-      const sp = projection([s.x || 0, s.y || 0]);
-      const tp = projection([t.x || 0, t.y || 0]);
-      if (!sp || !tp) return "";
-      const dx = tp[0] - sp[0];
-      const dy = tp[1] - sp[1];
+      const sp = project(s);
+      const tp = project(t);
+      const dx = tp.x - sp.x;
+      const dy = tp.y - sp.y;
       const dr = Math.sqrt(dx * dx + dy * dy) * 1.2;
-      return `M${sp[0]},${sp[1]}A${dr},${dr} 0 0,1 ${tp[0]},${tp[1]}`;
+      return `M${sp.x},${sp.y}A${dr},${dr} 0 0,1 ${tp.x},${tp.y}`;
     });
-  });
+    link.attr("stroke-opacity", (d) => {
+      const s = d.source as unknown as GraphNode;
+      const t = d.target as unknown as GraphNode;
+      const avgDepth = (project(s).depth + project(t).depth) / 2;
+      return 0.15 + (avgDepth + 1) * 0.18;
+    });
+  };
 
-  // Slow rotation
-  let angle = 0;
+  simulation.on("tick", render);
+
+  // Slow yaw rotation. DO NOT restart() the simulation each frame — that
+  // caused runaway heat and flicker; just re-render with the new yaw.
   const animationId = requestAnimationFrame(function animate() {
-    angle += 0.002;
-    projection.rotate([90 + Math.sin(angle) * 15, 0, 0]);
-    simulation.alpha(0.05).restart();
+    yaw += 0.004;
+    render();
     requestAnimationFrame(animate);
   });
 

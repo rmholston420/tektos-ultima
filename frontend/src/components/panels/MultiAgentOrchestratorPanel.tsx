@@ -20,9 +20,12 @@ interface OrchestratorStatus {
 }
 
 interface AgentInfo {
+  id?: string;
+  name?: string;
   role: string;
-  capabilities: string[];
   status: string;
+  active_tasks?: number;
+  capabilities?: string[];
 }
 
 export function MultiAgentOrchestratorPanel() {
@@ -42,7 +45,12 @@ export function MultiAgentOrchestratorPanel() {
       setStatus(statusData);
       if (agentsRes.ok) {
         const agentsData = await agentsRes.json();
-        setAgents(Array.isArray(agentsData) ? agentsData : []);
+        const list = Array.isArray(agentsData)
+          ? agentsData
+          : Array.isArray((agentsData as any)?.agents)
+            ? (agentsData as any).agents
+            : [];
+        setAgents(list as AgentInfo[]);
       }
       setError(null);
     } catch (err) {
@@ -120,12 +128,24 @@ export function MultiAgentOrchestratorPanel() {
             <h3 className="text-xs font-semibold text-text-muted mb-3">Agents ({agents.length})</h3>
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {agents.map((agent, i) => (
-                <div key={i} className="bg-bg-3 rounded-md p-2">
+                <div key={agent.id ?? i} className="bg-bg-3 rounded-md p-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono text-accent">{agent.role}</span>
-                    <span className="text-xs text-green-400 capitalize">{agent.status}</span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      {agent.name && (
+                        <span className="text-xs text-text-primary truncate">{agent.name}</span>
+                      )}
+                      <span className="text-xs font-mono text-accent">{agent.role}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {typeof agent.active_tasks === "number" && (
+                        <span className="text-xs text-text-muted">
+                          {agent.active_tasks} active
+                        </span>
+                      )}
+                      <span className="text-xs text-green-400 capitalize">{agent.status}</span>
+                    </div>
                   </div>
-                  {agent.capabilities.length > 0 && (
+                  {Array.isArray(agent.capabilities) && agent.capabilities.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
                       {agent.capabilities.slice(0, 4).map((cap, j) => (
                         <span key={j} className="text-xs bg-surface text-text-muted px-1.5 py-0.5 rounded">

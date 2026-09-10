@@ -16,8 +16,10 @@ interface PostgresStatus {
   host: string | null;
   port: number | null;
   database_name: string | null;
-  long_term_connected: boolean;
-  procedural_connected: boolean;
+  connected?: boolean;
+  // Legacy fields (older backend shape) — kept optional for compatibility.
+  long_term_connected?: boolean;
+  procedural_connected?: boolean;
   error: string | null;
 }
 
@@ -38,8 +40,7 @@ export function PostgresPanel() {
         host: null,
         port: null,
         database_name: null,
-        long_term_connected: false,
-        procedural_connected: false,
+        connected: false,
         error: String(err),
       });
     } finally {
@@ -62,6 +63,11 @@ export function PostgresPanel() {
   }
 
   if (!status) return null;
+
+  // Backend returns a single `connected` flag; both long-term and procedural
+  // memory share the same PostgreSQL connection, so derive tier state from it.
+  const connected = status.connected ?? status.long_term_connected ?? false;
+  const proceduralConnected = status.connected ?? status.procedural_connected ?? false;
 
   const statusColor =
     status.status === "connected"
@@ -88,7 +94,7 @@ export function PostgresPanel() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-white">PostgreSQL Long-term Memory</h2>
           <div className="flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${status.long_term_connected && status.procedural_connected ? "bg-green-400" : status.status === "not_initialized" ? "bg-slate-600" : "bg-red-400"}`} />
+            <span className={`w-2.5 h-2.5 rounded-full ${connected && proceduralConnected ? "bg-green-400" : status.status === "not_initialized" ? "bg-slate-600" : "bg-red-400"}`} />
             <span className={`text-sm font-medium ${statusColor}`}>{status.status}</span>
           </div>
         </div>
@@ -122,8 +128,8 @@ export function PostgresPanel() {
         <div className="bg-black/40 border border-slate-700 rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-slate-300">Long-term Memory</h3>
-            <span className={`text-xs px-2 py-0.5 rounded ${status.long_term_connected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
-              {status.long_term_connected ? "Connected" : "Disconnected"}
+            <span className={`text-xs px-2 py-0.5 rounded ${connected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+              {connected ? "Connected" : "Disconnected"}
             </span>
           </div>
           <div className="space-y-2 text-xs text-slate-400">
@@ -145,8 +151,8 @@ export function PostgresPanel() {
         <div className="bg-black/40 border border-slate-700 rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-slate-300">Procedural Memory</h3>
-            <span className={`text-xs px-2 py-0.5 rounded ${status.procedural_connected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
-              {status.procedural_connected ? "Connected" : "Disconnected"}
+            <span className={`text-xs px-2 py-0.5 rounded ${proceduralConnected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+              {proceduralConnected ? "Connected" : "Disconnected"}
             </span>
           </div>
           <div className="space-y-2 text-xs text-slate-400">
