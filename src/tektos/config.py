@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class LLMConfig(BaseModel):
     """Configuration for the LLM inference backend."""
     base_url: str = Field(
-        default="http://127.0.0.1:8091/v1",
+        default="http://127.0.0.1:8090/v1",
         description="LLM API base URL (TEKTOS_LLM_BASE_URL env var)"
     )
     timeout: float = Field(default=300.0, description="Request timeout in seconds")
@@ -36,6 +36,25 @@ class SearXNGConfig(BaseModel):
     max_retries: int = Field(default=3, description="Maximum retry attempts")
 
 
+class TavilyConfig(BaseModel):
+    """Configuration for Tavily search fallback."""
+    api_key: str = Field(
+        default="",
+        description="Tavily API key (TEKTOS_TAVILY_API_KEY env var)"
+    )
+    base_url: str = Field(
+        default="https://api.tavily.com/search",
+        description="Tavily API base URL"
+    )
+    max_results: int = Field(default=10, description="Maximum results to return")
+    search_depth: str = Field(default="basic", description="Search depth: basic or advanced")
+    topic: str = Field(default="general", description="Search topic: general or news")
+    include_answer: bool = Field(default=True, description="Include AI-generated answer")
+    timeout_seconds: float = Field(default=15.0, description="Request timeout in seconds")
+    max_retries: int = Field(default=3, description="Maximum retry attempts")
+    retry_backoff_base: float = Field(default=1.0, description="Base backoff seconds for retries")
+
+
 class VisionConfig(BaseModel):
     """Configuration for the vision analysis backend."""
     base_url: str = Field(
@@ -56,15 +75,17 @@ class TektosConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     hindsight: HindsightConfig = Field(default_factory=HindsightConfig)
     searxng: SearXNGConfig = Field(default_factory=SearXNGConfig)
+    tavily: TavilyConfig = Field(default_factory=TavilyConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     api_key: APIKeyConfig = Field(default_factory=APIKeyConfig)
 
     @classmethod
     def from_env(cls) -> "TektosConfig":
         """Load config from environment variables with defaults."""
-        llm_url = os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8091/v1")
+        llm_url = os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1")
         hindsight_url = os.getenv("TEKTOS_HINDSIGHT_URL", "http://127.0.0.1:9177")
         searxng_url = os.getenv("TEKTOS_SEARXNG_URL", "http://localhost:8888/search")
+        tavily_key = os.getenv("TEKTOS_TAVILY_API_KEY", "")
         vision_url = os.getenv("TEKTOS_VISION_URL", "http://127.0.0.1:8083")
         api_key_enabled = os.getenv("TEKTOS_API_KEY_ENABLED", "false").lower() == "true"
         api_key = os.getenv("TEKTOS_API_KEY")
@@ -73,6 +94,7 @@ class TektosConfig(BaseModel):
             llm=LLMConfig(base_url=llm_url),
             hindsight=HindsightConfig(base_url=hindsight_url),
             searxng=SearXNGConfig(base_url=searxng_url),
+            tavily=TavilyConfig(api_key=tavily_key),
             vision=VisionConfig(base_url=vision_url),
             api_key=APIKeyConfig(enabled=api_key_enabled, api_key=api_key),
         )

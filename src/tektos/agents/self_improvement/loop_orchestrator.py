@@ -27,7 +27,7 @@ from src.tektos.agents.manager.orchestrator import Manager
 from src.tektos.agents.planner.models import BuildSpec, PlannerOutput
 from src.tektos.agents.planner.orchestrator import Planner
 from src.tektos.memory.experience_replay import ExperienceReplay
-from src.tektos.memory.memory_system import MemorySystem
+from src.tektos.memory.memory_system import Hemisphere, MemorySystem
 from src.tektos.memory.reflection_engine import ReflectionEngine
 from src.tektos.memory.synthesis_engine import SynthesisEngine, SynthesisFeedback
 
@@ -46,6 +46,14 @@ class LoopCycle(BaseModel):
     syntheses: list[SynthesisFeedback] = []
     experience_stored: list[str] = []  # IDs of stored experience records
     error: str | None = None
+
+    # Quality metrics
+    test_pass_rate: float = 0.0
+    artifacts_count: int = 0
+    execution_duration_seconds: float = 0.0
+    syntheses_count: int = 0
+    experiences_stored: int = 0
+    phases_count: int = 0
 
     @property
     def duration_seconds(self) -> float | None:
@@ -96,7 +104,7 @@ class SelfImprovementLoop:
         self._experience = ExperienceReplay(max_records=experience_replay_max)
 
         self.planner = Planner()
-        self.executor = Executor(workspace=workspace)
+        self.executor = Executor(workspace=workspace, memory_system=self._memory)
         self.manager = Manager(max_feedback_length=max_feedback_length)
 
         self._cycles: list[LoopCycle] = []
@@ -188,9 +196,18 @@ class SelfImprovementLoop:
             )
             status = record.status.value
 
+            # Collect quality metrics
+            cycle.test_pass_rate = (
+                sum(1 for t in test_results if t.status == "passed") / max(len(test_results), 1)
+            )
+            cycle.artifacts_count = len(record.artifacts)
+            cycle.execution_duration_seconds = record.total_duration_seconds
+            cycle.phases_count = len(cycle.spec.phases) if cycle.spec else 0
+
             # ReflectionEngine requires MemorySystem in __init__ and uses run_reflection()
             reflection_state = self._reflection.run_reflection(
                 focus=f"Execution: {cycle.spec.description}",
+                manager_feedback=[cycle.manager_feedback] if cycle.manager_feedback else [],
             )
 
             syntheses = self._synthesis_engine.process_reflection_session(
@@ -198,6 +215,7 @@ class SelfImprovementLoop:
                 thesis_context=cycle.spec.description,
             )
             cycle.syntheses = syntheses
+            cycle.syntheses_count = len(syntheses)
 
             # Store syntheses as experience
             for synth in syntheses:
@@ -208,6 +226,7 @@ class SelfImprovementLoop:
                         context="software_engineering",
                     )
                     cycle.experience_stored.append(exp.id)
+            cycle.experiences_stored = len(cycle.experience_stored)
 
             cycle.status = "complete"
 
@@ -276,3 +295,144 @@ class SelfImprovementLoop:
 
     def __len__(self) -> int:
         return len(self._cycles)
+
+    def consolidate_patterns(self) -> dict[str, Any]:
+        """Cross-cycle consolidation: convert frequent patterns into permanent skills.
+
+        Analyzes all completed cycles to find patterns that occur frequently,
+        then converts them into permanent procedural memories (skills).
+
+        This is the "self-improving" part — not just recording lessons,
+        but encoding them as reusable knowledge.
+
+        Returns:
+            Summary of consolidation results.
+        """
+        if not self._cycles:
+            return {"consolidated": 0, "patterns": []}
+
+        # Collect all insights from all cycles
+        all_insights: list[dict[str, Any]] = []
+        for cycle in self._cycles:
+            if cycle.syntheses:
+                for synth in cycle.syntheses:
+                    all_insights.append({
+                        "type": synth.insight_type,
+                        "content": synth.synthesis[:200],
+                        "confidence": synth.confidence,
+                        "cycle_id": cycle.cycle_id,
+                    })
+
+        if not all_insights:
+            return {"consolidated": 0, "patterns": []}
+
+        # Group by insight type
+        type_counts: dict[str, int] = {}
+        type_examples: dict[str, list[str]] = {}
+        for insight in all_insights:
+            itype = insight["type"]
+            type_counts[itype] = type_counts.get(itype, 0) + 1
+            if itype not in type_examples:
+                type_examples[itype] = []
+            if len(type_examples[itype]) < 3:
+                type_examples[itype].append(insight["content"])
+
+        # Find frequent patterns (occur > 1 time)
+        frequent_patterns = {
+            k: v for k, v in type_counts.items() if v > 1
+        }
+
+        # Consolidate frequent patterns into procedural memories
+        consolidated = []
+        for pattern_type, count in frequent_patterns.items():
+            examples = type_examples.get(pattern_type, [])
+            skill_content = (
+                f"[Consolidated Skill] {pattern_type}\n"
+                f"Frequency: {count} occurrences across cycles\n"
+                f"Examples:\n" + "\n".join(f"  - {ex}" for ex in examples)
+            )
+
+            # Add to procedural memory
+            self._memory.add_procedural_memory(
+                content=skill_content,
+                hemisphere=Hemisphere.LEFT,
+                is_novel=False,
+                what="consolidated_skill",
+                why=f"Pattern '{pattern_type}' occurred {count} times — encoding as permanent skill",
+                how="Cross-cycle pattern analysis and consolidation",
+            )
+
+            consolidated.append({
+                "pattern_type": pattern_type,
+                "count": count,
+                "skill_content": skill_content[:200],
+            })
+
+        return {
+            "consolidated": len(consolidated),
+            "patterns": consolidated,
+            "total_insights_analyzed": len(all_insights),
+            "frequent_patterns_found": len(frequent_patterns),
+        }
+
+    def get_quality_trend(self) -> dict[str, Any]:
+        """Get quality trend across cycles.
+
+        Tracks test pass rate, artifacts count, and duration over time
+        to measure whether the system is actually improving.
+
+        Returns:
+            Quality trend data.
+        """
+        if not self._cycles:
+            return {"trend": "no_data"}
+
+        completed = [c for c in self._cycles if c.status == "complete"]
+        if not completed:
+            return {"trend": "no_completed_cycles"}
+
+        # Extract metrics
+        test_pass_rates = [c.test_pass_rate for c in completed]
+        artifacts_counts = [c.artifacts_count for c in completed]
+        durations = [c.execution_duration_seconds for c in completed]
+
+        # Calculate trends (simple linear regression)
+        def calculate_trend(values: list[float]) -> str:
+            if len(values) < 2:
+                return "insufficient_data"
+            n = len(values)
+            x_mean = (n - 1) / 2
+            y_mean = sum(values) / n
+            numerator = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
+            denominator = sum((i - x_mean) ** 2 for i in range(n))
+            if denominator == 0:
+                return "flat"
+            slope = numerator / denominator
+            if slope > 0.01:
+                return "improving"
+            elif slope < -0.01:
+                return "declining"
+            else:
+                return "stable"
+
+        return {
+            "trend": {
+                "test_pass_rate": calculate_trend(test_pass_rates),
+                "artifacts_count": calculate_trend(artifacts_counts),
+                "duration": calculate_trend(durations),
+            },
+            "latest": {
+                "test_pass_rate": test_pass_rates[-1] if test_pass_rates else 0,
+                "artifacts_count": artifacts_counts[-1] if artifacts_counts else 0,
+                "duration": durations[-1] if durations else 0,
+            },
+            "history": [
+                {
+                    "cycle_id": c.cycle_id,
+                    "test_pass_rate": c.test_pass_rate,
+                    "artifacts_count": c.artifacts_count,
+                    "duration": c.execution_duration_seconds,
+                }
+                for c in completed
+            ],
+        }

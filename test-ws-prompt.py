@@ -7,7 +7,7 @@ async def main():
     # Get a session ID first
     async with httpx.AsyncClient() as client:
         resp = await client.post('http://localhost:8000/api/sessions', 
-                                json={'model': 'Qwen3.6-35B-A3B-Q4_K_M'})
+                                json={'model': 'Qwen3.6-35B-A3B-Q5_K_M'})
         data = resp.json()
         session_id = data['id']
         print(f"Created session: {session_id}")

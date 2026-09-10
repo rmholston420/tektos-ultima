@@ -19,9 +19,11 @@ The spiral staircase.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -112,6 +114,8 @@ class ExperienceReplay:
         self._max_age_hours = max_age_hours
         self._min_confidence = min_confidence_for_storage
         self._hindsight_enabled = True
+        # Deduplication: hash of (context, guidance) -> record id
+        self._guidance_hashes: dict[str, str] = {}
 
     def store(
         self,
@@ -149,6 +153,24 @@ class ExperienceReplay:
             cycle_id=cycle_id,
             tags=tags or [],
         )
+
+        # Deduplication: check if this guidance already exists
+        guidance_key = f"{context}:{guidance[:200]}"
+        guidance_hash = hashlib.sha256(guidance_key.encode()).hexdigest()[:16]
+
+        if guidance_hash in self._guidance_hashes:
+            # Return existing record instead of duplicating
+            existing_id = self._guidance_hashes[guidance_hash]
+            existing = next(
+                (r for r in self._records if r.id == existing_id),
+                None,
+            )
+            if existing:
+                return existing
+
+        # Register this hash
+        self._guidance_hashes[guidance_hash] = record.id
+
         self._records.append(record)
 
         # Enforce max records (drop oldest first)

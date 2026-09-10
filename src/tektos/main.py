@@ -89,16 +89,29 @@ async def lifespan(app: _FastAPI):
     """Initialize and clean up resources."""
     global session_manager, runtime_sdk, ws_manager, schema_engine, self_improvement
 
+    print(f"[LIFESPAN] STARTING - {_datetime.now()}", flush=True)
+    import traceback
+    try:
+        traceback.print_stack(limit=5)
+    except:
+        pass
+
     # 1. Initialize event store FIRST (provides db_path)
+    print(f"[LIFESPAN] Step 1: init_event_store", flush=True)
     from tektos.store.event_store import init as init_event_store
     db_path = str(_Path(__file__).parent / ".." / ".." / "data" / "tektos.db")
     init_event_store(db_path)
+    print(f"[LIFESPAN] Step 1: done", flush=True)
 
     # 2. Initialize session manager
+    print(f"[LIFESPAN] Step 2: SessionManager", flush=True)
     session_manager = SessionManager()
+    print(f"[LIFESPAN] Step 2: done", flush=True)
 
     # 3. Initialize schema evolution engine (uses event store DB)
+    print(f"[LIFESPAN] Step 3: SchemaEvolutionEngine", flush=True)
     schema_engine = SchemaEvolutionEngine(db_path)
+    print(f"[LIFESPAN] Step 3: done", flush=True)
 
     # 4. Apply any pending schema migrations
     try:
@@ -111,10 +124,12 @@ async def lifespan(app: _FastAPI):
         log.warning("Schema migration failed (continuing): %s", exc)
 
     # 5. Initialize runtime SDK
+    print(f"[LIFESPAN] Step 5: RuntimeSDK", flush=True)
     runtime_sdk = RuntimeSDK(
-        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8091/v1"),
-        llm_model=_os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M"),
+        llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8090/v1"),
+        llm_model=_os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q5_K_M"),
     )
+    print(f"[LIFESPAN] Step 5: done", flush=True)
 
     # 5b. Initialize model router with running LLM as default
     if runtime_sdk._llm_base_url and runtime_sdk._llm_model:
@@ -139,16 +154,22 @@ async def lifespan(app: _FastAPI):
             log.warning("Failed to initialize model router: %s", exc)
 
     # 6. Initialize WebSocket manager
+    print(f"[LIFESPAN] Step 6: WebSocketManager", flush=True)
     ws_manager = WebSocketManager()
+    print(f"[LIFESPAN] Step 6: done", flush=True)
 
     # 7. Initialize self-improvement adapter with schema engine
+    print(f"[LIFESPAN] Step 7: SelfImprovementAdapter", flush=True)
     self_improvement = SelfImprovementAdapter(
         ws_event_emitter=lambda **kw: _emit_schema_event(**kw),
     )
+    print(f"[LIFESPAN] Step 7: done", flush=True)
 
     # 8. Initialize event bus + state machine (nervous system)
+    print(f"[LIFESPAN] Step 8: event_bus + state_machine", flush=True)
     _event_bus = get_event_bus()
     _state_machine = get_state_machine()
+    print(f"[LIFESPAN] Step 8: done", flush=True)
 
     # Subscribe VSM layers to event bus
     # S3 (Manager) monitors all state changes and warnings
@@ -163,6 +184,7 @@ async def lifespan(app: _FastAPI):
     log.info("Event bus + state machine initialized (nervous system)")
 
     # 9. Initialize tool registry (replaces hardcoded TOOLS_SCHEMA)
+    print(f"[LIFESPAN] Step 9: ToolRegistry", flush=True)
     from tektos.tools.registry import ToolRegistry, MCPClient
     from tektos.providers.sandbox_provider import SandboxProvider
     global _tool_registry, _mcp_client
@@ -171,15 +193,20 @@ async def lifespan(app: _FastAPI):
     _tool_registry.load_built_in(_sandbox)
     _mcp_client = MCPClient(registry=_tool_registry)
     log.info("Tool registry initialized with built-in tools")
+    print(f"[LIFESPAN] Step 9: done", flush=True)
 
     # 10. Initialize metabolism engine (resource monitoring + context budget)
+    print(f"[LIFESPAN] Step 10: MetabolismEngine", flush=True)
     from tektos.metabolism import MetabolismEngine
     global _metabolism
     _metabolism = MetabolismEngine(event_bus=_event_bus, max_tokens=262144)
     log.info("Metabolism engine initialized (VRAM + context budget + power)")
+    print(f"[LIFESPAN] Step 10: done", flush=True)
 
     # 11. Start runtime SDK
+    print(f"[LIFESPAN] Step 11: runtime_sdk.start()", flush=True)
     await runtime_sdk.start()
+    print(f"[LIFESPAN] Step 11: done", flush=True)
 
     # 9. Initialize vision client (optional — only if VISION_LLM_URL is set)
     vision_url = _os.getenv("TEKTOS_VISION_LLM_URL")
@@ -201,12 +228,14 @@ async def lifespan(app: _FastAPI):
         log.info("Vision client skipped (TEKTOS_VISION_LLM_URL not set)")
 
     # 10. Initialize memory persistence layer
+    print(f"[LIFESPAN] Step 12: MemorySystem", flush=True)
     global memory_system
     from tektos.memory.memory_system import MemorySystem
     memory_system = MemorySystem()
     if memory_system.persistence:
         memory_system.persistence.start_decay_scheduler(interval=60.0)
     log.info("Memory persistence initialized (SQLite-backed 4-tier)")
+    print(f"[LIFESPAN] Step 12: done", flush=True)
 
     # 11. Initialize Telegram gateway (optional — only if bot token is set)
     telegram_bot_token = _os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN")
@@ -223,7 +252,9 @@ async def lifespan(app: _FastAPI):
                 session_manager=session_manager,
                 ws_manager=ws_manager,
             )
-            log.info("Telegram gateway initialized (polling mode)")
+            # Start the Telegram bot polling loop
+            await telegram_gateway.start()
+            log.info("Telegram gateway initialized and started (polling mode)")
         except Exception as exc:
             log.warning("Failed to initialize Telegram gateway: %s", exc)
             telegram_gateway = None
@@ -231,18 +262,24 @@ async def lifespan(app: _FastAPI):
         log.info("Telegram gateway skipped (TEKTOS_TELEGRAM_BOT_TOKEN not set)")
 
     log.info("Tektos-Ultima-v1 backend started (schema v%d)", schema_engine.get_current_version())
+    print(f"[LIFESPAN] YIELDING - server should be running now", flush=True)
     yield
+    print(f"[LIFESPAN] RESUMED after yield - cleaning up", flush=True)
 
     # Cleanup
+    print(f"[LIFESPAN] Cleanup: stopping telegram_gateway", flush=True)
     if telegram_gateway:
         try:
             await telegram_gateway.stop()
             log.info("Telegram gateway stopped")
         except Exception as exc:
             log.warning("Error stopping Telegram gateway: %s", exc)
+    print(f"[LIFESPAN] Cleanup: stopping runtime_sdk", flush=True)
     await runtime_sdk.stop()
+    print(f"[LIFESPAN] Cleanup: closing store", flush=True)
     await store_close()
     log.info("Tektos-Ultima-v1 backend stopped")
+    print(f"[LIFESPAN] DONE", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +308,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class CreateSessionRequest(_BaseModel):
-    model: str = "Qwen_Qwen3.6-35B-A3B-Q4_K_M"
+    model: str = "Qwen_Qwen3.6-35B-A3B-Q5_K_M"
     cwd: str = "."
     provider: str = "local"
     permission_mode: str = "auto"
@@ -328,6 +365,7 @@ async def prompt_sse(body: _PromptSSEBody):
 
     async def event_generator():
         """Yield SSE events as they arrive."""
+        log.info(f"[SSE] Starting event generator for session {body.session_id[:8]}")
         event_queue: _asyncio.Queue[str] = _asyncio.Queue(maxsize=1024)
         approved_tools: dict[str, bool] = {}
         approval_event: _asyncio.Event = _asyncio.Event()
@@ -341,6 +379,7 @@ async def prompt_sse(body: _PromptSSEBody):
                     et = "assistant_delta"
                 elif et == "assistant.completed":
                     et = "assistant_completed"
+                log.info(f"[SSE] Event: {et}")
                 await event_queue.put(f"event: {et}\ndata: {data}\n\n")
             except Exception as e:
                 log.warning("SSE event send failed: %s", e)
@@ -353,6 +392,7 @@ async def prompt_sse(body: _PromptSSEBody):
                 log.warning("Tool approval timeout for %s", tool_id)
                 return False
 
+        log.info(f"[SSE] Creating submit_prompt task for session {body.session_id[:8]}")
         task = _asyncio.create_task(
             runtime_sdk.submit_prompt(
                 session=session,
@@ -383,9 +423,12 @@ async def prompt_sse(body: _PromptSSEBody):
                 break
 
         # Wait for task completion
+        log.info(f"[SSE] Waiting for task completion for session {body.session_id[:8]}")
         try:
             await task
+            log.info(f"[SSE] Task completed successfully for session {body.session_id[:8]}")
         except Exception as e:
+            log.error(f"[SSE] Task failed for session {body.session_id[:8]}: {e}", exc_info=True)
             error_data = _json.dumps({"type": "error", "detail": str(e)})
             yield f"event: error\ndata: {error_data}\n\n"
 
@@ -398,6 +441,31 @@ async def prompt_sse(body: _PromptSSEBody):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/mcp")
+async def mcp_endpoint(request: _Request):
+    """MCP server endpoint — handles JSON-RPC 2.0 requests."""
+    from tektos.mcp_server import (
+        MCPRequest,
+        handle_mcp_request,
+        register_tektos_tools,
+    )
+    from tektos.providers.sandbox_provider import sandbox
+
+    # Register tools on first request (lazy init)
+    if not register_tektos_tools.__globals__.get("_tools_registered"):
+        register_tektos_tools(sandbox)
+        register_tektos_tools.__globals__["_tools_registered"] = True
+
+    try:
+        body = await request.json()
+        mcp_req = MCPRequest.from_json(body)
+        response = handle_mcp_request(mcp_req)
+        return response
+    except Exception as exc:
+        log.error(f"MCP request failed: {exc}", exc_info=True)
+        return {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(exc)}, "id": None}
 
 
 @app.get("/health")
@@ -878,7 +946,13 @@ async def create_session(req: CreateSessionRequest):
             permission_mode=req.permission_mode,
             resume_session_id=req.resume_session_id,
         )
-
+    
+    # Initialize state manager for new session
+    state_managers[session.id] = SessionStateManager(
+        session_id=session.id,
+        project="Tektos-Ultima-v1",
+    )
+    
     return {
         "id": session.id,
         "title": session.title or "",
@@ -1260,27 +1334,44 @@ async def vision_status():
 @app.get("/api/schema")
 async def get_schema_info():
     """Expose current schema version, history, and self-model for agent introspection."""
-    schema = schema_engine.get_schema()
-    history = schema_engine.get_evolution_history()
-    snapshot = schema_engine.introspect()
-    
-    # Get self-improvement stats
-    experiences = self_improvement.get_experience()
-    metrics = self_improvement.get_learning_metrics()
-    
-    return {
-        "version": schema_engine.get_current_version(),
-        "schema": schema,
-        "evolution_history": history,
-        "introspection": snapshot,
-        "self_improvement": {
-            "experiences_tracked": len(experiences),
-            "total_tasks": metrics.get("total_tasks", 0),
-            "total_improvements": metrics.get("total_improvements", 0),
-            "learning_velocity": metrics.get("learning_velocity", 0.0),
-            "best_model": metrics.get("best_model_for_coding"),
-        },
-    }
+    try:
+        schema = schema_engine.get_schema()
+        history = schema_engine.get_evolution_history()
+        snapshot = schema_engine.introspect()
+        
+        # Get self-improvement stats
+        experiences = self_improvement.get_experience()
+        metrics = self_improvement.get_learning_metrics()
+        
+        return {
+            "version": schema_engine.get_current_version(),
+            "schema": schema,
+            "evolution_history": history,
+            "introspection": snapshot,
+            "self_improvement": {
+                "experiences_tracked": len(experiences),
+                "total_tasks": metrics.get("total_tasks", 0),
+                "total_improvements": metrics.get("total_improvements", 0),
+                "learning_velocity": metrics.get("learning_velocity", 0.0),
+                "best_model": metrics.get("best_model_for_coding"),
+            },
+        }
+    except Exception as exc:
+        log.error("Schema info endpoint error: %s", exc, exc_info=True)
+        return {
+            "version": schema_engine.get_current_version() if schema_engine else 0,
+            "schema": {},
+            "evolution_history": [],
+            "introspection": {},
+            "self_improvement": {
+                "experiences_tracked": 0,
+                "total_tasks": 0,
+                "total_improvements": 0,
+                "learning_velocity": 0.0,
+                "best_model": None,
+            },
+            "error": str(exc),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1669,171 +1760,6 @@ async def list_api_keys():
 
 
 # ---------------------------------------------------------------------------
-# Telemetry API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/telemetry")
-async def get_telemetry():
-    """Real GPU/CPU/memory telemetry."""
-    import psutil
-    import os
-    try:
-        import pynvml
-        pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        gpu = {
-            "temperature": pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU),
-            "utilization": pynvml.nvmlDeviceGetUtilizationRates(handle).gpu,
-            "memory_used": pynvml.nvmlDeviceGetMemoryInfo(handle).used,
-            "memory_total": pynvml.nvmlDeviceGetMemoryInfo(handle).total,
-            "power_draw": pynvml.nvmlDeviceGetPowerUsage(handle),
-            "power_limit": pynvml.nvmlDeviceGetPowerManagementLimit(handle) // 1000,
-        }
-        pynvml.nvmlShutdown()
-    except Exception as e:
-        log.warning("Failed to read GPU status: %s", e)
-        gpu = {"temperature": 0, "utilization": 0, "memory_used": 0, "memory_total": 0, "power_draw": 0, "power_limit": 400}
-    
-    return {
-        "gpu": gpu,
-        "cpu": {
-            "utilization": psutil.cpu_percent(interval=0.1),
-            "cores": psutil.cpu_count(logical=True),
-            "load_avg": list(psutil.getloadavg()),
-        },
-        "memory": {
-            "used": psutil.virtual_memory().used,
-            "total": psutil.virtual_memory().total,
-            "percent": psutil.virtual_memory().percent,
-        },
-        "timestamp": _time.time(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Hooks API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/hooks")
-async def list_hooks():
-    """List all registered hooks."""
-    from tektos.runtime.hooks import BuiltinHooks, HookRegistry
-    hooks = []
-    for name, hook_fn in BuiltinHooks._hooks.items():
-        hooks.append({
-            "name": name,
-            "handler": hook_fn.__name__ if hasattr(hook_fn, "__name__") else str(hook_fn),
-            "category": "builtin",
-        })
-    return hooks
-
-
-# ---------------------------------------------------------------------------
-# Config API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/config")
-async def get_config():
-    """Return runtime configuration."""
-    import os
-    config = [
-        {"key": "llm_base_url", "value": runtime_sdk._llm_base_url, "type": "string", "description": "LLM server base URL", "sensitive": False},
-        {"key": "llm_model", "value": runtime_sdk._llm_model, "type": "string", "description": "Active LLM model", "sensitive": False},
-        {"key": "protocol_version", "value": PROTOCOL_VERSION, "type": "string", "description": "Protocol version", "sensitive": False},
-        {"key": "gpu_power_limit", "value": os.getenv("GPU_POWER_LIMIT", "400"), "type": "string", "description": "GPU power limit (watts)", "sensitive": False},
-        {"key": "log_level", "value": os.getenv("TEKTOS_LOG_LEVEL", "INFO"), "type": "string", "description": "Logging level", "sensitive": False},
-        {"key": "vision_llm_url", "value": os.getenv("TEKTOS_VISION_LLM_URL", ""), "type": "string", "description": "Vision LLM URL", "sensitive": False},
-        {"key": "vision_model", "value": os.getenv("TEKTOS_VISION_MODEL", ""), "type": "string", "description": "Vision model", "sensitive": False},
-        {"key": "telegram_bot_token", "value": "••••••••" if os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN") else "(not set)", "type": "string", "description": "Telegram bot token", "sensitive": True},
-    ]
-    return {"config": config}
-
-
-# ---------------------------------------------------------------------------
-# Schedule API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/schedule")
-async def list_schedule():
-    """List scheduled tasks from backup scheduler."""
-    from tektos.memory.backup_scheduler import BackupScheduler
-    scheduler = BackupScheduler()
-    backups = scheduler.list_backups()
-    tasks = []
-    for i, b in enumerate(backups):
-        tasks.append({
-            "id": str(i),
-            "name": b.get("name", "backup"),
-            "type": b.get("type", "unknown"),
-            "status": "completed",
-            "last_run": b.get("timestamp", ""),
-            "next_run": "",
-            "interval": "daily",
-            "enabled": True,
-        })
-    return tasks
-
-
-# ---------------------------------------------------------------------------
-# Skills/Plugins API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/skills")
-async def list_skills():
-    """List all registered plugins as skills."""
-    from tektos.plugin import PluginRegistry
-    registry = PluginRegistry()
-    plugins = registry.list_plugins()
-    skills = []
-    for p in plugins:
-        skills.append({
-            "name": p.name,
-            "version": p.version,
-            "category": p.config.get("category", "general"),
-            "description": p.config.get("description", ""),
-            "enabled": True,
-        })
-    return skills
-
-
-# ---------------------------------------------------------------------------
-# Keys API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/keys")
-async def list_keys():
-    """List configured API keys (masked values)."""
-    import os
-    keys = []
-    for var in ["TEKTOS_LLM_API_KEY", "TEKTOS_VISION_LLM_API_KEY", "TEKTOS_TELEGRAM_BOT_TOKEN", "TEKTOS_HUGGINGFACE_TOKEN"]:
-        value = os.getenv(var)
-        keys.append({
-            "name": var.replace("TEKTOS_", "").replace("_", " "),
-            "key": var,
-            "value": "••••••••" if value else "(not set)",
-            "configured": bool(value),
-        })
-    return {"keys": keys}
-
-
-# ---------------------------------------------------------------------------
-# Routing API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/routing/decide")
-async def route_decision(task: str = "", category: str = "general"):
-    """Make a model routing decision."""
-    from tektos.routing import ModelRouter
-    router = ModelRouter()
-    decision = router.route(task=task, category=category)
-    return {
-        "recommended_model": decision.get("model", runtime_sdk._llm_model),
-        "category": category,
-        "confidence": decision.get("confidence", 0.8),
-    }
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -2052,14 +1978,27 @@ async def websocket_endpoint(websocket: _WebSocket, session_id: str):
 
 def main():
     """Run the server."""
-    import uvicorn
-    uvicorn.run(
-        "tektos.main:app",
-        host="127.0.0.1",
-        port=8020,
-        reload=False,
-        log_level="info",
-    )
+    import sys
+    print(f"[MAIN] Starting Tektos-Ultima-v1", flush=True)
+    print(f"[MAIN] Python: {sys.version}", flush=True)
+    print(f"[MAIN] CWD: {_os.getcwd()}", flush=True)
+    print(f"[MAIN] LLM_URL: {_os.getenv('TEKTOS_LLM_BASE_URL', 'not set')}", flush=True)
+    print(f"[MAIN] LLM_MODEL: {_os.getenv('TEKTOS_LLM_MODEL', 'not set')}", flush=True)
+    try:
+        import uvicorn
+        print(f"[MAIN] Starting uvicorn...", flush=True)
+        uvicorn.run(
+            "tektos.main:app",
+            host="127.0.0.1",
+            port=8020,
+            reload=False,
+            log_level="info",
+        )
+        print(f"[MAIN] Uvicorn returned (should not happen)", flush=True)
+    except Exception as e:
+        print(f"[MAIN] Uvicorn error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

@@ -421,7 +421,84 @@ class MetabolismEngine:
         except Exception:
             return {"total": 0, "used": 0, "free": 0}
 
-    # ─── Context Budget ─────────────────────────────────────────────────
+    # ─── Context Compression ────────────────────────────────────────────
+
+    def compress_context(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Compress context by summarizing older messages.
+
+        Implements ContextAction.COMPRESS: summarize older messages
+        to reduce token count while preserving key information.
+
+        Args:
+            messages: List of message dicts with 'role', 'content' keys.
+
+        Returns:
+            Compressed message list with summaries for older messages.
+        """
+        if len(messages) <= 10:
+            return messages  # No compression needed for small contexts
+
+        # Keep recent messages intact, summarize older ones
+        recent_count = 10
+        recent = messages[-recent_count:]
+        older = messages[:-recent_count]
+
+        if not older:
+            return messages
+
+        # Group older messages by role and summarize
+        summaries: dict[str, list[str]] = {}
+        for msg in older:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if role not in summaries:
+                summaries[role] = []
+            summaries[role].append(content[:200])  # Truncate long content
+
+        # Create summary messages
+        compressed: list[dict[str, Any]] = []
+        for role, contents in summaries.items():
+            if len(contents) == 1:
+                compressed.append({"role": role, "content": contents[0]})
+            else:
+                compressed.append({
+                    "role": role,
+                    "content": f"[Summarized {len(contents)} messages]\n" + "\n".join(contents[:3]),
+                })
+
+        return compressed + recent
+
+    def trim_context(self, messages: list[dict[str, Any]], max_tokens: int) -> list[dict[str, Any]]:
+        """Trim context by removing oldest messages until under token limit.
+
+        Implements ContextAction.TRIM: remove oldest messages to stay
+        within token budget.
+
+        Args:
+            messages: List of message dicts.
+            max_tokens: Maximum token count.
+
+        Returns:
+            Trimmed message list.
+        """
+        if len(messages) <= 5:
+            return messages  # Keep at least 5 messages
+
+        # Estimate tokens per message (rough heuristic)
+        estimated_tokens = sum(len(msg.get("content", "")) // 4 for msg in messages)
+
+        if estimated_tokens <= max_tokens:
+            return messages  # Already under budget
+
+        # Remove oldest messages until under budget
+        trimmed = list(messages)
+        while len(trimmed) > 5:
+            trimmed.pop(0)
+            estimated_tokens = sum(len(msg.get("content", "")) // 4 for msg in trimmed)
+            if estimated_tokens <= max_tokens:
+                break
+
+        return trimmed
 
     def update_context_budget(self, current_tokens: int) -> ContextBudget:
         """Update context token count and check thresholds."""

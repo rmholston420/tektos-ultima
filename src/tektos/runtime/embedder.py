@@ -51,7 +51,7 @@ class EmbedderClient:
         POST /v1/embeddings   — generate embeddings
     """
 
-    def __init__(self, llm_base_url: str = "http://127.0.0.1:8091/v1", model: str = "Qwen3-Embedding-0.6B-Q8_0"):
+    def __init__(self, llm_base_url: str = "http://127.0.0.1:8091/v1", model: str = "Qwen3-Embedding-0.6B-q8_0"):
         self._base_url = llm_base_url.rstrip("/")
         self._model = model
         self._client: httpx.AsyncClient | None = None

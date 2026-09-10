@@ -408,20 +408,23 @@ class TestHandleToolCompletion:
 
     @pytest.mark.asyncio
     async def test_handle_tool_completion_no_on_tool_approval_in_manual_mode(self):
-        """Test manual mode with no on_tool_approval callback -- execution falls through."""
+        """Test manual mode with no on_tool_approval callback -- tool is rejected."""
         sdk = RuntimeSDK()
         session = LiveSession(id="s1", model="test", cwd=".", permission_mode="manual")
         events = []
         async def on_event(env):
             events.append(env)
 
-        sdk._sandbox.execute = MagicMock(return_value="auto output")
-
         result = await sdk._handle_tool_completion(
             session, on_event, "tc-1", "bash",
             _json.dumps({"command": "ls"}), set(), None
         )
-        assert result == "auto output"
+        assert result == "Tool rejected: no approval callback in manual mode"
+        event_types = [e.event_type for e in events]
+        assert "tool.permission_required" in event_types
+        completed_events = [e for e in events if e.event_type == "tool.completed"]
+        assert len(completed_events) == 1
+        assert completed_events[0].payload.get("status") == "rejected"
 
     @pytest.mark.asyncio
     async def test_handle_tool_completion_execution_error(self):
@@ -469,7 +472,7 @@ class TestExecuteTool:
 class TestCheckResources:
     @pytest.mark.asyncio
     async def test_check_resources_no_gpu(self):
-        """Test _check_resources when nvidia-smi is unavailable."""
+        """Test _check_resources when nvidia-smi is unavailable -- no warning."""
         sdk = RuntimeSDK()
         session = LiveSession(id="s1", model="test", cwd=".")
 
@@ -484,22 +487,33 @@ class TestCheckResources:
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="45\n")
+            with patch.object(sdk._metabolism, "assess_health") as mock_assess:
+                mock_assess.return_value = MagicMock(
+                    overall_health=MagicMock(value="normal"),
+                    gpu=MagicMock(temperature=45.0, vram_pct=50.0),
+                    system=MagicMock(disk_pct=50.0),
+                )
                 await sdk._check_resources(session)
                 mock_append.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_check_resources_yellow_zone(self):
-        """Test _check_resources in yellow GPU zone (51-80C)."""
+        """Test _check_resources in yellow GPU zone (51-80C) -- emits warning."""
         sdk = RuntimeSDK()
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="55\n")
+            with patch.object(sdk._metabolism, "assess_health") as mock_assess:
+                mock_assess.return_value = MagicMock(
+                    overall_health=MagicMock(value="warning"),
+                    gpu=MagicMock(temperature=55.0, vram_pct=50.0),
+                    system=MagicMock(disk_pct=50.0),
+                )
                 await sdk._check_resources(session)
-                mock_append.assert_not_called()
+                mock_append.assert_called_once()
+                call_args = mock_append.call_args
+                assert call_args[0][0] == "s1"
+                assert call_args[0][1] == "resource.warning"
 
     @pytest.mark.asyncio
     async def test_check_resources_over_ceiling(self):
@@ -508,8 +522,12 @@ class TestCheckResources:
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="85\n")
+            with patch.object(sdk._metabolism, "assess_health") as mock_assess:
+                mock_assess.return_value = MagicMock(
+                    overall_health=MagicMock(value="critical"),
+                    gpu=MagicMock(temperature=85.0, vram_pct=90.0),
+                    system=MagicMock(disk_pct=50.0),
+                )
                 await sdk._check_resources(session)
                 mock_append.assert_called_once()
                 call_args = mock_append.call_args
@@ -546,18 +564,19 @@ class TestSubmitPromptFull:
         async def on_event(env):
             events.append(env)
 
+        # Use a prompt that routes to the primary LLM (complex task)
         await sdk.submit_prompt(
             session,
-            "test prompt",
+            "plan a complex refactoring",
             system_prompt="You are a helpful assistant.",
             on_event=on_event,
         )
 
         assert len(captured_payload) == 1
         assert captured_payload[0]["messages"][0]["role"] == "system"
-        assert captured_payload[0]["messages"][0]["content"] == "You are a helpful assistant."
+        assert "You are a helpful assistant." in captured_payload[0]["messages"][0]["content"]
         assert captured_payload[0]["messages"][1]["role"] == "user"
-        assert captured_payload[0]["messages"][1]["content"] == "test prompt"
+        assert captured_payload[0]["messages"][1]["content"] == "plan a complex refactoring"
 
     @pytest.mark.asyncio
     async def test_submit_prompt_tools_schema_sent(self):
@@ -585,11 +604,12 @@ class TestSubmitPromptFull:
         async def on_event(env):
             events.append(env)
 
-        await sdk.submit_prompt(session, "test", on_event=on_event)
+        # Use a prompt that routes to the primary LLM (complex task)
+        await sdk.submit_prompt(session, "design a new architecture", on_event=on_event)
 
         assert len(captured_payload) == 1
         assert "tools" in captured_payload[0]
-        assert len(captured_payload[0]["tools"]) == 8
+        assert len(captured_payload[0]["tools"]) == len(TOOLS_SCHEMA)
 
 
 # -- RuntimeSDK -- HookContext --

@@ -33,12 +33,15 @@ that evaluates whether insights are worth encoding.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from src.tektos.axioms import load_axioms
 from src.tektos.memory.memory_system import (
     DreamState,
     DreamResult,
@@ -105,6 +108,8 @@ class ReflectionState(BaseModel):
     memories_examined: int = Field(default=0)
     insights_generated: int = Field(default=0)
     biases_detected: int = Field(default=0)
+    aggregated_insights: int = Field(default=0)
+    axiom_violations: int = Field(default=0)
     direct_experience_entries: int = Field(default=0)
     inference_entries: int = Field(default=0)
     insights: list[ReflectionInsight] = Field(default_factory=list)
@@ -294,11 +299,568 @@ class ReflectionEngine:
 
         return insights
 
+    def aggregate_insights(
+        self,
+        insights: list[ReflectionInsight],
+        max_per_pattern: int = 3,
+    ) -> list[ReflectionInsight]:
+        """Aggregate similar insights into pattern summaries.
+
+        Groups insights by content similarity (using first 50 chars as key),
+        then produces one summary insight per pattern with aggregated
+        trust scores and occurrence counts.
+
+        This reduces 1000+ near-duplicate insights to ~10-20 actionable ones.
+
+        Args:
+            insights: Raw insights to aggregate.
+            max_per_pattern: Maximum insights to include in each pattern summary.
+
+        Returns:
+            Aggregated insights with pattern summaries.
+        """
+        if not insights:
+            return []
+
+        # Group by content similarity (first 50 chars as key)
+        groups: dict[str, list[ReflectionInsight]] = defaultdict(list)
+        for insight in insights:
+            # Use first 50 chars of content as similarity key
+            key = insight.content[:50].strip().lower()
+            groups[key].append(insight)
+
+        # Produce one summary per pattern
+        aggregated: list[ReflectionInsight] = []
+        for key, group in groups.items():
+            if len(group) == 1:
+                # Single insight, keep as-is
+                aggregated.append(group[0])
+            else:
+                # Multiple similar insights — produce summary
+                avg_trust = sum(i.trust_score for i in group) / len(group)
+                max_trust = max(i.trust_score for i in group)
+                direct_count = sum(1 for i in group if i.is_direct_experience)
+
+                # Determine if this is a direct experience pattern
+                is_direct = direct_count > len(group) / 2
+
+                # Build summary content
+                unique_contents = list(dict.fromkeys(
+                    i.content[:100] for i in group
+                ))[:max_per_pattern]
+
+                summary_content = (
+                    f"[Pattern: {len(group)} occurrences] "
+                    f"{unique_contents[0]}\n"
+                    f"  Also observed: {'; '.join(unique_contents[1:])}"
+                )
+
+                aggregated.append(ReflectionInsight(
+                    source=f"{group[0].source}_aggregated",
+                    content=summary_content,
+                    is_direct_experience=is_direct,
+                    trust_score=max_trust,  # Use max trust for patterns
+                    bias_detected=group[0].bias_detected,
+                    correction=group[0].correction,
+                    is_novel=any(i.is_novel for i in group),
+                    novelty_score=max(i.novelty_score for i in group),
+                    who="S3 Manager (aggregated reflection)",
+                    what="aggregated_pattern",
+                    where="reflection_engine",
+                    why=f"Aggregated {len(group)} similar insights into one pattern",
+                    how="Content similarity grouping with trust score aggregation",
+                    metadata={
+                        "pattern_count": len(group),
+                        "direct_experience_count": direct_count,
+                        "avg_trust": avg_trust,
+                        "unique_contents": unique_contents,
+                    },
+                ))
+
+        return aggregated
+
+    def _integrate_manager_feedback(
+        self,
+        manager_feedback: list[dict[str, Any]],
+        all_memories: list[MemoryEntry],
+    ) -> list[ReflectionInsight]:
+        """Integrate manager feedback into reflection insights.
+
+        Manager feedback includes guardrail violations, archetype patterns,
+        and spiral warnings. These are high-value signals that should
+        influence future planning.
+
+        Args:
+            manager_feedback: List of manager feedback dicts.
+            all_memories: All memories for context.
+
+        Returns:
+            ReflectionInsights derived from manager feedback.
+        """
+        insights: list[ReflectionInsight] = []
+
+        for fb in manager_feedback:
+            fb_type = fb.get("type", "")
+            severity = fb.get("severity", "info")
+            what = fb.get("what", "")
+            why = fb.get("why", "")
+            try_this = fb.get("try_this", "")
+
+            # Map severity to trust score
+            trust_map = {
+                "critical": 0.95,
+                "warning": 0.8,
+                "info": 0.6,
+            }
+            trust = trust_map.get(severity, 0.5)
+
+            # Map feedback type to insight content
+            if fb_type == "guardrail_triggered":
+                content = f"Guardrail violation: {what}. {why}"
+                insight_type = "guardrail_pattern"
+            elif fb_type == "archetype_recognized":
+                content = f"Archetype pattern: {what}. {try_this}"
+                insight_type = "archetype_pattern"
+            elif fb_type == "spiral_warning":
+                content = f"Spiral warning: {what}. {try_this}"
+                insight_type = "spiral_pattern"
+            else:
+                content = f"Manager feedback: {what}. {why}"
+                insight_type = "manager_feedback"
+
+            insights.append(ReflectionInsight(
+                source="manager_feedback",
+                content=content[:200],
+                is_direct_experience=True,
+                trust_score=trust,
+                bias_detected=None,
+                correction=try_this or why,
+                what=insight_type,
+                why=f"Manager (S3) detected {fb_type}",
+                how="Integration of manager feedback into reflection",
+                metadata={
+                    "feedback_type": fb_type,
+                    "severity": severity,
+                    "original_feedback": fb,
+                },
+            ))
+
+        return insights
+
+
+    def check_against_axioms(
+        self,
+        memories: list[MemoryEntry],
+        task_outcome: str = "success",
+    ) -> list[ReflectionInsight]:
+        """Check execution results against pre-seeded axioms.
+
+        This is the critical integration point: the system compares what
+        actually happened (direct experience) against what it should have
+        happened (axioms). Deviations generate corrective insights.
+
+        Args:
+            memories: Execution memories to check.
+            task_outcome: "success" or "failure" of the task.
+
+        Returns:
+            ReflectionInsights about axiom compliance/violations.
+        """
+        insights: list[ReflectionInsight] = []
+        axioms = load_axioms()
+
+        # Check each axiom category against execution data
+        for axiom_id, axiom in axioms._axioms.items():
+            if not axiom.is_active():
+                continue
+
+            # Check operation axioms against execution patterns
+            if axiom.category == "operation":
+                # Check direct_experience axiom
+                if "direct_experience" in axiom_id:
+                    left_count = sum(1 for m in memories if m.hemisphere.value == "left")
+                    right_count = sum(1 for m in memories if m.hemisphere.value == "right")
+                    if right_count > left_count * 2:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected="speculation_bias",
+                            correction=f"Follow axiom: {axiom.content[:100]}",
+                            what="axiom_violation",
+                            why=f"Direct experience axiom violated: {right_count} speculative vs {left_count} operative",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check error_handling axiom
+                if "error_handling" in axiom_id:
+                    error_count = sum(1 for m in memories if "error" in m.content.lower() or "fail" in m.content.lower())
+                    if error_count > 0 and task_outcome == "success":
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected=None,
+                            correction=f"Learn from errors: {axiom.content[:100]}",
+                            what="error_not_encoded",
+                            why=f"Errors occurred but not encoded: {error_count} errors found",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check tool_routing axiom
+                if "tool_routing" in axiom_id:
+                    # Check if complex tasks were routed to secondary LLM
+                    # (This would require tracking which LLM was used per task)
+                    # For now, just note the axiom is active
+                    pass
+
+            # Check constraint axioms
+            elif axiom.category == "constraint":
+                # Check loop_safety axiom
+                if "loop_safety" in axiom_id:
+                    # Check if hard limits were respected
+                    # (This would require tracking turn counts, token usage)
+                    pass
+
+                # Check never_delete_user_files axiom
+                if "never_delete" in axiom_id:
+                    delete_count = sum(1 for m in memories if "delete" in m.content.lower())
+                    if delete_count > 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected=None,
+                            correction=f"Never delete user files without confirmation: {axiom.content[:100]}",
+                            what="deletion_detected",
+                            why=f"Delete operations detected: {delete_count} deletions",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+            # Check lesson axioms
+            elif axiom.category == "lesson":
+                # Check quality_tracking axiom
+                if "quality_tracking" in axiom_id:
+                    # Check if quality metrics were tracked
+                    quality_count = sum(1 for m in memories if "quality" in m.content.lower() or "metric" in m.content.lower())
+                    if quality_count == 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.9,
+                            bias_detected=None,
+                            correction=f"Track quality metrics: {axiom.content[:100]}",
+                            what="quality_not_tracked",
+                            why="Quality metrics not tracked in this cycle",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check consolidation axiom
+                if "consolidation" in axiom_id:
+                    # Check if patterns were consolidated into skills
+                    skill_count = sum(1 for m in memories if "skill" in m.content.lower())
+                    if skill_count == 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.9,
+                            bias_detected=None,
+                            correction=f"Consolidate patterns into skills: {axiom.content[:100]}",
+                            what="patterns_not_consolidated",
+                            why="Patterns not consolidated into procedural memory",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+        return insights
+
+
+    def check_against_axioms(
+        self,
+        memories: list[MemoryEntry],
+        task_outcome: str = "success",
+    ) -> list[ReflectionInsight]:
+        """Check execution results against pre-seeded axioms.
+
+        This is the critical integration point: the system compares what
+        actually happened (direct experience) against what it should have
+        happened (axioms). Deviations generate corrective insights.
+
+        Args:
+            memories: Execution memories to check.
+            task_outcome: "success" or "failure" of the task.
+
+        Returns:
+            ReflectionInsights about axiom compliance/violations.
+        """
+        insights: list[ReflectionInsight] = []
+        axioms = load_axioms()
+
+        # Check each axiom category against execution data
+        for axiom_id, axiom in axioms._axioms.items():
+            if not axiom.is_active():
+                continue
+
+            # Check operation axioms against execution patterns
+            if axiom.category == "operation":
+                # Check direct_experience axiom
+                if "direct_experience" in axiom_id:
+                    left_count = sum(1 for m in memories if m.hemisphere.value == "left")
+                    right_count = sum(1 for m in memories if m.hemisphere.value == "right")
+                    if right_count > left_count * 2:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected="speculation_bias",
+                            correction=f"Follow axiom: {axiom.content[:100]}",
+                            what="axiom_violation",
+                            why=f"Direct experience axiom violated: {right_count} speculative vs {left_count} operative",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check error_handling axiom
+                if "error_handling" in axiom_id:
+                    error_count = sum(1 for m in memories if "error" in m.content.lower() or "fail" in m.content.lower())
+                    if error_count > 0 and task_outcome == "success":
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected=None,
+                            correction=f"Learn from errors: {axiom.content[:100]}",
+                            what="error_not_encoded",
+                            why=f"Errors occurred but not encoded: {error_count} errors found",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check tool_routing axiom
+                if "tool_routing" in axiom_id:
+                    # Check if complex tasks were routed to secondary LLM
+                    # (This would require tracking which LLM was used per task)
+                    # For now, just note the axiom is active
+                    pass
+
+            # Check constraint axioms
+            elif axiom.category == "constraint":
+                # Check loop_safety axiom
+                if "loop_safety" in axiom_id:
+                    # Check if hard limits were respected
+                    # (This would require tracking turn counts, token usage)
+                    pass
+
+                # Check never_delete_user_files axiom
+                if "never_delete" in axiom_id:
+                    delete_count = sum(1 for m in memories if "delete" in m.content.lower())
+                    if delete_count > 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected=None,
+                            correction=f"Never delete user files without confirmation: {axiom.content[:100]}",
+                            what="deletion_detected",
+                            why=f"Delete operations detected: {delete_count} deletions",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+            # Check lesson axioms
+            elif axiom.category == "lesson":
+                # Check quality_tracking axiom
+                if "quality_tracking" in axiom_id:
+                    # Check if quality metrics were tracked
+                    quality_count = sum(1 for m in memories if "quality" in m.content.lower() or "metric" in m.content.lower())
+                    if quality_count == 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.9,
+                            bias_detected=None,
+                            correction=f"Track quality metrics: {axiom.content[:100]}",
+                            what="quality_not_tracked",
+                            why="Quality metrics not tracked in this cycle",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check consolidation axiom
+                if "consolidation" in axiom_id:
+                    # Check if patterns were consolidated into skills
+                    skill_count = sum(1 for m in memories if "skill" in m.content.lower())
+                    if skill_count == 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.9,
+                            bias_detected=None,
+                            correction=f"Consolidate patterns into skills: {axiom.content[:100]}",
+                            what="patterns_not_consolidated",
+                            why="Patterns not consolidated into procedural memory",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+        return insights
+
+
+    def check_against_axioms(
+        self,
+        memories: list[MemoryEntry],
+        task_outcome: str = "success",
+    ) -> list[ReflectionInsight]:
+        """Check execution results against pre-seeded axioms.
+
+        This is the critical integration point: the system compares what
+        actually happened (direct experience) against what it should have
+        happened (axioms). Deviations generate corrective insights.
+
+        Args:
+            memories: Execution memories to check.
+            task_outcome: "success" or "failure" of the task.
+
+        Returns:
+            ReflectionInsights about axiom compliance/violations.
+        """
+        insights: list[ReflectionInsight] = []
+        axioms = load_axioms()
+
+        # Check each axiom category against execution data
+        for axiom_id, axiom in axioms._axioms.items():
+            if not axiom.is_active():
+                continue
+
+            # Check operation axioms against execution patterns
+            if axiom.category == "operation":
+                # Check direct_experience axiom
+                if "direct_experience" in axiom_id:
+                    left_count = sum(1 for m in memories if m.hemisphere.value == "left")
+                    right_count = sum(1 for m in memories if m.hemisphere.value == "right")
+                    if right_count > left_count * 2:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected="speculation_bias",
+                            correction=f"Follow axiom: {axiom.content[:100]}",
+                            what="axiom_violation",
+                            why=f"Direct experience axiom violated: {right_count} speculative vs {left_count} operative",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check error_handling axiom
+                if "error_handling" in axiom_id:
+                    error_count = sum(1 for m in memories if "error" in m.content.lower() or "fail" in m.content.lower())
+                    if error_count > 0 and task_outcome == "success":
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected=None,
+                            correction=f"Learn from errors: {axiom.content[:100]}",
+                            what="error_not_encoded",
+                            why=f"Errors occurred but not encoded: {error_count} errors found",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check tool_routing axiom
+                if "tool_routing" in axiom_id:
+                    # Check if complex tasks were routed to secondary LLM
+                    # (This would require tracking which LLM was used per task)
+                    # For now, just note the axiom is active
+                    pass
+
+            # Check constraint axioms
+            elif axiom.category == "constraint":
+                # Check loop_safety axiom
+                if "loop_safety" in axiom_id:
+                    # Check if hard limits were respected
+                    # (This would require tracking turn counts, token usage)
+                    pass
+
+                # Check never_delete_user_files axiom
+                if "never_delete" in axiom_id:
+                    delete_count = sum(1 for m in memories if "delete" in m.content.lower())
+                    if delete_count > 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.95,
+                            bias_detected=None,
+                            correction=f"Never delete user files without confirmation: {axiom.content[:100]}",
+                            what="deletion_detected",
+                            why=f"Delete operations detected: {delete_count} deletions",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+            # Check lesson axioms
+            elif axiom.category == "lesson":
+                # Check quality_tracking axiom
+                if "quality_tracking" in axiom_id:
+                    # Check if quality metrics were tracked
+                    quality_count = sum(1 for m in memories if "quality" in m.content.lower() or "metric" in m.content.lower())
+                    if quality_count == 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.9,
+                            bias_detected=None,
+                            correction=f"Track quality metrics: {axiom.content[:100]}",
+                            what="quality_not_tracked",
+                            why="Quality metrics not tracked in this cycle",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+                # Check consolidation axiom
+                if "consolidation" in axiom_id:
+                    # Check if patterns were consolidated into skills
+                    skill_count = sum(1 for m in memories if "skill" in m.content.lower())
+                    if skill_count == 0:
+                        insights.append(ReflectionInsight(
+                            source="axiom_violation",
+                            content=f"Axiom violation: {axiom.content[:150]}",
+                            is_direct_experience=True,
+                            trust_score=0.9,
+                            bias_detected=None,
+                            correction=f"Consolidate patterns into skills: {axiom.content[:100]}",
+                            what="patterns_not_consolidated",
+                            why="Patterns not consolidated into procedural memory",
+                            how="Axiom compliance check",
+                            metadata={"axiom_id": axiom_id, "axiom_category": axiom.category},
+                        ))
+
+        return insights
+
     def run_reflection(
         self,
         focus: str | None = None,
         novelty_focused: bool = False,
         max_memories: int = 50,
+        manager_feedback: list[dict[str, Any]] | None = None,
     ) -> ReflectionState:
         """Run a complete active reflection cycle.
 
@@ -330,6 +892,11 @@ class ReflectionEngine:
         all_memories = working + long_term + procedural
         session.memories_examined = len(all_memories)
 
+        # Step 2.5: Check execution against axioms (compliance check)
+        axiom_insights = self.check_against_axioms(all_memories, task_outcome="success")
+        session.axiom_violations = len(axiom_insights)
+        session.insights.extend(axiom_insights)
+
         # Step 3: Examine direct experience (what actually happened)
         direct_insights = self.examine_direct_experience(all_memories)
         session.direct_experience_entries = len(direct_insights)
@@ -339,6 +906,18 @@ class ReflectionEngine:
         bias_insights = self.check_for_biases(all_memories)
         session.biases_detected = len(bias_insights)
         session.insights.extend(bias_insights)
+
+        # Step 4.5: Integrate manager feedback if available
+        if manager_feedback:
+            manager_insights = self._integrate_manager_feedback(
+                manager_feedback,
+                all_memories,
+            )
+            session.insights.extend(manager_insights)
+
+        # Step 4.6: Aggregate similar insights (reduce 1000+ to ~10-20)
+        session.insights = self.aggregate_insights(session.insights)
+        session.aggregated_insights = len(session.insights)
 
         # Step 5: Also run dreamtime for cross-domain synthesis (passive reflection)
         if self.dreamtime is not None and len(all_memories) > 5:

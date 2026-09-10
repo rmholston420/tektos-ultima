@@ -559,7 +559,7 @@ describe("SessionStore", () => {
           {
             id: "test-1",
             title: "Session",
-            model: "Qwen3.6-35B-A3B-Q4_K_M",
+            model: "Qwen3.6-35B-A3B-Q5_K_M",
             cwd: ".",
             status: "ready",
             is_active: true,

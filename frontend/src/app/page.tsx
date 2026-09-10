@@ -82,7 +82,7 @@ export default function App() {
   const [connectionState, setConnectionState] = useState<"disconnected" | "connecting" | "connected" | "reconnecting">("disconnected");
   const [activePage, setActivePage] = useState<PageType>("chat");
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
-  const [activeModel, setActiveModel] = useState("Qwen_Qwen3.6-35B-A3B-Q4_K_M");
+  const [activeModel, setActiveModel] = useState("Qwen_Qwen3.6-35B-A3B-Q5_K_M");
   const [visionAvailable, setVisionAvailable] = useState(false);
   const [visionModel, setVisionModel] = useState("");
   const [hasHydrated, setHasHydrated] = useState(false);
@@ -145,7 +145,7 @@ export default function App() {
       const session: SessionSnapshot = {
         id: data.id,
         title: data.title || 'New Session',
-        model: data.model || 'Qwen_Qwen3.6-35B-A3B-Q4_K_M',
+        model: data.model || 'Qwen_Qwen3.6-35B-A3B-Q5_K_M',
         cwd: data.cwd,
         status: data.status || 'created',
         is_active: true,
@@ -332,7 +332,7 @@ export default function App() {
       const session: SessionSnapshot = {
         id: data.id,
         title: data.title || 'New Session',
-        model: data.model || 'Qwen_Qwen3.6-35B-A3B-Q4_K_M',
+        model: data.model || 'Qwen_Qwen3.6-35B-A3B-Q5_K_M',
         cwd: data.cwd,
         status: data.status || 'created',
         is_active: false,

@@ -146,7 +146,7 @@ class TelegramGateway:
 
         try:
             session = await self.session_manager.create_session(
-                model=self._user_models.get(message.from_user.id, "Qwen_Qwen3.6-35B-A3B-Q4_K_M"),
+                model=self._user_models.get(message.from_user.id, "Qwen_Qwen3.6-35B-A3B-Q5_K_M"),
                 cwd=".",
             )
             self._user_sessions[message.from_user.id] = session.id
@@ -488,7 +488,7 @@ class TelegramGateway:
                 await message.answer("🔄 Creating new session...")
                 try:
                     session = await self.session_manager.create_session(
-                        model=self._user_models.get(user_id, "Qwen_Qwen3.6-35B-A3B-Q4_K_M"),
+                        model=self._user_models.get(user_id, "Qwen_Qwen3.6-35B-A3B-Q5_K_M"),
                         cwd=".",
                     )
                     self._user_sessions[user_id] = session.id
@@ -517,7 +517,7 @@ class TelegramGateway:
             parts = data.split(":")
             if len(parts) >= 3:
                 tool_id = parts[2]
-                action = parts[3] if len(parts) > 3 else ""
+                action = parts[1]  # "approve" or "reject"
 
                 if action == "approve":
                     await self._handle_tool_approval(callback, tool_id, True)
@@ -541,10 +541,20 @@ class TelegramGateway:
         try:
             # Build on_event callback for streaming
             thinking_msg_ref = [thinking_msg]
+            accumulated_text = [""]  # Use list for mutability in closure
+            streaming_msg_ref = [None]  # Track the streaming message to update it
 
-            async def on_event(event: dict[str, Any]) -> None:
+            async def on_event(event: Any) -> None:
                 """Stream Tektos events back to Telegram."""
-                event_type = event.get("type", "")
+                # Handle both WSEnvelope objects and legacy dict events
+                if hasattr(event, "event_type"):
+                    # WSEnvelope object
+                    event_type = event.event_type
+                    payload = event.payload
+                else:
+                    # Legacy dict format
+                    event_type = event.get("type", "")
+                    payload = event.get("payload", {})
 
                 try:
                     # Delete thinking message after first event
@@ -559,35 +569,84 @@ class TelegramGateway:
                         thinking_msg_ref[0] = None
 
                     if event_type == "assistant.delta":
-                        content = event.get("payload", {}).get("content", "")
-                        if content:
-                            await self._send_streaming_message(user_id, content)
+                        content = payload.get("text", "")
+                        if content and content.strip():
+                            # Accumulate the text
+                            accumulated_text[0] += content
+                            
+                            # Update or create streaming message
+                            full_text = accumulated_text[0]
+                            
+                            # Telegram has a 4096 character limit per message
+                            if len(full_text) > 4000:
+                                full_text = full_text[:3990] + "\n[continuing]"
+                            
+                            if streaming_msg_ref[0]:
+                                # Update existing message
+                                try:
+                                    await self.bot.edit_message_text(
+                                        chat_id=user_id,
+                                        message_id=streaming_msg_ref[0].message_id,
+                                        text=full_text,
+                                    )
+                                except Exception as e:
+                                    log.warning("Failed to update streaming message: %s", e)
+                                    # Fall back to sending new message
+                                    msg = await self.bot.send_message(
+                                        chat_id=user_id,
+                                        text=full_text,
+                                    )
+                                    streaming_msg_ref[0] = msg
+                            else:
+                                # Send initial streaming message
+                                msg = await self.bot.send_message(
+                                    chat_id=user_id,
+                                    text=full_text,
+                                )
+                                streaming_msg_ref[0] = msg
 
                     elif event_type == "assistant.completed":
-                        reason = event.get("payload", {}).get("reason", "")
-                        await self._send_message(user_id, f"✅ *Completed* ({reason})\n\nTask finished successfully.")
+                        # Send final message with complete text
+                        final_text = accumulated_text[0].strip()
+                        if final_text:
+                            # Delete streaming message if it exists
+                            if streaming_msg_ref[0]:
+                                try:
+                                    await self.bot.delete_message(
+                                        chat_id=user_id,
+                                        message_id=streaming_msg_ref[0].message_id,
+                                    )
+                                except Exception as e:
+                                    log.warning("Failed to delete streaming message: %s", e)
+                            
+                            # Send the actual response first
+                            await self._send_message(user_id, final_text)
+                            # Then send the completion status
+                            await self._send_message(user_id, f"Completed ({payload.get('stop_reason', '')}). Task finished successfully.")
+                        else:
+                            await self._send_message(user_id, f"Completed ({payload.get('stop_reason', '')}). Task finished successfully.")
 
-                    elif event_type == "tool.started":
-                        tool_name = event.get("payload", {}).get("tool_name", "")
-                        await self._send_message(user_id, f"🔧 *Tool:* {tool_name}")
-
-                    elif event_type == "tool.completed":
-                        status = event.get("payload", {}).get("status", "")
-                        if status == "success":
-                            await self._send_message(user_id, "✅ *Tool executed*")
-                        elif status == "error":
-                            error_msg = event.get("payload", {}).get("error", "")
-                            await self._send_message(user_id, f"❌ *Tool error:* {error_msg}")
+                    # Suppress tool events - they're noisy and not useful in Telegram
+                    # elif event_type == "tool.started":
+                    #     tool_name = payload.get("tool_name", "")
+                    #     await self._send_message(user_id, f"🔧 *Tool:* {tool_name}")
+                    # elif event_type == "tool.completed":
+                    #     status = payload.get("status", "")
+                    #     if status == "success":
+                    #         await self._send_message(user_id, "✅ *Tool executed*")
+                    #     elif status == "error":
+                    #         error_msg = payload.get("error", "")
+                    #         await self._send_message(user_id, f"❌ *Tool error:* {error_msg}")
 
                     elif event_type == "tool.permission_required":
-                        await self._send_permission_request(user_id, event)
+                        await self._send_permission_request(user_id, payload)
 
                     elif event_type == "session.failed":
-                        error = event.get("payload", {}).get("error", "")
+                        error = payload.get("error", "")
                         await self._send_message(user_id, f"❌ *Session failed:* {error}")
 
                     elif event_type == "loop_safety.warning":
-                        state = event.get("payload", {}).get("state", "")
+                        state = payload.get("state", "")
                         await self._send_message(user_id, f"⚠️ *Loop safety:* {state}")
 
                 except Exception as event_exc:
@@ -614,7 +673,7 @@ class TelegramGateway:
             # For longer content, we send in chunks or update existing message
             if len(content) > 4000:
                 # Truncate and indicate more coming
-                content = content[:3990] + "...\n[continuing]"
+                content = content[:3990] + "\n[continuing]"
 
             # Find or create streaming message
             # For simplicity, we'll send a new message each chunk
@@ -622,18 +681,27 @@ class TelegramGateway:
             await self.bot.send_message(
                 chat_id=user_id,
                 text=content,
-                parse_mode="Markdown",
+                parse_mode="MarkdownV2",
             )
         except TelegramRetryAfter as e:
             log.warning(f"Telegram rate limit: {e}")
             await _asyncio.sleep(e.retry_after)
         except _BotBlocked:
             log.warning(f"User {user_id} blocked the bot")
+        except Exception as e:
+            # If MarkdownV2 fails, try plain text
+            try:
+                await self.bot.send_message(
+                    chat_id=user_id,
+                    text=content,
+                )
+            except Exception as inner_e:
+                log.warning(f"Failed to send streaming message: {inner_e}")
 
     async def _send_message(self, user_id: int, text: str) -> None:
         """Send a formatted message to a user."""
         try:
-            await self.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+            await self.bot.send_message(chat_id=user_id, text=text)
         except TelegramRetryAfter as e:
             log.warning(f"Telegram rate limit: {e}")
             await _asyncio.sleep(e.retry_after)
@@ -731,11 +799,11 @@ class TelegramGateway:
             await self.bot.delete_webhook()
             log.info("Webhook removed (polling mode)")
 
-        try:
-            await self.dp.start_polling(self.bot)
-        finally:
-            self._is_running = False
-            await self.bot.session.close()
+        # Run polling in a background task so it doesn't block the lifespan
+        self._polling_task = _asyncio.create_task(
+            self.dp.start_polling(self.bot)
+        )
+        log.info("Telegram polling started in background")
 
     async def stop(self) -> None:
         """Stop the Telegram bot."""

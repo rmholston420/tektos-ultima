@@ -111,7 +111,7 @@ class TestToolDefinitions:
         assert set(fw["function"]["parameters"]["required"]) == {"path", "content"}
 
     def test_tools_schema_count(self):
-        assert len(TOOLS_SCHEMA) == 8
+        assert len(TOOLS_SCHEMA) == 10
 
 
 # ── RuntimeSDK — Lifecycle ─────────────────────────────────────────────────
@@ -120,7 +120,7 @@ class TestRuntimeSDKLifecycle:
     @pytest.mark.asyncio
     async def test_sdk_creation_with_defaults(self):
         sdk = RuntimeSDK()
-        assert sdk._llm_model == "Qwen3.6-35B-A3B-Q4_K_M"
+        assert sdk._llm_model == "Qwen_Qwen3.6-35B-A3B-Q5_K_M"
         assert sdk._client is None
 
     @pytest.mark.asyncio
@@ -142,14 +142,17 @@ class TestRuntimeSDKLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_creates_httpx_client(self):
-        sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1")
+        sdk = RuntimeSDK(llm_base_url="http://127.0.0.1:19999/v1", use_secondary_llm=False)
         with patch("httpx.AsyncClient") as MockClient:
             instance = AsyncMock()
             instance.get = AsyncMock(return_value=MagicMock(raise_for_status=lambda: None))
             MockClient.return_value = instance
             await sdk.start()
             assert sdk._client is not None
-            MockClient.assert_called_once()
+            # Primary client is created with llm_base_url; inference monitor also creates one
+            assert MockClient.call_count >= 1
+            primary_call = MockClient.call_args_list[0]
+            assert primary_call[1]["base_url"] == "http://127.0.0.1:19999/v1"
 
     @pytest.mark.asyncio
     async def test_start_fails_without_llm(self):
@@ -195,7 +198,8 @@ class TestSubmitPrompt:
 
         session = LiveSession(id="s1", model="test", cwd=".")
         sdk._stream_llm = AsyncMock()
-        await sdk.submit_prompt(session, "test", on_event=on_event)
+        # Use a prompt that routes to the primary LLM (complex task)
+        await sdk.submit_prompt(session, "plan a complex refactoring", on_event=on_event)
         assert session.status == "ready"
 
     @pytest.mark.asyncio
@@ -213,7 +217,7 @@ class TestSubmitPrompt:
 
         session = LiveSession(id="s1", model="test", cwd=".")
         sdk._stream_llm = AsyncMock(side_effect=RuntimeError("LLM down"))
-        await sdk.submit_prompt(session, "test", on_event=on_event)
+        await sdk.submit_prompt(session, "plan a complex refactoring", on_event=on_event)
         assert session.status == "failed"
         assert len(events) >= 1  # at least session_failed
 
@@ -233,10 +237,11 @@ class TestSubmitPrompt:
 
         session = LiveSession(id="s1", model="test", cwd=".")
         sdk._stream_llm = AsyncMock()
-        await sdk.submit_prompt(session, "test")
+        # Use a prompt that routes to the primary LLM (complex task)
+        await sdk.submit_prompt(session, "plan a complex refactoring")
         assert len(hook_called) == 1
         assert hook_called[0].session_id == "s1"
-        assert hook_called[0].model == "Qwen3.6-35B-A3B-Q4_K_M"
+        assert hook_called[0].model == "Qwen_Qwen3.6-35B-A3B-Q5_K_M"
         assert hook_called[0].outcome == "success"
 
     @pytest.mark.asyncio
@@ -255,7 +260,7 @@ class TestSubmitPrompt:
 
         session = LiveSession(id="s1", model="test", cwd=".")
         sdk._stream_llm = AsyncMock(side_effect=RuntimeError("boom"))
-        await sdk.submit_prompt(session, "test")
+        await sdk.submit_prompt(session, "plan a complex refactoring")
         assert hook_called[0].outcome == "failure"
 
 

@@ -3,7 +3,7 @@
 Uses sys.meta_path to intercept ALL imports of 'neo4j' and 'redis',
 ensuring fakes are installed no matter when or where they're imported.
 
-Set TELEKTOS_SKIP_MOCKS=1 in the environment to disable mocking,
+Set TEKTOS_SKIP_MOCKS=1 in the environment to disable mocking,
 which allows existing tests that simulate "driver not available"
 to work correctly.
 """
@@ -13,8 +13,8 @@ import sys
 from unittest.mock import MagicMock
 import pytest
 
-# Only install mocks unless TELEKTOS_SKIP_MOCKS is set
-_SKIP = os.environ.get("TELEKTOS_SKIP_MOCKS", "").lower() in ("1", "true", "yes")
+# Only install mocks unless TEKTOS_SKIP_MOCKS is set
+_SKIP = os.environ.get("TEKTOS_SKIP_MOCKS", "").lower() in ("1", "true", "yes")
 
 
 if not _SKIP:

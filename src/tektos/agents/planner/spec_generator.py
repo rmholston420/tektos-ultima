@@ -81,7 +81,11 @@ def generate_spec(
 
     spec_notes = list(notes) if notes else []
     if synthesis_guidance:
-        spec_notes.append(f"[SELF-IMPROVEMENT GUIDANCE — Past execution lessons]\n{synthesis_guidance}")
+        spec_notes.append(f"[SELF-IMPROVEMENT GUIDANCE — Past execution lessons]\\n{synthesis_guidance}")
+
+    # Apply synthesis guidance to modify spec phases (make it actionable)
+    if synthesis_guidance:
+        spec_phases = _apply_synthesis_guidance(spec_phases, synthesis_guidance)
 
     return BuildSpec(
         original_prompt=original_prompt,
@@ -237,3 +241,98 @@ def _default_phases(requirements: list[str]) -> list[dict[str, Any]]:
         })
 
     return phases
+
+
+def _apply_synthesis_guidance(
+    phases: list[SpecPhase],
+    synthesis_guidance: str,
+) -> list[SpecPhase]:
+    """Apply synthesis guidance to modify spec phases.
+
+    This makes the self-improvement loop actionable by:
+    1. Detecting patterns in guidance (e.g., "test generation", "error handling")
+    2. Adding or modifying phases to address those patterns
+    3. Adding acceptance criteria based on past failures
+
+    Args:
+        phases: Current spec phases.
+        synthesis_guidance: Guidance text from past cycles.
+
+    Returns:
+        Modified spec phases with synthesis guidance applied.
+    """
+    if not phases or not synthesis_guidance:
+        return phases
+
+    guidance_lower = synthesis_guidance.lower()
+    modified_phases = list(phases)
+
+    # Pattern 1: If guidance mentions test failures, add test phase
+    if any(kw in guidance_lower for kw in ["test", "assert", "fail", "error"]):
+        # Check if test phase already exists
+        has_test_phase = any(
+            "test" in p.description.lower() or "test" in p.id.lower()
+            for p in modified_phases
+        )
+        if not has_test_phase:
+            modified_phases.append(SpecPhase(
+                id="phase-test",
+                description="Test generation and validation",
+                deliverables=["Unit tests for all public APIs", "Integration tests", "Edge case coverage"],
+                acceptance_criteria=[
+                    "All tests pass",
+                    "Test coverage > 80%",
+                    "No assertion failures",
+                ],
+                estimated_effort="M",
+            ))
+
+    # Pattern 2: If guidance mentions error handling, add error handling phase
+    if any(kw in guidance_lower for kw in ["error", "exception", "handle", "validate"]):
+        has_error_phase = any(
+            "error" in p.description.lower() or "error" in p.id.lower()
+            for p in modified_phases
+        )
+        if not has_error_phase:
+            modified_phases.append(SpecPhase(
+                id="phase-error-handling",
+                description="Error handling and validation",
+                deliverables=["Input validation", "Error handling for all edge cases", "Logging"],
+                acceptance_criteria=[
+                    "All error paths are handled",
+                    "No unhandled exceptions",
+                    "Proper error messages",
+                ],
+                estimated_effort="S",
+            ))
+
+    # Pattern 3: If guidance mentions documentation, add doc phase
+    if any(kw in guidance_lower for kw in ["doc", "readme", "comment", "api"]):
+        has_doc_phase = any(
+            "doc" in p.description.lower() or "doc" in p.id.lower()
+            for p in modified_phases
+        )
+        if not has_doc_phase:
+            modified_phases.append(SpecPhase(
+                id="phase-documentation",
+                description="Documentation and API reference",
+                deliverables=["README.md", "API documentation", "Code comments"],
+                acceptance_criteria=[
+                    "All public APIs documented",
+                    "README covers setup and usage",
+                    "Code comments for complex logic",
+                ],
+                estimated_effort="S",
+            ))
+
+    # Pattern 4: Add guidance-specific acceptance criteria to existing phases
+    for phase in modified_phases:
+        if phase.acceptance_criteria:
+            # Add guidance-derived criteria if not already present
+            for kw in ["test", "error", "doc", "validate"]:
+                if kw in guidance_lower:
+                    criterion = f"Address past {kw} issues from previous cycles"
+                    if criterion not in phase.acceptance_criteria:
+                        phase.acceptance_criteria.append(criterion)
+
+    return modified_phases

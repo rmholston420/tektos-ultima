@@ -57,14 +57,14 @@ class TurnSnapshot:
 class LoopSafetyConfig:
     """Configuration for loop safety limits."""
     # Hard limits
-    max_turns: int = 15
+    max_turns: int = 25
     max_tokens_per_turn: int = 8192
-    max_tokens_total: int = 65536
-    max_wall_time_seconds: float = 300.0
+    max_tokens_total: int = 131072
+    max_wall_time_seconds: float = 600.0
 
     # Repetition detection
-    repetition_window: int = 3
-    repetition_threshold: int = 2
+    repetition_window: int = 5
+    repetition_threshold: int = 3
 
     # Circuit breaker
     warning_threshold_pct: float = 0.8

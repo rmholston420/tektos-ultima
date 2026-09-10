@@ -620,7 +620,7 @@ class TestTelegramGatewayMessageHandler:
         """Should create session when user has no active one."""
         session = AsyncMock()
         session.id = "new-sess"
-        session.model = "Qwen3.6-35B-A3B-Q4_K_M"
+        session.model = "Qwen3.6-35B-A3B-Q5_K_M"
         self.gw.session_manager.create_session = AsyncMock(return_value=session)
 
         await self.gw.cmd_new(self.msg, None)
@@ -781,7 +781,7 @@ class TestTelegramGatewayMessageHandlerEdgeCases:
         await self.gw.cmd_new(msg, None)
 
         call_kwargs = self.gw.session_manager.create_session.call_args[1]
-        assert call_kwargs["model"] == "Qwen_Qwen3.6-35B-A3B-Q4_K_M"
+        assert call_kwargs["model"] == "Qwen_Qwen3.6-35B-A3B-Q5_K_M"
 
 
 # ---------------------------------------------------------------------------

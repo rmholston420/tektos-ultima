@@ -57,6 +57,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from hashlib import sha256
 from typing import Any
 
 import logging
@@ -187,7 +188,7 @@ class MemorySystem:
         ),
         MemoryTier.WORKING: TierConfig(
             tier=MemoryTier.WORKING,
-            capacity=7,  # Miller's Law: 7±2 items
+            capacity=50,  # Increased from 7 to accommodate execution data
             decay_seconds=300.0,  # 5 minutes
             retrieval_speed_ms=50.0,  # Fast
             transfer_threshold=0.6,  # Significant items transfer
@@ -201,7 +202,7 @@ class MemorySystem:
         ),
         MemoryTier.PROCEDURAL: TierConfig(
             tier=MemoryTier.PROCEDURAL,
-            capacity=1000,  # Skills + wisdom + ADRs
+            capacity=5000,  # Increased from 1000 to accommodate execution data
             decay_seconds=0.0,  # No decay
             retrieval_speed_ms=100.0,  # Fast (cached)
             transfer_threshold=0.0,  # Does not transfer further
@@ -217,6 +218,8 @@ class MemorySystem:
         self.configs = copy.deepcopy(self.DEFAULT_CONFIGS)
         self.transfer_history: list[dict[str, Any]] = []
         self.novelty_count: int = 0
+        # Deduplication: content hash → tier (for fast duplicate detection)
+        self._content_hashes: dict[str, MemoryTier] = {}
         # Persistence layer
         if persistence is not None:
             self.persistence = persistence
@@ -374,19 +377,42 @@ class MemorySystem:
             **kwargs: Additional metadata (W5H1M fields).
 
         Returns:
-            The created MemoryEntry.
+            The created MemoryEntry, or the existing entry if duplicate.
 
         Raises:
             ValueError: If tier is at capacity.
         """
         config = self.configs[tier]
 
+        # Deduplication: compute content hash and check for existing entry
+        content_hash = sha256(content.encode()).hexdigest()
+        if content_hash in self._content_hashes:
+            existing_tier = self._content_hashes[content_hash]
+            if existing_tier == tier:
+                # Exact duplicate in same tier — skip
+                log.debug(f"Skipping duplicate entry in {tier.value} memory (hash: {content_hash[:8]})")
+                return self.tiers[tier][-1]  # Return the existing entry
+            else:
+                # Same content in different tier — update the tier mapping
+                # and remove from old tier to avoid duplication
+                old_entries = [e for e in self.tiers[existing_tier] if sha256(e.content.encode()).hexdigest() == content_hash]
+                for old_entry in old_entries:
+                    self.tiers[existing_tier].remove(old_entry)
+                    if old_entry.id in self._content_hashes:
+                        del self._content_hashes[old_entry.id]
+                log.debug(f"Moved duplicate from {existing_tier.value} to {tier.value} memory (hash: {content_hash[:8]})")
+
         # Enforce capacity
         if len(self.tiers[tier]) >= config.capacity:
-            raise ValueError(
-                f"{tier.value} memory is at capacity ({config.capacity}). "
-                f"Remove old entries or increase capacity."
-            )
+            # Prune oldest entries first (FIFO)
+            pruned = len(self.tiers[tier]) - config.capacity + 1
+            for _ in range(pruned):
+                removed = self.tiers[tier].pop(0)
+                # Remove from hash index
+                old_hash = sha256(removed.content.encode()).hexdigest()
+                if old_hash in self._content_hashes and self._content_hashes[old_hash] == tier:
+                    del self._content_hashes[old_hash]
+            log.info(f"Pruned {pruned} oldest entries from {tier.value} memory")
 
         entry = MemoryEntry(
             content=content,
@@ -403,6 +429,7 @@ class MemorySystem:
             entry.expires_at = expiry.isoformat()
 
         self.tiers[tier].append(entry)
+        self._content_hashes[content_hash] = tier
 
         # Persist to SQLite
         self._save_to_persistence(entry)

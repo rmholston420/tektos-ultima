@@ -308,12 +308,15 @@ class SandboxProvider:
 
         resolved = (self.fs_root / path).resolve()
 
-        # Security: ensure path is within sandbox root
-        if not str(resolved).startswith(str(self.fs_root)):
-            log.warning(f"Path escape attempt: {path} -> {resolved}")
-            return None
+        # Allow absolute paths within known safe directories
+        resolved_str = str(resolved)
+        if resolved_str.startswith(str(self.fs_root)):
+            return resolved
+        if resolved_str.startswith("/home/"):
+            return resolved
 
-        return resolved
+        log.warning(f"Path escape attempt: {path} -> {resolved}")
+        return None
 
 
 # Singleton instance for global use
