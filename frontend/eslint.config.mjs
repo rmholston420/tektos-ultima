@@ -11,4 +11,18 @@ export default [
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
     },
   },
+  {
+    // Jest test files legitimately need require() for jest.resetModules()
+    // isolation and Function for handler-extraction typing. Scope these
+    // relaxations to __tests__/ so production code stays strict.
+    files: [
+      "**/__tests__/**/*.{ts,tsx,js,jsx}",
+      "**/*.test.{ts,tsx,js,jsx}",
+      "**/*.spec.{ts,tsx,js,jsx}",
+    ],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+      "@typescript-eslint/no-unsafe-function-type": "off",
+    },
+  },
 ];
