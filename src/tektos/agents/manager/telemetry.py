@@ -216,18 +216,56 @@ class NVMLDriver:
 
     @classmethod
     def get_clocks_events(cls) -> dict[str, bool]:
-        """Get current clocks event reasons."""
+        """Get current clocks event / throttle reasons as a decoded bitmask.
+
+        Uses `nvmlDeviceGetCurrentClocksEventReasons` on modern nvidia-ml-py
+        (>= 12.535), falls back to the deprecated
+        `nvmlDeviceGetCurrentClocksThrottleReasons` on older builds.
+        Both return a uint64 bitmask decoded against `nvmlClocksEventReason*`
+        (or the legacy `nvmlClocksThrottleReason*`) module constants.
+
+        Returns an empty dict on unsupported hardware or NVML errors.
+        """
         handle = cls.get_handle()
         nvml = _get_pynvml()
-        reasons = {}
+
+        # Prefer the new name; older bindings only expose the throttle name.
+        get_reasons = getattr(nvml, "nvmlDeviceGetCurrentClocksEventReasons", None)
+        prefix = "nvmlClocksEventReason"
+        if get_reasons is None:
+            get_reasons = getattr(
+                nvml, "nvmlDeviceGetCurrentClocksThrottleReasons", None
+            )
+            prefix = "nvmlClocksThrottleReason"
+        if get_reasons is None:
+            return {}
+
+        # Map user-friendly keys -> bitmask attribute names on the pynvml module.
+        # Every driver exposes these; unknown attrs skip silently.
+        bit_names = {
+            "gpu_idle": "GpuIdle",
+            "applications_clocks_setting": "ApplicationsClocksSetting",
+            "sw_power_cap": "SwPowerCap",
+            "hw_slowdown": "HwSlowdown",
+            "hw_thermal_slowdown": "HwThermalSlowdown",
+            "hw_power_brake_slowdown": "HwPowerBrakeSlowdown",
+            "sync_boost": "SyncBoost",
+            "sw_thermal_slowdown": "SwThermalSlowdown",
+            "display_clock_setting": "DisplayClockSetting",
+        }
+
         try:
-            nvml.nvmlDeviceGetClockInfo(handle, nvml.NVML_CLOCK_INFO_THROUGHPUT)
-            reasons = {
-                "sw_power_cap": False,
-                "hw_thermal_slowdown": False,
-            }
-        except nvml.NVMLError:
-            logger.warning("NVML query failed")
+            mask = int(get_reasons(handle))
+        except nvml.NVMLError as exc:
+            logger.debug("NVML clocks-event query failed: %s", exc)
+            return {}
+
+        reasons: dict[str, bool] = {}
+        for key, suffix in bit_names.items():
+            bit = getattr(nvml, f"{prefix}{suffix}", None)
+            if bit is None:
+                continue
+            reasons[key] = bool(mask & int(bit))
         return reasons
 
     @classmethod
