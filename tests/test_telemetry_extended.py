@@ -170,25 +170,39 @@ class TestNVMLDriverGetPowerState:
 # ---------------------------------------------------------------------------
 
 class TestNVMLDriverGetClocksEvents:
+    def _reasons_fn_name(self, pynvml):
+        """Return whichever clocks-reasons API this pynvml build exposes."""
+        for name in (
+            "nvmlDeviceGetCurrentClocksEventReasons",
+            "nvmlDeviceGetCurrentClocksThrottleReasons",
+        ):
+            if hasattr(pynvml, name):
+                return name
+        return None
+
     def test_get_clocks_events_success(self):
         handle = MagicMock()
         with patch.object(NVMLDriver, 'get_handle', return_value=handle):
             import pynvml
-            if not hasattr(pynvml, 'NVML_CLOCK_INFO_THROUGHPUT'):
-                pytest.skip("NVML_CLOCK_INFO_THROUGHPUT not available in this pynvml version")
-            with patch.object(pynvml, 'nvmlDeviceGetClockInfo', return_value=0):
+            fn_name = self._reasons_fn_name(pynvml)
+            if fn_name is None:
+                pytest.skip("no clocks-reasons API on this pynvml build")
+            # 0 => no reasons active; every decoded key should be False.
+            with patch.object(pynvml, fn_name, return_value=0):
                 events = NVMLDriver.get_clocks_events()
+                assert isinstance(events, dict)
+                # At least the always-present sw_power_cap bit should decode.
                 assert "sw_power_cap" in events
-                assert events["sw_power_cap"] is False
-                assert events["hw_thermal_slowdown"] is False
+                assert all(v is False for v in events.values())
 
     def test_get_clocks_events_nvml_error(self):
         handle = MagicMock()
         with patch.object(NVMLDriver, 'get_handle', return_value=handle):
             import pynvml
-            if not hasattr(pynvml, 'NVML_CLOCK_INFO_THROUGHPUT'):
-                pytest.skip("NVML_CLOCK_INFO_THROUGHPUT not available in this pynvml version")
-            with patch.object(pynvml, 'nvmlDeviceGetClockInfo', side_effect=pynvml.NVMLError(23)):
+            fn_name = self._reasons_fn_name(pynvml)
+            if fn_name is None:
+                pytest.skip("no clocks-reasons API on this pynvml build")
+            with patch.object(pynvml, fn_name, side_effect=pynvml.NVMLError(23)):
                 events = NVMLDriver.get_clocks_events()
                 assert events == {}
 
