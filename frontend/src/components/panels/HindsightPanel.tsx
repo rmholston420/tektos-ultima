@@ -52,6 +52,8 @@ export function HindsightPanel() {
         healthy: false,
         error: String(err),
       });
+    } finally {
+      setLoading(false);
     }
   }, []);
 

@@ -349,7 +349,7 @@ export function SelfRepairPanel() {
                     )}
                   </div>
 
-                  {record.repair_actions.length > 0 && (
+                  {Array.isArray(record.repair_actions) && record.repair_actions.length > 0 && (
                     <div className="mt-2 pt-2 border-t border-border">
                       <div className="text-xs text-text-muted mb-1">Actions:</div>
                       <ul className="text-xs text-text-primary space-y-0.5">

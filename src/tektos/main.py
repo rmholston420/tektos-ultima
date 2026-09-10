@@ -4357,16 +4357,75 @@ async def vision_status():
 # ---------------------------------------------------------------------------
 
 
+def _serialize_plugin(plugin: Any) -> dict[str, Any]:
+    """Serialize a Plugin instance for the /api/plugins HTTP surface.
+
+    Plugin instances are not JSON-serializable; return the fields the
+    frontend consumes (name, version, enabled flag from PluginConfig, and
+    the class docstring as a description).
+    """
+    try:
+        name = getattr(plugin, "name", None) or "unknown"
+        version = getattr(plugin, "version", "")
+        config = getattr(plugin, "config", None)
+        enabled = bool(getattr(config, "enabled", True)) if config is not None else True
+        doc = (plugin.__class__.__doc__ or "").strip().splitlines()
+        description = doc[0] if doc else ""
+        return {
+            "name": str(name),
+            "version": str(version),
+            "enabled": enabled,
+            "description": description,
+        }
+    except Exception as exc:  # never let one bad plugin blank the panel
+        return {
+            "name": getattr(plugin, "name", "unknown"),
+            "version": "",
+            "enabled": True,
+            "description": f"serialization error: {exc}",
+        }
+
+
 @app.get("/api/plugins")
 async def plugins_list():
-    """List loaded plugins."""
-    if _plugin_loader:
-        try:
-            plugins = _plugin_loader.get_plugins()
-            return {"plugins": plugins, "count": len(plugins)}
-        except Exception as exc:
-            return {"plugins": [], "count": 0, "error": str(exc)}
-    return {"plugins": [], "count": 0, "note": "plugin_loader not initialized"}
+    """List loaded plugins with metadata safe for the frontend."""
+    if _plugin_loader is None:
+        return {"plugins": [], "count": 0, "note": "plugin_loader not initialized"}
+    try:
+        plugins = _plugin_loader.get_loaded_plugins()
+        serialized = [_serialize_plugin(p) for p in plugins]
+        return {"plugins": serialized, "count": len(serialized)}
+    except Exception as exc:
+        return {"plugins": [], "count": 0, "error": str(exc)}
+
+
+@app.post("/api/plugins/{name}/toggle")
+async def toggle_plugin(name: str, body: dict[str, Any] | None = None):
+    """Enable/disable a loaded plugin at runtime.
+
+    Expects `{"enabled": bool}` in the body. Persistence across restarts is
+    not implemented; this only flips the in-memory PluginConfig flag so the
+    settings UI reflects the change immediately.
+    """
+    if _plugin_loader is None:
+        raise _HTTPException(status_code=503, detail="plugin_loader not initialized")
+    desired = bool((body or {}).get("enabled", True))
+    try:
+        plugin = _plugin_loader.registry.get(name)
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=f"registry error: {exc}") from exc
+    if plugin is None:
+        raise _HTTPException(status_code=404, detail=f"plugin not found: {name}")
+    try:
+        cfg = getattr(plugin, "config", None)
+        if cfg is None:
+            raise _HTTPException(status_code=500, detail="plugin has no config")
+        cfg.enabled = desired
+        return {"name": name, "enabled": desired}
+    except _HTTPException:
+        raise
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=f"toggle failed: {exc}") from exc
 
 
 @app.get("/api/context/status")

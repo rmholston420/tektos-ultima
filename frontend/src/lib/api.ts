@@ -106,10 +106,15 @@ export interface PluginInfo {
 }
 
 export interface MemorySystemStats {
-  sensory: { size: number; capacity: number };
-  working: { size: number; capacity: number };
-  longterm: { size: number; capacity: number };
-  procedural: { size: number; capacity: number };
+  working_count?: number;
+  working_novel?: number;
+  long_term_count?: number;
+  long_term_novel?: number;
+  procedural_count?: number;
+  procedural_novel?: number;
+  transfers?: number;
+  summary?: string;
+  error?: string;
 }
 
 export interface ArchiveSession {
@@ -317,11 +322,18 @@ class ApiClient {
 
   // Plugins
   async getPlugins(): Promise<PluginInfo[]> {
-    return this.request("/api/plugins");
+    const data = await this.request<any>("/api/plugins");
+    const raw = Array.isArray(data) ? data : Array.isArray(data?.plugins) ? data.plugins : [];
+    return raw.map((p: any) => ({
+      name: p?.name ?? "unknown",
+      enabled: p?.enabled ?? true,
+      version: p?.version ?? "",
+      description: p?.description ?? "",
+    }));
   }
 
   async togglePlugin(name: string, enabled: boolean): Promise<void> {
-    await this.request(`/api/plugins/${name}/toggle`, {
+    await this.request(`/api/plugins/${encodeURIComponent(name)}/toggle`, {
       method: "POST",
       body: JSON.stringify({ enabled }),
     });
@@ -342,11 +354,21 @@ class ApiClient {
 
   // Hooks
   async getHooks(): Promise<any[]> {
-    return this.request("/api/hooks");
+    const data = await this.request<any>("/api/hooks");
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.hooks)) return data.hooks;
+    return [];
   }
 
-  async triggerHook(name: string): Promise<any> {
-    return this.request(`/api/hooks/${name}/trigger`, { method: "POST" });
+  /**
+   * Manually fire an event through the hook manager.
+   * Backend endpoint is POST /api/hooks/fire with `{event_type, ...}` body.
+   */
+  async triggerHook(eventType: string, extra: Record<string, unknown> = {}): Promise<any> {
+    return this.request(`/api/hooks/fire`, {
+      method: "POST",
+      body: JSON.stringify({ event_type: eventType, ...extra }),
+    });
   }
 
   // Config

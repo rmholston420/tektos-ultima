@@ -15,8 +15,10 @@ interface RedisStatus {
   database: string;
   host: string | null;
   port: number | null;
-  sensory_connected: boolean;
-  working_connected: boolean;
+  connected?: boolean;
+  // Legacy fields (older backend shape) — kept optional for compatibility.
+  sensory_connected?: boolean;
+  working_connected?: boolean;
   ping_ok: boolean;
   error: string | null;
 }
@@ -37,8 +39,7 @@ export function RedisPanel() {
         database: "redis",
         host: null,
         port: null,
-        sensory_connected: false,
-        working_connected: false,
+        connected: false,
         ping_ok: false,
         error: String(err),
       });
@@ -62,6 +63,12 @@ export function RedisPanel() {
   }
 
   if (!status) return null;
+
+  // Backend returns `connected` + `ping_ok`; both sensory and working tiers
+  // ride the same Redis client, so derive both from `connected` (fall back to
+  // legacy per-tier fields when a future backend supplies them).
+  const sensoryConnected = status.sensory_connected ?? status.connected ?? false;
+  const workingConnected = status.working_connected ?? status.connected ?? false;
 
   const statusColor =
     status.status === "connected"
@@ -124,8 +131,8 @@ export function RedisPanel() {
         <div className="bg-black/40 border border-slate-700 rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-slate-300">Sensory Memory</h3>
-            <span className={`text-xs px-2 py-0.5 rounded ${status.sensory_connected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
-              {status.sensory_connected ? "Connected" : "Disconnected"}
+            <span className={`text-xs px-2 py-0.5 rounded ${sensoryConnected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+              {sensoryConnected ? "Connected" : "Disconnected"}
             </span>
           </div>
           <div className="space-y-2 text-xs text-slate-400">
@@ -147,8 +154,8 @@ export function RedisPanel() {
         <div className="bg-black/40 border border-slate-700 rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-slate-300">Working Memory</h3>
-            <span className={`text-xs px-2 py-0.5 rounded ${status.working_connected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
-              {status.working_connected ? "Connected" : "Disconnected"}
+            <span className={`text-xs px-2 py-0.5 rounded ${workingConnected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+              {workingConnected ? "Connected" : "Disconnected"}
             </span>
           </div>
           <div className="space-y-2 text-xs text-slate-400">

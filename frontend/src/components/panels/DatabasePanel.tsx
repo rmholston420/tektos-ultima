@@ -106,6 +106,7 @@ const severityColor = (severity: string): string => {
 export function DatabasePanel() {
   const [state, setState] = useState<DatabaseState | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [sampleData, setSampleData] = useState<Record<string, unknown>[]>([]);
   const [loadingSample, setLoadingSample] = useState(false);
@@ -178,29 +179,37 @@ export function DatabasePanel() {
 
   const fetchDatabase = useCallback(async () => {
     try {
-      const [statsRes, schemaRes, analyzeRes, backupsRes] = await Promise.all([
-        fetch("/api/db"),
-        fetch("/api/db/schema"),
-        fetch("/api/db/analyze"),
-        fetch("/api/db/backups"),
+      const results = await Promise.allSettled([
+        fetch("/api/db").then((r) => r.json()),
+        fetch("/api/db/schema").then((r) => r.json()),
+        fetch("/api/db/analyze").then((r) => r.json()),
+        fetch("/api/db/backups").then((r) => r.json()),
       ]);
+      const [statsR, schemaR, analyzeR, backupsR] = results;
 
-      const stats = await statsRes.json();
-      const schema = await schemaRes.json();
-      const analyses = await analyzeRes.json();
-      const backups = await backupsRes.json();
+      const stats = statsR.status === "fulfilled" ? statsR.value : {};
+      const schema = schemaR.status === "fulfilled" ? schemaR.value : {};
+      const analyses = analyzeR.status === "fulfilled" ? analyzeR.value : {};
+      const backups = backupsR.status === "fulfilled" ? backupsR.value : [];
+
+      const errors: string[] = [];
+      if (stats && typeof stats === "object" && "error" in stats) errors.push(String((stats as any).error));
+      if (schema && typeof schema === "object" && "error" in schema) errors.push(String((schema as any).error));
+      if (analyses && typeof analyses === "object" && "error" in analyses) errors.push(String((analyses as any).error));
 
       setState({
-        stats: stats || {},
-        schema: schema || {},
-        analyses: analyses || {},
+        stats: (stats && typeof stats === "object" && !("error" in stats) ? stats : {}) as DbStats,
+        schema: (schema && typeof schema === "object" && !("error" in schema) ? schema : { tables: {} }) as SchemaData,
+        analyses: (analyses && typeof analyses === "object" && !("error" in analyses) ? analyses : {}) as Record<string, TableAnalysis>,
         backups: Array.isArray(backups) ? backups : [],
         selectedTable: null,
         sampleData: [],
         loadingSample: false,
       });
+      setFetchError(errors.length > 0 ? errors.join("; ") : null);
     } catch (err) {
       console.error("Failed to load database:", err);
+      setFetchError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -235,14 +244,27 @@ export function DatabasePanel() {
     );
   }
 
-  if (!state) return null;
+  if (!state) {
+    return (
+      <div className="space-y-4 p-4">
+        <div className="rounded border border-status-error/40 bg-status-error/10 p-3 text-xs text-status-error">
+          {fetchError || "Database service is not reachable. Verify the backend and db_manager are initialized."}
+        </div>
+      </div>
+    );
+  }
 
   const { stats, schema, analyses, backups } = state;
-  const tableNames = Object.keys(schema.tables || {});
+  const tableNames = Object.keys(schema?.tables || {});
   const selectedAnalysis = selectedTable ? analyses[selectedTable] : null;
 
   return (
     <div className="space-y-6">
+      {fetchError && (
+        <div className="rounded border border-amber-800 bg-amber-950/40 p-2 text-11 text-amber-300">
+          {fetchError}
+        </div>
+      )}
       {/* ─── Overview Cards ────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="bg-black/40 border border-slate-700 rounded-lg p-4">
