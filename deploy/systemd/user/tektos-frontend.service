@@ -12,6 +12,9 @@ PartOf=tektos.target
 Type=simple
 WorkingDirectory=%h/dev/tektos-ultima-v1/frontend
 EnvironmentFile=%h/dev/tektos-ultima-v1/.env
+# systemd user units under `bash -lc` do not reliably pick up ~/.local/bin
+# or nvm-managed Node paths from ~/.profile. Set PATH explicitly.
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # npm resolves to whatever version is on PATH; explicit shell keeps
 # environment consistent with an interactive session.
 ExecStart=/bin/bash -lc 'exec npm run start'

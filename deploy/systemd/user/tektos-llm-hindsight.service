@@ -18,11 +18,20 @@ Documentation=https://github.com/rmholston420/tektos-ultima
 After=network-online.target
 Wants=network-online.target
 PartOf=tektos.target
+# Cap restart attempts on repeated startup failure (bad model path,
+# missing llama-server binary, etc.). Otherwise systemd will happily
+# retry every 5s forever and fill the journal.
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
 WorkingDirectory=%h/dev/tektos-ultima-v1
 EnvironmentFile=%h/dev/tektos-ultima-v1/.env
+# systemd user units under `bash -lc` do not reliably pick up
+# ~/.local/bin from ~/.profile (depends on distro). Set PATH explicitly
+# so ExecStart finds llama-server regardless of shell rc contents.
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Defaults; override any of these in .env.
 Environment=TEKTOS_HINDSIGHT_LLM_HOST=127.0.0.1
 Environment=TEKTOS_HINDSIGHT_LLM_PORT=8095
