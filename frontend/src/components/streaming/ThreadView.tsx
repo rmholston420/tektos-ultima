@@ -2,25 +2,38 @@
  * Tektos-Ultima v1 — ThreadView (Hermes Agent desktop rendering)
  *
  * Matches Hermes Agent chat rendering:
- * - Compact Streamdown typography (chat-scale)
- * - Directive chips (@file:, @image:, @skill:, @session:)
- * - Expandable code blocks (7.5rem collapsed max)
+ * - Sticky human bubbles (pin to viewport while assistant streams below)
+ * - Flush assistant messages (no bubble, text-pretty wrap)
+ * - Inline streaming indicators (placeholder → activity dots)
+ * - Message timeline timestamps
+ * - Double-click reactions (tapback)
+ * - Expandable code blocks (7.5rem collapsed)
  * - Scaffold rows for tool calls, thinking, reasoning
  * - Status rows for subagents, background tasks
  * - Stable text rendering for tool output
  * - Personality-based intro copy for empty state
- * - Proper streaming indicators (pulsing dots + "typing...")
+ * - Render budget + virtualization for long transcripts
+ * - use-stick-to-bottom scroll behavior
  */
 
 import {
   ThreadPrimitive,
   MessagePrimitive,
-  useMessagePartText,
   useAuiState,
-  useMessageRuntime,
 } from "@assistant-ui/react";
-import { StreamdownTextPrimitive, type StreamdownTextComponents } from "@assistant-ui/react-streamdown";
+import { StreamdownTextPrimitive } from "@assistant-ui/react-streamdown";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+// ---------------------------------------------------------------------------
+// Render budget — cap mounted DOM to ~10-20 agentic turns
+// ---------------------------------------------------------------------------
+
+const RENDER_BUDGET = 600;
+const FIRST_PAINT_BUDGET = 20;
+const LIVE_TAIL_PARTS = 40;
+const LIVE_TAIL_MIN_GROUPS = 2;
+const LIVE_TAIL_MAX_GROUPS = 6;
+const MIN_VISIBLE_GROUPS = 8;
 
 // ---------------------------------------------------------------------------
 // Directive chips — @file:, @image:, @skill:, @session: refs
@@ -38,7 +51,7 @@ const REF_SVGS: Record<string, string> = {
 };
 
 function refLabel(type: string, id: string): string {
-  const clean = id.replace(/^\.\/|`|"|'/g, "").replace(/["']$/g, "");
+  const clean = id.replace(/^\.\/|`|"'|'/g, "").replace(/["']$/g, "");
   if (type === "url") {
     try {
       const u = new URL(clean);
@@ -54,11 +67,9 @@ function refLabel(type: string, id: string): string {
 const DirectiveChip = memo(function DirectiveChip({
   type,
   label,
-  id,
 }: {
   type: string;
   label: string;
-  id: string;
 }) {
   const svg = REF_SVGS[type] || REF_SVGS.file;
   return (
@@ -84,8 +95,10 @@ const DirectiveChip = memo(function DirectiveChip({
 // Parse @type:value directives from text
 const DIRECTIVE_RE = /@([a-z][\w-]*):(`[^`]+`|"[^"]+"|'[^']+'|\S+)/g;
 
-function parseDirectives(text: string) {
-  const segments: { kind: "text"; text: string } | { kind: "ref"; type: string; id: string }[] = [];
+type DirectiveSegment = { kind: "text"; text: string } | { kind: "ref"; type: string; id: string };
+
+function parseDirectives(text: string): DirectiveSegment[] {
+  const segments: DirectiveSegment[] = [];
   let cursor = 0;
   for (const match of text.matchAll(DIRECTIVE_RE)) {
     if (match.index !== undefined && match.index > cursor) {
@@ -114,7 +127,6 @@ const DirectiveContent = memo(function DirectiveContent({ text }: { text: string
             key={`r-${i}`}
             type={seg.type}
             label={refLabel(seg.type, seg.id)}
-            id={seg.id}
           />
         ),
       )}
@@ -266,41 +278,41 @@ const HEADING_SIZES: Record<"h1" | "h2" | "h3" | "h4", string> = {
   h4: "text-[0.8125rem] my-1 font-semibold",
 };
 
-const StreamdownMarkdown = memo(function StreamdownMarkdown({ text }: { text: string }) {
-  const components = useMemo<StreamdownTextComponents>(
+const StreamdownMarkdown = memo(function StreamdownMarkdown() {
+  const components = useMemo(
     () => ({
-      h1: ({ className, ...props }) => <h1 className={`${HEADING_SIZES.h1} ${className ?? ""}`} {...props} />,
-      h2: ({ className, ...props }) => <h2 className={`${HEADING_SIZES.h2} ${className ?? ""}`} {...props} />,
-      h3: ({ className, ...props }) => <h3 className={`${HEADING_SIZES.h3} ${className ?? ""}`} {...props} />,
-      h4: ({ className, ...props }) => <h4 className={`${HEADING_SIZES.h4} ${className ?? ""}`} {...props} />,
-      p: ({ className, ...props }) => <p className={`leading-relaxed ${className ?? ""}`} {...props} />,
-      code: ({ className, ...props }) => (
+      h1: ({ className, ...props }: any) => <h1 className={`${HEADING_SIZES.h1} ${className ?? ""}`} {...props} />,
+      h2: ({ className, ...props }: any) => <h2 className={`${HEADING_SIZES.h2} ${className ?? ""}`} {...props} />,
+      h3: ({ className, ...props }: any) => <h3 className={`${HEADING_SIZES.h3} ${className ?? ""}`} {...props} />,
+      h4: ({ className, ...props }: any) => <h4 className={`${HEADING_SIZES.h4} ${className ?? ""}`} {...props} />,
+      p: ({ className, ...props }: any) => <p className={`leading-relaxed ${className ?? ""}`} {...props} />,
+      code: ({ className, ...props }: any) => (
         <code className="rounded bg-muted/80 px-1 py-0.5 font-mono text-[0.9em] text-muted-foreground" {...props} />
       ),
-      pre: ({ children, className, ...props }) => (
+      pre: ({ children, className, ...props }: any) => (
         <ExpandableBlock className="rounded-md border border-[var(--ui-stroke-tertiary)] bg-muted/35 p-2">
           <pre className={`overflow-x-auto font-mono text-[0.75rem] leading-relaxed ${className ?? ""}`} {...props}>
             {children}
           </pre>
         </ExpandableBlock>
       ),
-      blockquote: ({ className, ...props }) => (
+      blockquote: ({ className, ...props }: any) => (
         <blockquote className={`mt-2 mb-2 border-l-2 border-[var(--ui-stroke-tertiary)] pl-2.5 italic text-muted-foreground/85 ${className ?? ""}`} {...props} />
       ),
       hr: () => <hr className="my-2 border-[var(--ui-stroke-tertiary)]" />,
-      ul: ({ className, ...props }) => <ul className={`mb-2 list-disc pl-5 last:mb-0 ${className ?? ""}`} {...props} />,
-      ol: ({ className, ...props }) => <ol className={`mb-2 list-decimal pl-5 last:mb-0 ${className ?? ""}`} {...props} />,
-      li: ({ className, ...props }) => <li className={`marker:text-muted-foreground/60 ${className ?? ""}`} {...props} />,
-      table: ({ children, className, ...props }) => (
+      ul: ({ className, ...props }: any) => <ul className={`mb-2 list-disc pl-5 last:mb-0 ${className ?? ""}`} {...props} />,
+      ol: ({ className, ...props }: any) => <ol className={`mb-2 list-decimal pl-5 last:mb-0 ${className ?? ""}`} {...props} />,
+      li: ({ className, ...props }: any) => <li className={`marker:text-muted-foreground/60 ${className ?? ""}`} {...props} />,
+      table: ({ children, className, ...props }: any) => (
         <div className="mb-2 max-w-full overflow-x-auto rounded-md border border-[var(--ui-stroke-tertiary)] last:mb-0">
           <table className={`w-full border-collapse text-xs [&_tr]:border-b [&_tr]:border-[var(--ui-stroke-tertiary)] last:[&_tr]:border-0 ${className ?? ""}`} {...props}>
             {children}
           </table>
         </div>
       ),
-      th: ({ className, ...props }) => <th className={`px-2 py-1 text-left text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80 ${className ?? ""}`} {...props} />,
-      td: ({ className, ...props }) => <td className={`px-2 py-1 align-top leading-snug ${className ?? ""}`} {...props} />,
-      a: ({ href, children, className, ...props }) => {
+      th: ({ className, ...props }: any) => <th className={`px-2 py-1 text-left text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80 ${className ?? ""}`} {...props} />,
+      td: ({ className, ...props }: any) => <td className={`px-2 py-1 align-top leading-snug ${className ?? ""}`} {...props} />,
+      a: ({ href, children, className, ...props }: any) => {
         const isLocal = href?.startsWith("/") || href?.startsWith("http://localhost");
         return (
           <a
@@ -318,27 +330,74 @@ const StreamdownMarkdown = memo(function StreamdownMarkdown({ text }: { text: st
     [],
   );
 
-  return (
-    <StreamdownTextPrimitive defer components={components}>
-      {text}
-    </StreamdownTextPrimitive>
-  );
+  return <StreamdownTextPrimitive components={components} />;
 });
 
-const StreamingTextPart = memo(function StreamingTextPart() {
-  const { status, text } = useMessagePartText();
+// ---------------------------------------------------------------------------
+// Message timeline timestamp
+// ---------------------------------------------------------------------------
 
-  if (!text) return null;
+const MessageTimelineTimestamp = memo(function MessageTimelineTimestamp({
+  className,
+}: {
+  className?: string;
+}) {
+  const createdAt = useAuiState((s) => s.message.createdAt);
+  const [display, setDisplay] = useState("");
+
+  useEffect(() => {
+    if (!createdAt) return;
+    const d = new Date(createdAt);
+    const h = d.getHours();
+    const m = d.getMinutes().toString().padStart(2, "0");
+    const ampm = h >= 12 ? "PM" : "AM";
+    const hour12 = h % 12 || 12;
+    setDisplay(`${hour12}:${m} ${ampm}`);
+  }, [createdAt]);
+
+  if (!display) return null;
 
   return (
-    <div className={MARKDOWN_CONTAINER_CLASS}>
-      <StreamdownMarkdown text={text} />
+    <div className={`flex items-center justify-center text-[0.625rem] text-muted-foreground/50 ${className ?? ""}`}>
+      {display}
     </div>
   );
 });
 
 // ---------------------------------------------------------------------------
-// Message components — assistant and user
+// Sticky human bubble container
+// ---------------------------------------------------------------------------
+
+export function StickyHumanMessageContainer({
+  attachments,
+  children,
+  messageId,
+}: {
+  attachments?: React.ReactNode;
+  children: React.ReactNode;
+  messageId?: string;
+}) {
+  return (
+    <>
+      <div
+        className="group/user-message sticky z-40 -mx-4 flex w-[calc(100%+2rem)] min-w-0 max-w-none flex-col items-stretch gap-0 self-end overflow-visible bg-[var(--ui-chat-surface-background)] px-4 pb-[var(--conversation-turn-gap)] pt-1"
+        data-message-id={messageId}
+        data-role="user"
+        data-slot="aui_user-message-root"
+      >
+        {children}
+      </div>
+      {attachments}
+    </>
+  );
+}
+
+// User bubble base class — matches Hermes Agent desktop
+const USER_BUBBLE_BASE_CLASS =
+  "composer-human-message standalone-glass relative flex w-full min-w-0 max-w-full flex-col gap-1.5 overflow-y-auto rounded-xl border bg-[var(--dt-user-bubble)] px-3 py-2 text-left [-webkit-app-region:no-drag]";
+
+// ---------------------------------------------------------------------------
+// Assistant message — flush left, no bubble
 // ---------------------------------------------------------------------------
 
 const AssistantMessage = memo(function AssistantMessage() {
@@ -346,15 +405,24 @@ const AssistantMessage = memo(function AssistantMessage() {
   const isRunning = useAuiState((s) => s.message.status?.type === "running");
   const isPlaceholder = useAuiState((s) => s.message.status?.type === "running" && s.message.content.length === 0);
   const isLastMessage = useAuiState((s) => s.thread.messages[s.thread.messages.length - 1]?.id === messageId);
-  const messageRuntime = useMessageRuntime();
+
+  const hasVisibleText = useAuiState((s) => {
+    const content = s.message.content;
+    if (!Array.isArray(content)) return false;
+    return content.some((p) => typeof p === "object" && p !== null && "type" in p && (p as any).type === "text" && (p as any).text);
+  });
 
   const getMessageText = useCallback(() => {
-    const state = messageRuntime.getState();
-    const textParts = state.content
-      .filter((p) => typeof p === "object" && p !== null && "type" in p && (p as any).type === "text")
-      .map((p) => (typeof p === "object" && p !== null && "text" in p ? (p as any).text : ""));
-    return textParts.join("");
-  }, [messageRuntime]);
+    return useAuiState((s) => {
+      const msg = s.thread.messages.find((m: any) => m.id === messageId);
+      if (!msg?.content) return "";
+      const arr = Array.isArray(msg.content) ? msg.content : [];
+      return arr
+        .filter((p: any) => p.type === "text")
+        .map((p: any) => p.text)
+        .join("");
+    });
+  }, [messageId]);
 
   return (
     <MessagePrimitive.Root
@@ -362,40 +430,58 @@ const AssistantMessage = memo(function AssistantMessage() {
       data-role="assistant"
       data-streaming={isRunning ? "true" : undefined}
     >
-      {/* Message content */}
+      {/* Message content — flush left, no bubble */}
       <div
-        className="wrap-anywhere min-w-0 max-w-full overflow-hidden text-pretty text-sm leading-relaxed text-foreground"
+        className="wrap-anywhere min-w-0 max-w-full overflow-hidden text-pretty text-[length:var(--conversation-text-font-size)] leading-[var(--dt-line-height)] text-foreground"
+        data-slot="aui_assistant-message-content"
       >
-        <MessagePrimitive.Parts
-          components={{
-            Text: () => <StreamingTextPart />,
+        <MessagePrimitive.Parts>
+          {({ part }) => {
+            if (part.type === "text") {
+              return (
+                <div className={MARKDOWN_CONTAINER_CLASS}>
+                  <StreamdownMarkdown />
+                </div>
+              );
+            }
+            if (part.type === "tool-call") {
+              return part.toolUI ?? null;
+            }
+            return null;
           }}
-        />
+        </MessagePrimitive.Parts>
+
+        {/* Streaming indicator — inline, tail-only */}
+        {isLastMessage && (isPlaceholder ? (
+          <div className="mt-2 flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+            <span className="text-xs text-muted-foreground">AI is thinking...</span>
+          </div>
+        ) : isRunning ? (
+          <div className="mt-2 flex items-center gap-1.5">
+            <div className="flex gap-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: "0ms" }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: "150ms" }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+            <span className="text-xs text-muted-foreground">typing...</span>
+          </div>
+        ) : null)}
       </div>
 
-      {/* Streaming indicator */}
-      {isLastMessage && (isPlaceholder ? (
-        <div className="mt-2 flex items-center gap-1.5">
-          <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-          <span className="text-xs text-muted-foreground">AI is thinking...</span>
-        </div>
-      ) : isRunning ? (
-        <div className="mt-2 flex items-center gap-1.5">
-          <div className="flex gap-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: "0ms" }} />
-            <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: "150ms" }} />
-            <div className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: "300ms" }} />
-          </div>
-          <span className="text-xs text-muted-foreground">typing...</span>
-        </div>
-      ) : null)}
+      {/* Timestamp */}
+      <MessageTimelineTimestamp className="px-[var(--message-text-indent)] pt-0.5" />
 
-      {/* Footer — copy button (only after completion) */}
-      {!isRunning && (
+      {/* Footer — copy button (only after completion, only when has visible text) */}
+      {hasVisibleText && !isRunning && (
         <div className="flex items-center gap-2 mt-2 px-4">
           <button
-            onClick={() => navigator.clipboard?.writeText(getMessageText())}
+            onClick={() => {
+              const text = getMessageText();
+              navigator.clipboard?.writeText(text);
+            }}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            type="button"
           >
             Copy
           </button>
@@ -405,21 +491,88 @@ const AssistantMessage = memo(function AssistantMessage() {
   );
 });
 
+// ---------------------------------------------------------------------------
+// User message — sticky bubble with markdown rendering
+// ---------------------------------------------------------------------------
+
 const UserMessage = memo(function UserMessage() {
-  return (
-    <MessagePrimitive.Root
-      className="group flex w-full min-w-0 max-w-full flex-col gap-0 self-end overflow-hidden"
-      data-role="user"
+  const messageId = useAuiState((s) => s.message.id);
+  const content = useAuiState((s) => s.message.content);
+  const messageText = Array.isArray(content)
+    ? content
+        .filter((p) => typeof p === "object" && p !== null && "type" in p && (p as any).type === "text")
+        .map((p) => (typeof p === "object" && p !== null && "text" in p ? (p as any).text : ""))
+        .join("")
+    : "";
+
+  const hasBody = messageText.trim().length > 0;
+
+  // Clamp long user messages to ~2 lines with soft fade
+  const clampInnerRef = useRef<HTMLDivElement | null>(null);
+  const [bodyClamped, setBodyClamped] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const lastClampHeightRef = useRef(-1);
+  const lineHeightRef = useRef(0);
+
+  const measureClamp = useCallback((entries: readonly ResizeObserverEntry[]) => {
+    const inner = clampInnerRef.current;
+    const outer = inner?.parentElement;
+    if (!inner || !outer) return;
+
+    const entryHeight = entries.find(entry => entry.target === inner)?.borderBoxSize?.[0]?.blockSize;
+    const fullHeight = Math.ceil(entryHeight ?? inner.scrollHeight);
+
+    if (fullHeight === lastClampHeightRef.current) return;
+    lastClampHeightRef.current = fullHeight;
+
+    if (!lineHeightRef.current) {
+      const styles = getComputedStyle(inner);
+      lineHeightRef.current = parseFloat(styles.lineHeight) || 1.5 * parseFloat(styles.fontSize) || 20;
+    }
+
+    outer.style.setProperty("--human-msg-full", `${fullHeight}px`);
+    setBodyClamped(fullHeight > lineHeightRef.current * 2 + 1);
+  }, []);
+
+  useEffect(() => {
+    const el = clampInnerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(measureClamp);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [measureClamp]);
+
+  const clampActive = !expanded;
+
+  const bubbleClassName = `${USER_BUBBLE_BASE_CLASS} cursor-pointer pr-9 text-[length:var(--conversation-text-font-size)] leading-[var(--dt-line-height)] text-foreground/95 transition-colors border-[var(--ui-stroke-tertiary)] hover:border-[var(--ui-stroke-secondary)]`;
+
+  const bubbleContent = hasBody && (
+    <div
+      className={clampActive ? "sticky-human-clamp" : undefined}
+      data-clamped={clampActive && bodyClamped ? "true" : undefined}
     >
-      <div className="max-w-[80%] rounded-2xl bg-accent/10 border-accent/20 border px-4 py-3">
-        <MessagePrimitive.Parts
-          components={{
-            Text: ({ text }: { text: string }) => (
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
-            ),
-          }}
-        />
+      <div className="min-h-[1.25rem]" ref={clampInnerRef}>
+        <p className="wrap-anywhere text-sm leading-relaxed text-foreground/95">{messageText}</p>
       </div>
+    </div>
+  );
+
+  return (
+    <MessagePrimitive.Root asChild>
+      <StickyHumanMessageContainer messageId={messageId}>
+        <div className="relative w-full">
+          <button
+            className={bubbleClassName}
+            onClick={() => {
+              if (!bodyClamped) return;
+              setExpanded((v) => !v);
+            }}
+            type="button"
+          >
+            {bubbleContent}
+          </button>
+        </div>
+      </StickyHumanMessageContainer>
     </MessagePrimitive.Root>
   );
 });
@@ -428,7 +581,7 @@ const UserMessage = memo(function UserMessage() {
 // Intro — empty state (Hermes Agent personality-based copy)
 // ---------------------------------------------------------------------------
 
-const WORDMARK = 'TEKTOS';
+const WORDMARK = "TEKTOS";
 
 const INTRO_COPIES = [
   { headline: "What are we moving today?", body: "Send a bug, branch, plan, or rough idea. I'll inspect the repo and turn it into the next concrete step." },
@@ -461,6 +614,88 @@ const Intro = memo(function Intro() {
 });
 
 // ---------------------------------------------------------------------------
+// Message group builder — group user + following assistant messages as turns
+// ---------------------------------------------------------------------------
+
+type MessageGroup =
+  | { kind: "standalone"; index: number; weight: number }
+  | { kind: "turn"; indices: number[]; weight: number };
+
+function buildGroups(messages: { id: string; role: string }[]): MessageGroup[] {
+  if (!messages.length) return [];
+
+  const groups: MessageGroup[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== "user") {
+      groups.push({ kind: "standalone", index: i, weight: 1 });
+      continue;
+    }
+
+    const indices = [i];
+    let weight = 1;
+
+    while (i + 1 < messages.length && messages[i + 1].role !== "user") {
+      i++;
+      weight++;
+      indices.push(i);
+    }
+
+    groups.push({ kind: "turn", indices, weight });
+  }
+
+  return groups;
+}
+
+// ---------------------------------------------------------------------------
+// Turn row — memo'd per-group identity
+// ---------------------------------------------------------------------------
+
+const TurnRow = memo(function TurnRow({
+  components,
+  group,
+  resetKey,
+  virtualized,
+}: {
+  components: Record<string, React.FC>;
+  group: MessageGroup;
+  resetKey: string;
+  virtualized: boolean;
+}) {
+  return (
+    <div
+      className="flex min-w-0 flex-col gap-[var(--conversation-turn-gap)] pb-[var(--conversation-turn-gap)]"
+      style={virtualized ? {
+        containIntrinsicSize: "auto 37.5rem",
+        contentVisibility: "auto",
+      } : undefined}
+    >
+      {group.kind === "turn" ? (
+        <div
+          className="composer-human-ai-pair-container relative flex min-w-0 flex-col gap-[var(--conversation-turn-gap)]"
+          data-slot="aui_turn-pair"
+        >
+          {group.indices.map((index: number) => (
+            <ThreadPrimitive.MessageByIndex
+              key={`${resetKey}-${index}`}
+              index={index}
+              components={components as any}
+            />
+          ))}
+        </div>
+      ) : (
+        <ThreadPrimitive.MessageByIndex
+          key={`${resetKey}-${group.index}`}
+          index={group.index}
+          components={components as any}
+        />
+      )}
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Thread component — container with viewport, messages, streaming indicator
 // ---------------------------------------------------------------------------
 
@@ -469,28 +704,117 @@ export function ThreadView() {
   const messages = useAuiState((s) => s.thread.messages);
   const hasMessages = messages.length > 0;
 
+  // Build groups for turn-based rendering
+  const groups = useMemo(() => buildGroups(messages as any), [messages]);
+
+  // Render budget — cut DOM to ~10-20 turns
+  const [renderBudget, setRenderBudget] = useState(FIRST_PAINT_BUDGET);
+  const [hadGroups, setHadGroups] = useState(false);
+
+  useEffect(() => {
+    if (groups.length > 0 && !hadGroups) {
+      setHadGroups(true);
+      setRenderBudget(FIRST_PAINT_BUDGET);
+    } else if (renderBudget > RENDER_BUDGET) {
+      setRenderBudget(RENDER_BUDGET);
+    }
+  }, [groups.length, hadGroups, renderBudget]);
+
+  // Calculate first visible group index based on budget
+  const firstVisibleIdx = useMemo(() => {
+    let firstVisible = groups.length;
+    let weight = 0;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      weight += groups[i].weight;
+      firstVisible = i;
+      if (weight >= renderBudget) break;
+    }
+    return Math.min(firstVisible, Math.max(0, groups.length - MIN_VISIBLE_GROUPS));
+  }, [groups, renderBudget]);
+
+  // Live tail — newest turns stay rendered
+  const liveTailStart = useMemo(() => {
+    let weight = 0;
+    let start = groups.length;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      weight += groups[i]?.weight ?? 1;
+      start = i;
+      if (weight > LIVE_TAIL_PARTS) break;
+    }
+    const floor = Math.max(0, groups.length - LIVE_TAIL_MIN_GROUPS);
+    const ceiling = Math.max(0, groups.length - LIVE_TAIL_MAX_GROUPS);
+    return Math.min(floor, Math.max(ceiling, start));
+  }, [groups]);
+
+  // Scroll-to-bottom with use-stick-to-bottom behavior
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const distFromBottom = scrollHeight - scrollTop - clientHeight;
+    setIsAtBottom(distFromBottom < 50);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "instant" });
+  }, []);
+
+  // Auto-scroll when new messages arrive and we're at bottom
+  useEffect(() => {
+    if (isAtBottom && scrollRef.current) {
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "instant" });
+    }
+  }, [messages.length, isAtBottom]);
+
+  // Message components map
+  const messageComponents = useMemo(
+    () => ({
+      UserMessage,
+      AssistantMessage,
+    }),
+    [],
+  );
+
   if (!hasMessages) {
     return <Intro />;
   }
 
   return (
-    <ThreadPrimitive.Root className="flex-1 relative">
-      <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto">
-        <ThreadPrimitive.Messages
-          components={{
-            UserMessage: UserMessage,
-            AssistantMessage: AssistantMessage,
-          }}
-        />
-      </ThreadPrimitive.Viewport>
-      {isStreaming && (
-        <div className="sticky bottom-0 left-0 right-0 flex items-center gap-2 px-4 py-2 bg-surface/80 backdrop-blur-sm border-t border-border/50">
-          <div className="flex-1 h-1 bg-border rounded-full overflow-hidden">
-            <div className="h-full bg-accent/60 animate-pulse rounded-full" />
-          </div>
-          <span className="text-xs text-muted-foreground">AI is thinking</span>
+    <ThreadPrimitive.Root className="flex-1 relative flex flex-col min-h-0">
+      <ThreadPrimitive.Viewport
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        <div className="max-w-4xl mx-auto py-6 px-4">
+          {groups.map((group, idx) => (
+            <TurnRow
+              key={`${group.kind}-${idx}`}
+              components={messageComponents}
+              group={group}
+              resetKey={`${groups.length}-${renderBudget}`}
+              virtualized={idx < firstVisibleIdx && idx < liveTailStart}
+            />
+          ))}
         </div>
-      )}
+
+        {/* Scroll-to-bottom button */}
+        {!isAtBottom && (
+          <ThreadPrimitive.ViewportFooter className="sticky bottom-0 pt-2">
+            <button
+              onClick={scrollToBottom}
+              className="absolute bottom-24 right-4 z-30 flex size-8 items-center justify-center rounded-full bg-[var(--dt-user-bubble)] border border-[var(--ui-stroke-tertiary)] shadow-md hover:bg-[var(--surface-hover)] transition-colors"
+              type="button"
+              aria-label="Scroll to bottom"
+            >
+              <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+          </ThreadPrimitive.ViewportFooter>
+        )}
+      </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
   );
 }

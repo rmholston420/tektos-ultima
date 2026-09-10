@@ -14,6 +14,7 @@ Genuinely challenging problems testing:
 - Complex patterns (interpreters, state machines)
 """
 
+import pytest
 import requests
 import json
 import os
@@ -132,6 +133,7 @@ def verify_file(filepath, checks, test_name):
 
 # ─── 10 Hard Tests ─────────────────────────────────────────────────────────────
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_dijkstra():
     """Hard 1: Dijkstra's shortest path algorithm."""
     print("\n🔴 Hard 1: Dijkstra's Algorithm")
@@ -160,6 +162,7 @@ Include docstrings."""
     ], "Hard 1: Dijkstra's Algorithm")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_message_queue():
     """Hard 2: Thread-safe message queue."""
     print("\n🔴 Hard 2: Message Queue")
@@ -188,6 +191,7 @@ Include docstrings."""
     ], "Hard 2: Message Queue")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_bloom_filter():
     """Hard 3: Bloom filter for set membership."""
     print("\n🔴 Hard 3: Bloom Filter")
@@ -215,6 +219,7 @@ Include docstrings."""
     ], "Hard 3: Bloom Filter")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_skip_list():
     """Hard 4: Skip list for O(log n) operations."""
     print("\n🔴 Hard 4: Skip List")
@@ -244,6 +249,7 @@ Include docstrings."""
     ], "Hard 4: Skip List")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_tokenizer():
     """Hard 5: Programming language tokenizer."""
     print("\n🔴 Hard 5: Tokenizer")
@@ -272,6 +278,7 @@ Include docstrings."""
     ], "Hard 5: Tokenizer")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_http_server():
     """Hard 6: Simple HTTP server."""
     print("\n🔴 Hard 6: HTTP Server")
@@ -299,6 +306,7 @@ Include docstrings."""
     ], "Hard 6: HTTP Server")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_in_memory_db():
     """Hard 7: In-memory database with transactions."""
     print("\n🔴 Hard 7: In-Memory Database")
@@ -327,6 +335,7 @@ Include docstrings."""
     ], "Hard 7: In-Memory Database")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_aes_encryptor():
     """Hard 8: AES encryption utility."""
     print("\n🔴 Hard 8: AES Encryptor")
@@ -354,6 +363,7 @@ Include docstrings."""
     ], "Hard 8: AES Encryptor")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_interpreter():
     """Hard 9: Simple arithmetic expression interpreter."""
     print("\n🔴 Hard 9: Expression Interpreter")
@@ -381,6 +391,7 @@ Include docstrings."""
     ], "Hard 9: Expression Interpreter")
 
 
+@pytest.mark.skip(reason="Standalone integration test — run manually with backend running")
 def test_rate_limiter():
     """Hard 10: Token bucket rate limiter."""
     print("\n🔴 Hard 10: Rate Limiter")

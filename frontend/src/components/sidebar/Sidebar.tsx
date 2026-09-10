@@ -167,7 +167,7 @@ export function Sidebar({
 
   // Theme cycling
   const cycleTheme = () => {
-    const names: ThemeName[] = ["abyss", "temple", "clarity"];
+    const names: ThemeName[] = ["abyss", "temple", "clarity", "cybernetic", "plasmodial"];
     const currentIdx = names.indexOf(theme);
     const nextTheme = names[(currentIdx + 1) % names.length];
     themeStore.set(nextTheme);
@@ -409,7 +409,7 @@ export function Sidebar({
         {/* Theme selector */}
         <div className="flex items-center gap-1.5 mb-2">
           <span className="text-xs text-text-muted">Theme:</span>
-          {(["abyss", "temple", "clarity"] as ThemeName[]).map((t) => (
+          {(["abyss", "temple", "clarity", "cybernetic", "plasmodial"] as ThemeName[]).map((t) => (
             <button
               key={t}
               onClick={() => themeStore.set(t)}

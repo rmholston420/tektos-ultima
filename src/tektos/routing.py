@@ -356,8 +356,15 @@ def load_config(config_path: str) -> ModelRouter:
     import yaml
     router = ModelRouter()
 
-    with open(config_path) as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+    except FileNotFoundError:
+        log.error(f"Config file not found: {config_path}")
+        raise
+    except yaml.YAMLError as e:
+        log.error(f"Invalid YAML in {config_path}: {e}")
+        raise
 
     for model_data in data.get("models", []):
         profile = ModelProfile(

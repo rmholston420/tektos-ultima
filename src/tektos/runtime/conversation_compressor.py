@@ -343,3 +343,16 @@ class ConversationCompressor:
             cumulative += tokens
 
         return events
+
+
+# ── Singleton accessor ────────────────────────────────────────────────────────
+
+_compressor: ConversationCompressor | None = None
+
+
+def get_conversation_compressor() -> ConversationCompressor:
+    """Get or create the singleton ConversationCompressor."""
+    global _compressor
+    if _compressor is None:
+        _compressor = ConversationCompressor()
+    return _compressor

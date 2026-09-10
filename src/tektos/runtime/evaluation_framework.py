@@ -171,24 +171,85 @@ class EvaluationHarness:
         return evaluation
     
     async def _run_swe_bench_evaluation(self, evaluation: EvaluationResult) -> None:
-        """Run SWE-bench evaluation."""
-        # For now, simulate SWE-bench evaluation
-        # In production, this would use the actual SWE-bench harness
-        evaluation.score = 0.0
-        evaluation.details = {
-            "swe_bench_version": "1.0",
-            "tasks_solved": 0,
-            "total_tasks": 0,
-            "pass_rate": 0.0,
-        }
+        """Run SWE-bench evaluation by running the test suite and measuring pass rate."""
+        try:
+            result = subprocess.run(
+                ["python", "-m", "pytest", str(self.project_root / "tests"), "-q", "--tb=no"],
+                capture_output=True, text=True, timeout=300,
+            )
+            # Parse pytest output for pass/fail counts
+            output = result.stdout
+            total = 0
+            passed = 0
+            for line in output.split('\n'):
+                if 'passed' in line and 'failed' in line:
+                    parts = line.split()
+                    for i, p in enumerate(parts):
+                        if p == 'passed' and i + 1 < len(parts):
+                            try:
+                                passed = int(parts[i - 1])
+                            except (ValueError, IndexError):
+                                pass
+                        if p == 'failed' and i + 1 < len(parts):
+                            try:
+                                failed = int(parts[i - 1])
+                                total = passed + failed
+                            except (ValueError, IndexError):
+                                pass
+            if total == 0:
+                total = max(passed, 1)
+            evaluation.score = passed / total
+            evaluation.details = {
+                "total_tests": total,
+                "passed": passed,
+                "failed": total - passed,
+                "pass_rate": round(passed / total, 3),
+            }
+        except subprocess.TimeoutExpired:
+            evaluation.score = 0.0
+            evaluation.details = {"error": "Test suite timed out (300s)"}
+        except Exception as exc:
+            evaluation.score = 0.0
+            evaluation.details = {"error": str(exc)}
     
     async def _run_custom_evaluation(self, evaluation: EvaluationResult) -> None:
-        """Run custom evaluation."""
-        # Run custom evaluation based on metrics
-        evaluation.score = 0.0
-        evaluation.details = {
-            "custom_metrics": evaluation.metrics,
-        }
+        """Run custom evaluation based on provided metrics."""
+        # Use provided metrics to compute score
+        metrics = evaluation.metrics
+        if "test_pass_rate" in metrics:
+            evaluation.score = metrics["test_pass_rate"]
+        elif "code_quality" in metrics:
+            evaluation.score = metrics["code_quality"]
+        elif "spec_compliance" in metrics:
+            evaluation.score = metrics["spec_compliance"]
+        else:
+            # Default: run pytest and use pass rate
+            try:
+                result = subprocess.run(
+                    ["python", "-m", "pytest", str(self.project_root / "tests"), "-q", "--tb=no"],
+                    capture_output=True, text=True, timeout=300,
+                )
+                output = result.stdout
+                passed = 0
+                total = 0
+                for line in output.split('\n'):
+                    if 'passed' in line and 'failed' in line:
+                        parts = line.split()
+                        for i, p in enumerate(parts):
+                            if p == 'passed' and i + 1 < len(parts):
+                                try:
+                                    passed = int(parts[i - 1])
+                                except (ValueError, IndexError):
+                                    pass
+                            if p == 'failed' and i + 1 < len(parts):
+                                try:
+                                    total = passed + int(parts[i - 1])
+                                except (ValueError, IndexError):
+                                    pass
+                evaluation.score = passed / max(total, 1)
+            except Exception:
+                evaluation.score = 0.0
+        evaluation.details = {"custom_metrics": metrics}
     
     async def _run_code_quality_evaluation(self, evaluation: EvaluationResult) -> None:
         """Run code quality evaluation."""
@@ -248,12 +309,44 @@ class EvaluationHarness:
             evaluation.details = {"error": str(exc)}
     
     async def _run_performance_evaluation(self, evaluation: EvaluationResult) -> None:
-        """Run performance evaluation."""
-        # Run performance benchmarks
-        evaluation.score = 0.0
-        evaluation.details = {
-            "benchmarks": [],
-        }
+        """Run performance evaluation by timing test execution."""
+        try:
+            start = time.time()
+            result = subprocess.run(
+                ["python", "-m", "pytest", str(self.project_root / "tests"), "-q", "--tb=no"],
+                capture_output=True, text=True, timeout=300,
+            )
+            elapsed = time.time() - start
+            output = result.stdout
+            passed = 0
+            total = 0
+            for line in output.split('\n'):
+                if 'passed' in line and 'failed' in line:
+                    parts = line.split()
+                    for i, p in enumerate(parts):
+                        if p == 'passed' and i + 1 < len(parts):
+                            try:
+                                passed = int(parts[i - 1])
+                            except (ValueError, IndexError):
+                                pass
+                        if p == 'failed' and i + 1 < len(parts):
+                            try:
+                                total = passed + int(parts[i - 1])
+                            except (ValueError, IndexError):
+                                pass
+            evaluation.score = passed / max(total, 1)
+            evaluation.details = {
+                "total_time_seconds": round(elapsed, 2),
+                "tests_passed": passed,
+                "tests_total": total,
+                "tests_per_second": round(passed / max(elapsed, 0.001), 2),
+            }
+        except subprocess.TimeoutExpired:
+            evaluation.score = 0.0
+            evaluation.details = {"error": "Performance test timed out (300s)"}
+        except Exception as exc:
+            evaluation.score = 0.0
+            evaluation.details = {"error": str(exc)}
     
     async def _run_security_evaluation(self, evaluation: EvaluationResult) -> None:
         """Run security evaluation."""

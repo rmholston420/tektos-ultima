@@ -51,10 +51,11 @@ def check_file_exists(filepath, timeout=1800):
         time.sleep(5)
     return False
 
-print("🔵 Extremely Difficult 4: M&A Technology Integration Plan")
-session_id = create_session()
+if __name__ == "__main__":
+    print("🔵 Extremely Difficult 4: M&A Technology Integration Plan")
+    session_id = create_session()
 
-prompt = """Write a merger and acquisition technology integration plan at /tmp/ma_integration.md.
+    prompt = """Write a merger and acquisition technology integration plan at /tmp/ma_integration.md.
 
 Requirements:
 1. Pre-close technology assessment (due diligence, system landscape, integration complexity)
@@ -68,32 +69,32 @@ Requirements:
 
 Write the plan as a markdown document. You MUST include the exact words due diligence, application portfolio rationalization, and Day-1 in the content."""
 
-events = send_prompt(session_id, prompt, timeout=TIMEOUT)
-print(f"  Received {len(events)} events")
+    events = send_prompt(session_id, prompt, timeout=TIMEOUT)
+    print(f"  Received {len(events)} events")
 
-filepath = "/tmp/ma_integration.md"
-if not check_file_exists(filepath, timeout=TIMEOUT):
-    print(f"FAIL: File not created within {TIMEOUT}s")
-    sys.exit(1)
+    filepath = "/tmp/ma_integration.md"
+    if not check_file_exists(filepath, timeout=TIMEOUT):
+        print(f"FAIL: File not created within {TIMEOUT}s")
+        sys.exit(1)
 
-content = open(filepath).read()
-content_lower = content.lower()
-print(f"PASS: File created ({len(content)} bytes)")
+    content = open(filepath).read()
+    content_lower = content.lower()
+    print(f"PASS: File created ({len(content)} bytes)")
 
-all_passed = True
-checks = [
-    ("due diligence", "pre-close due diligence"),
-    ("application portfolio rationalization", "application portfolio rationalization"),
-    ("Day-1", "Day-1 readiness"),
-    ("master data", "master data migration"),
-    ("access control", "access control harmonization"),
-    ("steering committee", "integration governance"),
-]
-for keyword, name in checks:
-    if keyword.lower() in content_lower:
-        print(f"  ✅ {name} found")
-    else:
-        print(f"  ❌ {name} NOT found")
-        all_passed = False
+    all_passed = True
+    checks = [
+        ("due diligence", "pre-close due diligence"),
+        ("application portfolio rationalization", "application portfolio rationalization"),
+        ("Day-1", "Day-1 readiness"),
+        ("master data", "master data migration"),
+        ("access control", "access control harmonization"),
+        ("steering committee", "integration governance"),
+    ]
+    for keyword, name in checks:
+        if keyword.lower() in content_lower:
+            print(f"  ✅ {name} found")
+        else:
+            print(f"  ❌ {name} NOT found")
+            all_passed = False
 
-print(f"Result: {'PASS' if all_passed else 'FAIL'}")
+    print(f"Result: {'PASS' if all_passed else 'FAIL'}")

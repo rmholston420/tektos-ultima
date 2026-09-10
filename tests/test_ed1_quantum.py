@@ -85,16 +85,17 @@ def check_file_exists(filepath, timeout=1800):
         time.sleep(5)
     return False
 
-print("🔵 Extremely Difficult 1: Quantum Computing Enterprise Readiness Plan")
-print(f"  Backend: {BACKEND}")
-print(f"  Test dir: {TEST_DIR}")
+if __name__ == "__main__":
+    print("🔵 Extremely Difficult 1: Quantum Computing Enterprise Readiness Plan")
+    print(f"  Backend: {BACKEND}")
+    print(f"  Test dir: {TEST_DIR}")
 
-session_id = create_session()
-if not session_id:
-    print("FAIL: No session ID returned")
-    sys.exit(1)
+    session_id = create_session()
+    if not session_id:
+        print("FAIL: No session ID returned")
+        sys.exit(1)
 
-prompt = """Write a quantum computing enterprise readiness plan at quantum_computing.md.
+    prompt = """Write a quantum computing enterprise readiness plan at quantum_computing.md.
 
 Requirements:
 1. Quantum computing landscape assessment (NISQ era, fault-tolerant timeline, vendor landscape)
@@ -107,32 +108,32 @@ Requirements:
 
 Write the plan as a markdown document. You MUST include the exact words "NISQ", "post-quantum cryptography", and "quantum advantage" in the content."""
 
-events = send_prompt(session_id, prompt, timeout=TIMEOUT)
-print(f"  [4/4] Checking for file...")
+    events = send_prompt(session_id, prompt, timeout=TIMEOUT)
+    print(f"  [4/4] Checking for file...")
 
-filepath = "quantum_computing.md"
-if not check_file_exists(filepath, timeout=TIMEOUT):
-    print(f"FAIL: File not created within {TIMEOUT}s")
-    sys.exit(1)
+    filepath = "quantum_computing.md"
+    if not check_file_exists(filepath, timeout=TIMEOUT):
+        print(f"FAIL: File not created within {TIMEOUT}s")
+        sys.exit(1)
 
-content = open(filepath).read()
-content_lower = content.lower()
-print(f"PASS: File created ({len(content)} bytes)")
+    content = open(filepath).read()
+    content_lower = content.lower()
+    print(f"PASS: File created ({len(content)} bytes)")
 
-all_passed = True
-checks = [
-    ("NISQ", "NISQ era assessment"),
-    ("post-quantum cryptography", "post-quantum cryptography"),
-    ("quantum advantage", "quantum advantage timeline"),
-    ("Qiskit", "Qiskit toolchain"),
-    ("hybrid", "hybrid classical-quantum"),
-    ("patent", "intellectual property"),
-]
-for keyword, name in checks:
-    if keyword.lower() in content_lower:
-        print(f"  ✅ {name} found")
-    else:
-        print(f"  ❌ {name} NOT found")
-        all_passed = False
+    all_passed = True
+    checks = [
+        ("NISQ", "NISQ era assessment"),
+        ("post-quantum cryptography", "post-quantum cryptography"),
+        ("quantum advantage", "quantum advantage timeline"),
+        ("Qiskit", "Qiskit toolchain"),
+        ("hybrid", "hybrid classical-quantum"),
+        ("patent", "intellectual property"),
+    ]
+    for keyword, name in checks:
+        if keyword.lower() in content_lower:
+            print(f"  ✅ {name} found")
+        else:
+            print(f"  ❌ {name} NOT found")
+            all_passed = False
 
-print(f"Result: {'PASS' if all_passed else 'FAIL'}")
+    print(f"Result: {'PASS' if all_passed else 'FAIL'}")

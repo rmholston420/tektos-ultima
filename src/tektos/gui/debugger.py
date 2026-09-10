@@ -661,7 +661,7 @@ def main():
             # Save report
             report_path = debugger._recorder.save_report()
             logger.info(f"Report saved to: {report_path}")
-            ogger.info(json.dumps(session.to_dict(), indent=2))
+            logger.info(json.dumps(session.to_dict(), indent=2))
 
     asyncio.run(run())
 

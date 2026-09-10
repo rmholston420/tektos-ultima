@@ -7,7 +7,7 @@
  * Exemplar pattern: Singleton store with reactive subscriptions.
  */
 
-export type ThemeName = "abyss" | "temple" | "clarity";
+export type ThemeName = "abyss" | "temple" | "clarity" | "cybernetic" | "plasmodial";
 
 export interface ThemeInfo {
   name: ThemeName;
@@ -34,6 +34,18 @@ export const THEMES: Record<ThemeName, ThemeInfo> = {
     label: "Clarity",
     description: "Perplexity minimalist — clean light interface",
     icon: "☀️",
+  },
+  cybernetic: {
+    name: "cybernetic",
+    label: "Cybernetic",
+    description: "Bio-tech fusion — organic meets machine",
+    icon: "🧬",
+  },
+  plasmodial: {
+    name: "plasmodial",
+    label: "Plasmodial",
+    description: "Slime mold — Physarum polycephalum, living networks",
+    icon: "🍄",
   },
 };
 

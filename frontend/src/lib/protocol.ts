@@ -1,6 +1,6 @@
 "use client";
 
-export type EventType = "session.created" | "session.ready" | "session.updated" | "assistant.delta" | "assistant.completed" | "tool.started" | "tool.delta" | "tool.completed" | "tool.permission.required" | "system.message" | "session.interrupted" | "session.failed" | "self_improvement.tick" | "resource.warning" | "model_switched";
+export type EventType = "session.created" | "session.ready" | "session.updated" | "assistant.delta" | "assistant.completed" | "tool.started" | "tool.delta" | "tool.completed" | "tool.permission.required" | "system.message" | "session.interrupted" | "session.failed" | "self_improvement.tick" | "resource.warning" | "model_switched" | "file.attached" | "session.resumed";
 
 export interface WSEnvelopeClient {
   session_id: string; event_type: string; payload: Record<string, unknown>; seq?: number; protocol_version: string; timestamp?: string;
@@ -129,7 +129,16 @@ export class ProtocolClient {
       }
     }
   }
-  sendResume(fromSeq: number): void { /* Not implemented on backend — no 'resume' message type */ }
+  sendResume(fromSeq: number): void {
+    if (!this._sessionId) { console.warn("ProtocolClient.sendResume: no session ID"); return; }
+    const json = JSON.stringify({ type: "resume", session_id: this._sessionId, from_seq: fromSeq });
+    console.log("ProtocolClient.sendResume:", json);
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(json);
+    } else {
+      this.pendingMessages.push(json);
+    }
+  }
   setSessionId(id: string): void { this._sessionId = id; }
   get sessionId(): string { return this._sessionId; }
 
@@ -197,4 +206,5 @@ export const EventType = {
   SESSION_INTERRUPTED: "session.interrupted", SESSION_FAILED: "session.failed",
   SELF_IMPROVEMENT_TICK: "self_improvement.tick", RESOURCE_WARNING: "resource.warning",
   MODEL_SWITCHED: "model_switched",
+  FILE_ATTACHED: "file.attached", SESSION_RESUMED: "session.resumed",
 } as const;

@@ -2,8 +2,8 @@
  * Tektos-Ultima v1 — Biological System Graph
  *
  * Living, breathing architecture visualization.
+ * Organic curves, pulsing nodes, click-to-highlight edges.
  * SSR-safe: only renders on client.
- * Supports 2D (force-directed) and 3D (orbital) views.
  */
 
 "use client";
@@ -38,15 +38,16 @@ interface BiologicalGraphProps {
 
 type ViewMode = "2d" | "3d";
 
+// Organic, biological color palette — warm, living tones
 const CATEGORY_COLORS: Record<string, { fill: string; glow: string; label: string }> = {
-  core: { fill: "#3b82f6", glow: "rgba(59, 130, 246, 0.4)", label: "Core" },
-  ai: { fill: "#8b5cf6", glow: "rgba(139, 92, 246, 0.4)", label: "AI/LLM" },
-  memory: { fill: "#10b981", glow: "rgba(16, 185, 94, 0.4)", label: "Memory" },
-  storage: { fill: "#f59e0b", glow: "rgba(245, 158, 11, 0.4)", label: "Storage" },
-  network: { fill: "#06b6d4", glow: "rgba(6, 182, 212, 0.4)", label: "Network" },
-  monitoring: { fill: "#ec4899", glow: "rgba(236, 72, 153, 0.4)", label: "Monitoring" },
-  plugins: { fill: "#f97316", glow: "rgba(249, 115, 22, 0.4)", label: "Plugins" },
-  tools: { fill: "#14b8a6", glow: "rgba(20, 184, 166, 0.4)", label: "Tools" },
+  core: { fill: "#f59e0b", glow: "rgba(245, 158, 11, 0.5)", label: "Core" },
+  ai: { fill: "#a855f7", glow: "rgba(168, 85, 247, 0.5)", label: "AI/LLM" },
+  memory: { fill: "#22c55e", glow: "rgba(34, 197, 94, 0.5)", label: "Memory" },
+  storage: { fill: "#eab308", glow: "rgba(234, 179, 8, 0.5)", label: "Storage" },
+  network: { fill: "#06b6d4", glow: "rgba(6, 182, 212, 0.5)", label: "Network" },
+  monitoring: { fill: "#ec4899", glow: "rgba(236, 72, 153, 0.5)", label: "Monitoring" },
+  plugins: { fill: "#f97316", glow: "rgba(249, 115, 22, 0.5)", label: "Plugins" },
+  tools: { fill: "#14b8a6", glow: "rgba(20, 184, 166, 0.5)", label: "Tools" },
 };
 
 function generateSampleData(): GraphData {
@@ -109,6 +110,49 @@ function generateSampleData(): GraphData {
   };
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────
+
+// Read the current theme's accent color from CSS custom properties
+// so the graph adapts to the active theme (abyss, temple, clarity, cybernetic)
+function getThemeAccent(): string {
+  if (typeof window === "undefined") return "#3d7aff";
+  const style = getComputedStyle(document.documentElement);
+  return style.getPropertyValue("--accent").trim() || "#3d7aff";
+}
+
+function getThemeGlow(): string {
+  if (typeof window === "undefined") return "rgba(61, 122, 255, 0.15)";
+  const style = getComputedStyle(document.documentElement);
+  return style.getPropertyValue("--accent-glow").trim() || "rgba(61, 122, 255, 0.15)";
+}
+
+function getThemeGlowLg(): string {
+  if (typeof window === "undefined") return "rgba(61, 122, 255, 0.3)";
+  const style = getComputedStyle(document.documentElement);
+  return style.getPropertyValue("--accent-glow-lg").trim() || "rgba(61, 122, 255, 0.3)";
+}
+
+function getConnectedEdges(data: GraphData, nodeId: string): Set<number> {
+  const edges = new Set<number>();
+  data.links.forEach((link, i) => {
+    const srcId = typeof link.source === "string" ? link.source : link.source.id;
+    const tgtId = typeof link.target === "string" ? link.target : link.target.id;
+    if (srcId === nodeId || tgtId === nodeId) edges.add(i);
+  });
+  return edges;
+}
+
+function getConnectedNodes(data: GraphData, nodeId: string): Set<string> {
+  const nodes = new Set<string>([nodeId]);
+  data.links.forEach((link) => {
+    const srcId = typeof link.source === "string" ? link.source : link.source.id;
+    const tgtId = typeof link.target === "string" ? link.target : link.target.id;
+    if (srcId === nodeId) nodes.add(tgtId);
+    if (tgtId === nodeId) nodes.add(srcId);
+  });
+  return nodes;
+}
+
 // ─── 2D Force-Directed ────────────────────────────────────────────
 
 function draw2D(
@@ -116,8 +160,9 @@ function draw2D(
   container: HTMLDivElement,
   data: GraphData,
   hoveredNode: string | null,
-  selectedCategory: string,
+  selectedNode: string | null,
   setHoveredNode: (id: string | null) => void,
+  setSelectedNode: (id: string | null) => void,
 ) {
   svg.selectAll("*").remove();
 
@@ -127,7 +172,7 @@ function draw2D(
 
   const defs = svg.append("defs");
 
-  // Glow filter
+  // Organic glow filter — soft, living, theme-aware
   const glowFilter = defs
     .append("filter")
     .attr("id", "glow")
@@ -137,38 +182,56 @@ function draw2D(
     .attr("height", "200%");
   glowFilter
     .append("feGaussianBlur")
-    .attr("stdDeviation", "4")
+    .attr("stdDeviation", "6")
     .attr("result", "coloredBlur");
   const feMerge = glowFilter.append("feMerge");
   feMerge.append("feMergeNode").attr("in", "coloredBlur");
   feMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
-  // Node gradients
+  // Stronger glow for selected
+  const selectedGlow = defs
+    .append("filter")
+    .attr("id", "selected-glow")
+    .attr("x", "-50%")
+    .attr("y", "-50%")
+    .attr("width", "200%")
+    .attr("height", "200%");
+  selectedGlow
+    .append("feGaussianBlur")
+    .attr("stdDeviation", "10")
+    .attr("result", "coloredBlur");
+  const selMerge = selectedGlow.append("feMerge");
+  selMerge.append("feMergeNode").attr("in", "coloredBlur");
+  selMerge.append("feMergeNode").attr("in", "SourceGraphic");
+
+  // Node gradients — organic radial, theme-aware
+  const accent = getThemeAccent();
+  const glow = getThemeGlow();
   data.nodes.forEach((node) => {
     const cat = CATEGORY_COLORS[node.category] || CATEGORY_COLORS.core;
     const grad = defs
       .append("radialGradient")
       .attr("id", `glow-${node.id}`)
-      .attr("cx", "50%")
-      .attr("cy", "50%")
-      .attr("r", "50%");
-    grad.append("stop").attr("offset", "0%").attr("stop-color", cat.fill).attr("stop-opacity", 0.8);
-    grad.append("stop").attr("offset", "60%").attr("stop-color", cat.fill).attr("stop-opacity", 0.3);
+      .attr("cx", "40%")
+      .attr("cy", "40%")
+      .attr("r", "60%");
+    grad.append("stop").attr("offset", "0%").attr("stop-color", cat.fill).attr("stop-opacity", 1);
+    grad.append("stop").attr("offset", "50%").attr("stop-color", cat.fill).attr("stop-opacity", 0.6);
     grad.append("stop").attr("offset", "100%").attr("stop-color", cat.fill).attr("stop-opacity", 0);
   });
 
-  // Edge gradients
+  // Edge gradients — theme-aware accent highlight
   data.links.forEach((link, i) => {
     const srcColor =
-      CATEGORY_COLORS[data.nodes.find((n) => n.id === link.source)?.category || "core"]?.fill || "#3b82f6";
+      CATEGORY_COLORS[data.nodes.find((n) => n.id === link.source)?.category || "core"]?.fill || "#f59e0b";
     const tgtColor =
-      CATEGORY_COLORS[data.nodes.find((n) => n.id === link.target)?.category || "core"]?.fill || "#3b82f6";
+      CATEGORY_COLORS[data.nodes.find((n) => n.id === link.target)?.category || "core"]?.fill || "#f59e0b";
     const grad = defs
       .append("linearGradient")
       .attr("id", `edge-flow-${i}`)
       .attr("gradientUnits", "userSpaceOnUse");
     grad.append("stop").attr("offset", "0%").attr("stop-color", srcColor).attr("stop-opacity", 0.6);
-    grad.append("stop").attr("offset", "50%").attr("stop-color", "#ffffff").attr("stop-opacity", 0.9);
+    grad.append("stop").attr("offset", "50%").attr("stop-color", accent).attr("stop-opacity", 0.9);
     grad.append("stop").attr("offset", "100%").attr("stop-color", tgtColor).attr("stop-opacity", 0.6);
   });
 
@@ -189,7 +252,7 @@ function draw2D(
     .join("path")
     .attr("fill", "none")
     .attr("stroke-width", (d: GraphEdge) => 1 + d.strength * 2)
-    .attr("stroke-opacity", 0.4)
+    .attr("stroke-opacity", 0.3)
     .attr("stroke-linecap", "round")
     .style("mix-blend-mode", "screen");
 
@@ -207,6 +270,9 @@ function draw2D(
     .on("mouseout", function (_event: MouseEvent, d: GraphNode) {
       setHoveredNode(null);
       d3.select(this).select(".outer").transition().duration(200).attr("r", d.radius);
+    })
+    .on("click", function (_event: MouseEvent, d: GraphNode) {
+      setSelectedNode(selectedNode === d.id ? null : d.id);
     });
 
   node.append("circle").attr("class", "outer").attr("r", (d) => d.radius).attr("fill", (d) => `url(#glow-${d.id})`).attr("filter", "url(#glow)");
@@ -215,7 +281,7 @@ function draw2D(
     .append("circle")
     .attr("class", "core")
     .attr("r", (d) => d.radius * 0.7)
-    .attr("fill", (d) => CATEGORY_COLORS[d.category]?.fill || "#3b82f6")
+    .attr("fill", (d) => CATEGORY_COLORS[d.category]?.fill || "#f59e0b")
     .attr("stroke", "#0a0e17")
     .attr("stroke-width", 2);
 
@@ -228,17 +294,34 @@ function draw2D(
     .attr("font-family", "Inter, system-ui, sans-serif")
     .text((d) => d.name);
 
+  // Curvature factor
+  const curvature = 0.35;
+
   simulation.on("tick", () => {
     node.attr("transform", (d) => `translate(${d.x || 0}, ${d.y || 0})`);
     link.attr("d", (d) => {
       const s = d.source as unknown as GraphNode;
       const t = d.target as unknown as GraphNode;
+      const mx = (s.x! + t.x!) / 2;
+      const my = (s.y! + t.y!) / 2;
       const dx = t.x! - s.x!;
       const dy = t.y! - s.y!;
-      const dr = Math.sqrt(dx * dx + dy * dy) * 1.5;
-      return `M${s.x},${s.y}A${dr},${dr} 0 0,1 ${t.x},${t.y}`;
+      const offset = curvature * Math.sqrt(dx * dx + dy * dy);
+      const cx = mx - (dy / (Math.sqrt(dx * dx + dy * dy) || 1)) * offset;
+      const cy = my + (dx / (Math.sqrt(dx * dx + dy * dy) || 1)) * offset;
+      return `M${s.x},${s.y}Q${cx},${cy} ${t.x},${t.y}`;
     });
     link.attr("stroke", (_d, i) => `url(#edge-flow-${i})`);
+
+    // Highlight connected edges when a node is selected
+    if (selectedNode) {
+      const connectedEdges = getConnectedEdges(data, selectedNode);
+      link
+        .attr("stroke-opacity", (d, i) => (connectedEdges.has(i) ? 0.9 : 0.08))
+        .attr("stroke-width", (d, i) => (connectedEdges.has(i) ? 2 + d.strength * 3 : 1 + d.strength * 2));
+    } else {
+      link.attr("stroke-opacity", 0.3);
+    }
   });
 
   // Breathing animation
@@ -246,7 +329,9 @@ function draw2D(
   const animationId = requestAnimationFrame(function animate() {
     time += 0.01;
     node.select(".outer").attr("opacity", () => 0.3 + Math.sin(time * 2) * 0.2);
-    link.attr("stroke-opacity", () => 0.3 + Math.sin(time * 3) * 0.2);
+    if (!selectedNode) {
+      link.attr("stroke-opacity", () => 0.2 + Math.sin(time * 3) * 0.15);
+    }
     requestAnimationFrame(animate);
   });
 
@@ -263,8 +348,9 @@ function draw3D(
   container: HTMLDivElement,
   data: GraphData,
   hoveredNode: string | null,
-  selectedCategory: string,
+  selectedNode: string | null,
   setHoveredNode: (id: string | null) => void,
+  setSelectedNode: (id: string | null) => void,
 ) {
   svg.selectAll("*").remove();
 
@@ -354,18 +440,18 @@ function draw3D(
     .join("path")
     .attr("fill", "none")
     .attr("stroke", (d: GraphEdge) => {
-      const srcColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === d.source)?.category || "core"]?.fill || "#3b82f6";
-      const tgtColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === d.target)?.category || "core"]?.fill || "#3b82f6";
+      const srcColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === d.source)?.category || "core"]?.fill || "#f59e0b";
+      const tgtColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === d.target)?.category || "core"]?.fill || "#f59e0b";
       return `url(#edge3d-${d.source}-${d.target})`;
     })
     .attr("stroke-width", (d: GraphEdge) => 1 + d.strength * 1.5)
-    .attr("stroke-opacity", 0.25)
+    .attr("stroke-opacity", 0.2)
     .attr("stroke-linecap", "round");
 
   // Edge gradients
   data.links.forEach((link) => {
-    const srcColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === link.source)?.category || "core"]?.fill || "#3b82f6";
-    const tgtColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === link.target)?.category || "core"]?.fill || "#3b82f6";
+    const srcColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === link.source)?.category || "core"]?.fill || "#f59e0b";
+    const tgtColor = CATEGORY_COLORS[data.nodes.find((n) => n.id === link.target)?.category || "core"]?.fill || "#f59e0b";
     const grad = defs
       .append("linearGradient")
       .attr("id", `edge3d-${link.source}-${link.target}`)
@@ -388,6 +474,9 @@ function draw3D(
     .on("mouseout", function (_event: MouseEvent, d: GraphNode) {
       setHoveredNode(null);
       d3.select(this).select(".core-3d").transition().duration(200).attr("r", d.radius);
+    })
+    .on("click", function (_event: MouseEvent, d: GraphNode) {
+      setSelectedNode(selectedNode === d.id ? null : d.id);
     });
 
   node
@@ -401,7 +490,7 @@ function draw3D(
     .append("circle")
     .attr("class", "core-3d")
     .attr("r", (d) => d.radius * 0.75)
-    .attr("fill", (d) => CATEGORY_COLORS[d.category]?.fill || "#3b82f6")
+    .attr("fill", (d) => CATEGORY_COLORS[d.category]?.fill || "#f59e0b")
     .attr("stroke", "#0a0e17")
     .attr("stroke-width", 2);
 
@@ -437,11 +526,26 @@ function draw3D(
       const sp = projection([s.x || 0, s.y || 0]);
       const tp = projection([t.x || 0, t.y || 0]);
       if (!sp || !tp) return "";
+      const mx = (sp[0] + tp[0]) / 2;
+      const my = (sp[1] + tp[1]) / 2;
       const dx = tp[0] - sp[0];
       const dy = tp[1] - sp[1];
-      const dr = Math.sqrt(dx * dx + dy * dy) * 1.2;
-      return `M${sp[0]},${sp[1]}A${dr},${dr} 0 0,1 ${tp[0]},${tp[1]}`;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const offset = 0.3 * dist;
+      const cx = mx - (dy / dist) * offset;
+      const cy = my + (dx / dist) * offset;
+      return `M${sp[0]},${sp[1]}Q${cx},${cy} ${tp[0]},${tp[1]}`;
     });
+
+    // Highlight connected edges when a node is selected
+    if (selectedNode) {
+      const connectedEdges = getConnectedEdges(data, selectedNode);
+      link
+        .attr("stroke-opacity", (d, i) => (connectedEdges.has(i) ? 0.8 : 0.05))
+        .attr("stroke-width", (d, i) => (connectedEdges.has(i) ? 2 + d.strength * 2 : 1 + d.strength * 1.5));
+    } else {
+      link.attr("stroke-opacity", 0.2);
+    }
   });
 
   // Slow rotation
@@ -449,7 +553,7 @@ function draw3D(
   const animationId = requestAnimationFrame(function animate() {
     angle += 0.002;
     projection.rotate([90 + Math.sin(angle) * 15, 0, 0]);
-    simulation.force("projection", projection);
+    (simulation.force as any)("projection", projection);
     simulation.alpha(0.05).restart();
     requestAnimationFrame(animate);
   });
@@ -469,7 +573,10 @@ export function BiologicalGraph({ data: propData }: BiologicalGraphProps) {
   const [isMounted, setIsMounted] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("2d");
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [zoom, setZoom] = useState(1);
+  const [showControls, setShowControls] = useState(true);
 
   // SSR guard
   useEffect(() => {
@@ -481,11 +588,11 @@ export function BiologicalGraph({ data: propData }: BiologicalGraphProps) {
     const svg = d3.select(svgRef.current);
 
     if (viewMode === "2d") {
-      return draw2D(svg, containerRef.current, data, hoveredNode, selectedCategory, setHoveredNode);
+      return draw2D(svg, containerRef.current, data, hoveredNode, selectedNode, setHoveredNode, setSelectedNode);
     } else {
-      return draw3D(svg, containerRef.current, data, hoveredNode, selectedCategory, setHoveredNode);
+      return draw3D(svg, containerRef.current, data, hoveredNode, selectedNode, setHoveredNode, setSelectedNode);
     }
-  }, [data, viewMode, hoveredNode, selectedCategory]);
+  }, [data, viewMode, hoveredNode, selectedNode, selectedCategory]);
 
   useEffect(() => {
     if (!isMounted) return;
@@ -493,11 +600,22 @@ export function BiologicalGraph({ data: propData }: BiologicalGraphProps) {
     return () => cleanup?.();
   }, [isMounted, drawGraph]);
 
+  const handleZoomIn = () => setZoom((z) => Math.min(z + 0.2, 3));
+  const handleZoomOut = () => setZoom((z) => Math.max(z - 0.2, 0.2));
+  const handleReset = () => {
+    setZoom(1);
+    setSelectedNode(null);
+  };
+
   if (!isMounted) return null;
+
+  const selectedNodeData = selectedNode ? data.nodes.find((n) => n.id === selectedNode) : null;
+  const connectedEdges = selectedNode ? getConnectedEdges(data, selectedNode) : new Set<number>();
+  const connectedNodeCount = selectedNode ? getConnectedNodes(data, selectedNode).size : 0;
 
   return (
     <div className="w-full h-[600px] relative rounded-2xl overflow-hidden bg-gradient-to-br from-bg-1/80 to-bg-2/80 border border-border/50">
-      <div ref={containerRef} className="w-full h-full">
+      <div ref={containerRef} className="w-full h-full" style={{ transform: `scale(${zoom})`, transformOrigin: "center center", transition: "transform 0.3s ease" }}>
         <svg ref={svgRef} className="w-full h-full" />
       </div>
 
@@ -521,6 +639,40 @@ export function BiologicalGraph({ data: propData }: BiologicalGraphProps) {
         </button>
       </div>
 
+      {/* Graph controls */}
+      <div className={`absolute top-4 right-4 flex flex-col gap-1 bg-black/30 backdrop-blur-sm rounded-lg p-1 border border-white/10 transition-opacity ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+        <button onClick={handleZoomIn} className="w-8 h-8 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-white/10 transition-all" title="Zoom in">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </button>
+        <button onClick={handleZoomOut} className="w-8 h-8 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-white/10 transition-all" title="Zoom out">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </button>
+        <div className="h-px bg-white/10 my-0.5" />
+        <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-white/10 transition-all" title="Reset view">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8a6 6 0 0 1 10.5-4M14 8a6 6 0 0 1-10.5 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="M12 1v3h-3M4 15v-3h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <div className="h-px bg-white/10 my-0.5" />
+        <button onClick={() => setShowControls(false)} className="w-8 h-8 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-white/10 transition-all" title="Hide controls">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </button>
+      </div>
+
+      {/* Show controls button (when hidden) */}
+      {!showControls && (
+        <button
+          onClick={() => setShowControls(true)}
+          className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-lg bg-black/30 backdrop-blur-sm border border-white/10 text-text-muted hover:text-text-primary hover:bg-white/10 transition-all"
+          title="Show controls"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </button>
+      )}
+
+      {/* Zoom level indicator */}
+      <div className="absolute bottom-4 right-4 text-xs text-text-muted bg-black/30 backdrop-blur-sm rounded-md px-2 py-1 border border-white/10">
+        {Math.round(zoom * 100)}%
+      </div>
+
       {/* Subsystem legend */}
       <div className="absolute bottom-4 left-4 flex flex-col gap-2">
         <div className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Subsystems</div>
@@ -539,17 +691,37 @@ export function BiologicalGraph({ data: propData }: BiologicalGraphProps) {
       </div>
 
       {/* Hover tooltip */}
-      {hoveredNode &&
-        (() => {
-          const node = data.nodes.find((n) => n.id === hoveredNode);
-          return node ? (
-            <div className="absolute top-4 right-4 panel max-w-xs">
-              <div className="text-sm font-medium text-text-primary">{node.name}</div>
-              <div className="text-xs text-text-muted mt-1">Category: {node.category}</div>
-              <div className="text-xs text-text-muted">Complexity: {Math.round(node.rank * 100)}%</div>
-            </div>
-          ) : null;
-        })()}
+      {hoveredNode && !selectedNode && (
+        <div className="absolute top-4 right-4 panel max-w-xs">
+          <div className="text-sm font-medium text-text-primary">
+            {data.nodes.find((n) => n.id === hoveredNode)?.name}
+          </div>
+          <div className="text-xs text-text-muted mt-1">
+            Category: {data.nodes.find((n) => n.id === hoveredNode)?.category}
+          </div>
+          <div className="text-xs text-text-muted">
+            Complexity: {Math.round((data.nodes.find((n) => n.id === hoveredNode)?.rank || 0) * 100)}%
+          </div>
+        </div>
+      )}
+
+      {/* Selected node info */}
+      {selectedNodeData && (
+        <div className="absolute top-4 right-4 panel max-w-xs">
+          <div className="text-sm font-medium text-text-primary">{selectedNodeData.name}</div>
+          <div className="text-xs text-text-muted mt-1">Category: {selectedNodeData.category}</div>
+          <div className="text-xs text-text-muted">Complexity: {Math.round(selectedNodeData.rank * 100)}%</div>
+          <div className="text-xs text-text-muted mt-2">
+            <span className="text-accent">{connectedEdges.size}</span> connections · <span className="text-accent">{connectedNodeCount}</span> nodes
+          </div>
+          <button
+            onClick={() => setSelectedNode(null)}
+            className="mt-2 text-xs text-text-muted hover:text-text-primary transition-colors"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
     </div>
   );
 }

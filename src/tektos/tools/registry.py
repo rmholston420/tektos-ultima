@@ -372,13 +372,41 @@ class MCPClient:
 
     def _connect_sse(self, url: str) -> dict[str, Any]:
         """Connect via SSE to MCP server."""
-        log.info(f"MCP SSE connect to {url} (placeholder — requires aiohttp)")
-        return {
-            "status": "partial",
-            "url": url,
-            "tools_imported": 0,
-            "note": "SSE transport requires async HTTP client library",
-        }
+        try:
+            import asyncio
+            import aiohttp
+
+            async def _sse_connect():
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(f"{url}/mcp", json={"method": "tools/list", "params": {}, "id": 1}) as resp:
+                        data = await resp.json()
+                    tools = data.get("result", {}).get("tools", [])
+                    for tool_def in tools:
+                        self._import_tool(tool_def)
+                    return {
+                        "status": "ok",
+                        "url": url,
+                        "tools_imported": self._imported_count,
+                        "tool_names": [t["name"] for t in tools],
+                    }
+
+            return asyncio.run(_sse_connect())
+        except ImportError:
+            log.info(f"MCP SSE connect to {url} (requires aiohttp: pip install aiohttp)")
+            return {
+                "status": "partial",
+                "url": url,
+                "tools_imported": 0,
+                "note": "SSE transport requires async HTTP client library",
+            }
+        except Exception as exc:
+            log.error(f"MCP SSE connection failed: {exc}")
+            return {
+                "status": "error",
+                "url": url,
+                "tools_imported": 0,
+                "error": str(exc),
+            }
 
     def _import_tool(self, tool_def: dict[str, Any]) -> None:
         """Import an MCP tool definition into the registry."""

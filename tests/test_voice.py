@@ -1,258 +1,289 @@
-"""Tests for Tektos voice module (STT, TTS, wake-word)."""
+"""Tests for voice.py — STTEngine, TTSVoice, VoiceActivityDetector, WakeWordDetector, VoiceManager."""
 
+import asyncio
 import io
-import json
-import os
-import sys
+import tempfile
 import wave
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from tektos.voice import (
+    STTEngine,
+    TTSVoice,
+    VoiceActivityDetector,
+    WakeWordDetector,
+    VoiceManager,
+    VoiceState,
+    get_voice_manager,
+)
 
 
-# ---------------------------------------------------------------------------
-# STT Engine Tests
-# ---------------------------------------------------------------------------
+class TestVoiceState:
+    """Tests for VoiceState dataclass."""
 
-class TestSTTEngine:
-    """Tests for the STTEngine class."""
+    def test_default_state(self):
+        state = VoiceState()
+        assert state.is_listening is False
+        assert state.is_speaking is False
+        assert state.is_wake_word_detected is False
+        assert state.last_transcript == ""
+        assert state.last_tts_text == ""
 
-    @pytest.mark.asyncio
-    async def test_initialize_lazy_loads_model(self):
-        """Test that model is loaded on first transcribe call."""
-        from tektos.voice import STTEngine
+    def test_update_state(self):
+        state = VoiceState(
+            is_listening=True,
+            is_speaking=True,
+            is_wake_word_detected=True,
+            last_transcript="hello tektos",
+            last_tts_text="Hello there",
+        )
+        assert state.is_listening is True
+        assert state.is_wake_word_detected is True
+        assert state.last_transcript == "hello tektos"
 
-        with patch("tektos.voice.WhisperModel") as MockWhisper:
-            mock_model = MagicMock()
-            MockWhisper.return_value = mock_model
-
-            engine = STTEngine()
-            assert engine._model is None
-
-            await engine.initialize()
-            MockWhisper.assert_called_once()
-            assert engine._model is not None
-
-    @pytest.mark.asyncio
-    async def test_transcribe_calls_whisper(self):
-        """Test that transcribe passes audio to Whisper."""
-        from tektos.voice import STTEngine
-
-        engine = STTEngine()
-
-        with patch.object(engine, "initialize", new_callable=AsyncMock):
-            mock_model = MagicMock()
-            mock_segments = [MagicMock(text="hello world")]
-            mock_info = MagicMock(language="en")
-            mock_model.transcribe.return_value = (mock_segments, mock_info)
-            engine._model = mock_model
-
-            wav_bytes = self._create_dummy_wav()
-            text = await engine.transcribe(wav_bytes)
-
-            assert text == "hello world"
-            mock_model.transcribe.assert_called_once()
-
-    @staticmethod
-    def _create_dummy_wav(duration_sec=1.0, sample_rate=16000):
-        """Create a simple WAV file in memory."""
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            # Write silence
-            samples = b"\x00\x00" * int(sample_rate * duration_sec)
-            wf.writeframes(samples)
-        buf.seek(0)
-        return buf.read()
-
-
-# ---------------------------------------------------------------------------
-# TTS Voice Tests
-# ---------------------------------------------------------------------------
-
-class TestTTSVoice:
-    """Tests for the TTSVoice class."""
-
-    @pytest.mark.asyncio
-    async def test_synthesize_returns_bytes(self):
-        """Test that synthesize returns MP3 bytes."""
-        from tektos.voice import TTSVoice
-
-        tts = TTSVoice()
-
-        async def mock_stream():
-            yield {"type": "audio", "data": b"\x00\x01\x02\x03"}
-
-        with patch("tektos.voice.edge_tts.Communicate") as MockComm:
-            mock_comm = MagicMock()
-            mock_comm.stream = mock_stream
-            MockComm.return_value = mock_comm
-
-            audio = await tts.synthesize("test text")
-            assert isinstance(audio, bytes)
-            assert len(audio) > 0
-
-    @pytest.mark.asyncio
-    async def test_synthesize_stream_yields_chunks(self):
-        """Test that synthesize_stream yields audio chunks."""
-        from tektos.voice import TTSVoice
-
-        tts = TTSVoice()
-
-        async def mock_stream():
-            yield {"type": "audio", "data": b"\x00\x01"}
-            yield {"type": "audio", "data": b"\x02\x03"}
-
-        with patch("tektos.voice.edge_tts.Communicate") as MockComm:
-            mock_comm = MagicMock()
-            mock_comm.stream = mock_stream
-            MockComm.return_value = mock_comm
-
-            chunks = []
-            async for chunk in tts.synthesize_stream("test"):
-                chunks.append(chunk)
-
-            assert len(chunks) == 2
-            assert b"\x00\x01" in chunks
-            assert b"\x02\x03" in chunks
-
-
-# ---------------------------------------------------------------------------
-# VAD Tests
-# ---------------------------------------------------------------------------
 
 class TestVoiceActivityDetector:
-    """Tests for the VoiceActivityDetector class."""
+    """Tests for VoiceActivityDetector."""
 
     def test_detect_silence(self):
-        """Test that silence returns False."""
-        from tektos.voice import VoiceActivityDetector
-
         vad = VoiceActivityDetector(threshold=0.01)
-        silence = b"\x00\x00" * 100  # 16-bit silence
-        result = vad.detect(silence)
-        assert result is False or result == False
+        # All zeros = silence
+        import numpy as np
+        silence = np.zeros(100, dtype=np.int16).tobytes()
+        assert vad.detect(silence) == False
 
     def test_detect_speech(self):
-        """Test that speech returns True."""
-        from tektos.voice import VoiceActivityDetector
-
         vad = VoiceActivityDetector(threshold=0.01)
-        # Create a simple sine wave pattern
+        # High amplitude = speech
         import numpy as np
-        samples = np.sin(np.linspace(0, 100, 200)).astype(np.float32)
-        audio = (samples * 10000).astype(np.int16).tobytes()
-        result = vad.detect(audio)
-        assert result is True or result == True
+        samples = np.array([32767] * 100, dtype=np.int16)
+        assert vad.detect(samples.tobytes()) == True
 
+    def test_detect_low_volume(self):
+        vad = VoiceActivityDetector(threshold=0.01)
+        # Low amplitude = below threshold
+        import numpy as np
+        samples = np.array([100] * 100, dtype=np.int16)
+        assert vad.detect(samples.tobytes()) == False
 
-# ---------------------------------------------------------------------------
-# Wake-Word Detector Tests
-# ---------------------------------------------------------------------------
+    def test_detect_high_volume(self):
+        vad = VoiceActivityDetector(threshold=0.01)
+        import numpy as np
+        samples = np.array([16000] * 100, dtype=np.int16)
+        assert vad.detect(samples.tobytes()) == True
+
+    def test_custom_threshold(self):
+        vad = VoiceActivityDetector(threshold=0.5)
+        import numpy as np
+        samples = np.array([1000] * 100, dtype=np.int16)
+        assert vad.detect(samples.tobytes()) == False
+
 
 class TestWakeWordDetector:
-    """Tests for the WakeWordDetector class."""
+    """Tests for WakeWordDetector."""
 
-    def test_detects_wake_word(self):
-        """Test that wake word is detected."""
-        from tektos.voice import WakeWordDetector
-
+    def test_wake_word_present(self):
         detector = WakeWordDetector()
-        assert detector.check("Tektos, what time is it?") is True
-        assert detector.check("tektos, help me") is True
-        assert detector.check("TEKTOS!") is True
+        assert detector.check("tektos, what time is it?") is True
+        assert detector.check("Hey tektos, run the tests") is True
+        assert detector.check("TEKTOS, stop") is True
 
-    def test_no_false_positive(self):
-        """Test that similar words don't trigger."""
-        from tektos.voice import WakeWordDetector
-
+    def test_wake_word_absent(self):
         detector = WakeWordDetector()
-        assert detector.check("Hello, how are you?") is False
-        assert detector.check("The text is long") is False  # "text" != "tektos"
-        assert detector.check("I like totes") is False  # "totes" != "tektos"
+        assert detector.check("hello world") is False
+        assert detector.check("what is the weather") is False
+        assert detector.check("tektos is great") is True  # "tektos" is a word
+
+    def test_wake_word_partial_match(self):
+        detector = WakeWordDetector()
+        # "tektos" should match as a word boundary
+        assert detector.check("tektos") is True
+        assert detector.check("tektos.") is True
+        assert detector.check("tektos!") is True
+
+    def test_wake_word_not_a_word(self):
+        detector = WakeWordDetector()
+        # "tektos" should NOT match inside another word
+        assert detector.check("tektosify") is False
+        assert detector.check("mytektos") is False
+
+    def test_custom_sensitivity(self):
+        detector = WakeWordDetector(sensitivity=0.9)
+        assert detector.check("tektos, run") is True
 
 
-# ---------------------------------------------------------------------------
-# VoiceManager Tests
-# ---------------------------------------------------------------------------
+class TestSTTEngine:
+    """Tests for STTEngine."""
+
+    def test_init(self):
+        stt = STTEngine()
+        assert stt._model is None
+
+    @pytest.mark.asyncio
+    async def test_initialize_lazy(self):
+        stt = STTEngine()
+        assert stt._model is None
+
+        with patch("tektos.voice.WhisperModel") as mock_whisper:
+            mock_whisper.return_value = MagicMock()
+            await stt.initialize()
+            assert stt._model is not None
+            mock_whisper.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_initialize_already_loaded(self):
+        stt = STTEngine()
+        stt._model = MagicMock()
+
+        with patch("tektos.voice.WhisperModel") as mock_whisper:
+            await stt.initialize()
+            mock_whisper.assert_not_called()  # Should not reload
+
+    @pytest.mark.asyncio
+    async def test_transcribe(self):
+        stt = STTEngine()
+
+        with patch("tektos.voice.WhisperModel") as mock_whisper:
+            mock_model = MagicMock()
+            mock_segment = MagicMock()
+            mock_segment.text = "hello world"
+            mock_model.transcribe.return_value = ([mock_segment], MagicMock(language="en"))
+            mock_whisper.return_value = mock_model
+            stt._model = mock_model
+
+            # Create a minimal WAV file
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 100)
+
+            text = await stt.transcribe(wav_buffer.getvalue())
+            assert text == "hello world"
+
+
+class TestTTSVoice:
+    """Tests for TTSVoice."""
+
+    @pytest.mark.asyncio
+    async def test_synthesize(self):
+        tts = TTSVoice()
+
+        async def mock_stream():
+            yield {"type": "audio", "data": b"fake_audio_data"}
+
+        with patch("tektos.voice.edge_tts.Communicate") as mock_comm:
+            mock_comm.return_value = MagicMock(stream=mock_stream)
+
+            audio = await tts.synthesize("hello world")
+            assert audio == b"fake_audio_data"
+
+    @pytest.mark.asyncio
+    async def test_synthesize_stream(self):
+        tts = TTSVoice()
+
+        async def mock_stream():
+            yield {"type": "audio", "data": b"chunk1"}
+            yield {"type": "audio", "data": b"chunk2"}
+
+        with patch("tektos.voice.edge_tts.Communicate") as mock_comm:
+            mock_comm.return_value = MagicMock(stream=mock_stream)
+
+            chunks = []
+            async for chunk in tts.synthesize_stream("hello"):
+                chunks.append(chunk)
+            assert len(chunks) == 2
+            assert chunks[0] == b"chunk1"
+            assert chunks[1] == b"chunk2"
+
 
 class TestVoiceManager:
-    """Tests for the VoiceManager class."""
+    """Tests for VoiceManager."""
+
+    def test_init(self):
+        vm = VoiceManager()
+        assert vm.stt is not None
+        assert vm.tts is not None
+        assert vm.vad is not None
+        assert vm.wake_word is not None
+        assert vm.state is not None
+
+    def test_get_state(self):
+        vm = VoiceManager()
+        state = vm.get_state()
+        assert state["is_listening"] is False
+        assert state["is_speaking"] is False
+        assert state["is_wake_word_detected"] is False
+        assert state["last_transcript"] == ""
+        assert state["last_tts_text"] == ""
 
     @pytest.mark.asyncio
-    async def test_get_state_returns_dict(self):
-        """Test that get_state returns a dict with expected keys."""
-        from tektos.voice import VoiceManager
+    async def test_speak(self):
+        vm = VoiceManager()
 
-        manager = VoiceManager()
-        state = manager.get_state()
-
-        assert isinstance(state, dict)
-        assert "is_listening" in state
-        assert "is_speaking" in state
-        assert "is_wake_word_detected" in state
-        assert "last_transcript" in state
-        assert "last_tts_text" in state
+        with patch.object(vm.tts, "synthesize", return_value=b"audio") as mock_synthesize:
+            audio = await vm.speak("hello")
+            assert audio == b"audio"
+            mock_synthesize.assert_called_once_with("hello")
+            assert vm.state.is_speaking is False  # Reset after speak
 
     @pytest.mark.asyncio
-    async def test_transcribe_sets_wake_word(self):
-        """Test that transcribe checks for wake word."""
-        from tektos.voice import VoiceManager
+    async def test_speak_stream(self):
+        vm = VoiceManager()
 
-        manager = VoiceManager()
+        async def mock_stream(text):
+            yield b"chunk1"
+            yield b"chunk2"
 
-        with patch.object(manager.stt, "initialize", new_callable=AsyncMock):
-            mock_model = MagicMock()
-            mock_segments = [MagicMock(text="Tektos, help me")]
-            mock_info = MagicMock(language="en")
-            mock_model.transcribe.return_value = (mock_segments, mock_info)
-            manager.stt._model = mock_model
-
-            wav_bytes = TestSTTEngine._create_dummy_wav()
-            text = await manager.transcribe(wav_bytes)
-
-            assert text == "Tektos, help me"
-            assert manager.state.is_wake_word_detected is True
+        with patch.object(vm.tts, "synthesize_stream", mock_stream):
+            chunks = []
+            async for chunk in vm.speak_stream("hello"):
+                chunks.append(chunk)
+            assert len(chunks) == 2
+            assert vm.state.is_speaking is False
 
     @pytest.mark.asyncio
-    async def test_speak_calls_tts(self):
-        """Test that speak calls TTS."""
-        from tektos.voice import VoiceManager
+    async def test_transcribe(self):
+        vm = VoiceManager()
 
-        manager = VoiceManager()
+        with patch.object(vm.stt, "transcribe", return_value="hello tektos") as mock_transcribe:
+            text = await vm.transcribe(b"audio")
+            assert text == "hello tektos"
+            assert vm.state.last_transcript == "hello tektos"
+            assert vm.state.is_listening is False  # Reset after transcribe
 
-        async def mock_synthesize(text):
-            # Check state during synthesis
-            assert manager.state.is_speaking is True
-            assert manager.state.last_tts_text == "hello world"
-            return b"\x00\x01\x02\x03"
+    @pytest.mark.asyncio
+    async def test_transcribe_wake_word(self):
+        vm = VoiceManager()
 
-        with patch.object(manager.tts, "synthesize", mock_synthesize):
-            audio = await manager.speak("hello world")
+        with patch.object(vm.stt, "transcribe", return_value="tektos run tests") as mock_transcribe:
+            text = await vm.transcribe(b"audio")
+            assert vm.state.is_wake_word_detected is True
 
-            assert audio == b"\x00\x01\x02\x03"
-            # is_speaking is reset in finally block, so check last_tts_text instead
-            assert manager.state.last_tts_text == "hello world"
+    @pytest.mark.asyncio
+    async def test_transcribe_no_wake_word(self):
+        vm = VoiceManager()
+
+        with patch.object(vm.stt, "transcribe", return_value="hello world") as mock_transcribe:
+            text = await vm.transcribe(b"audio")
+            assert vm.state.is_wake_word_detected is False
+
+    @pytest.mark.asyncio
+    async def test_initialize(self):
+        vm = VoiceManager()
+
+        with patch.object(vm.stt, "initialize") as mock_init:
+            await vm.initialize()
+            mock_init.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# Singleton Tests
-# ---------------------------------------------------------------------------
+class TestGetVoiceManager:
+    """Tests for get_voice_manager singleton."""
 
-class TestVoiceManagerSingleton:
-    """Tests for the get_voice_manager singleton."""
-
-    def test_singleton_returns_same_instance(self):
-        """Test that get_voice_manager returns the same instance."""
-        from tektos.voice import get_voice_manager
-
-        manager1 = get_voice_manager()
-        manager2 = get_voice_manager()
-
-        assert manager1 is manager2
+    def test_singleton(self):
+        vm1 = get_voice_manager()
+        vm2 = get_voice_manager()
+        assert vm1 is vm2

@@ -13,8 +13,8 @@ describe('Theme Store', () => {
   });
 
   describe('THEMES constant', () => {
-    test('has exactly 3 themes', () => {
-      expect(Object.keys(THEMES)).toHaveLength(3);
+    test('has exactly 5 themes', () => {
+      expect(Object.keys(THEMES)).toHaveLength(5);
     });
 
     test('has abyss theme', () => {
@@ -38,6 +38,20 @@ describe('Theme Store', () => {
       expect(THEMES.clarity.icon).toBe('☀️');
     });
 
+    test('has cybernetic theme', () => {
+      expect(THEMES.cybernetic).toBeDefined();
+      expect(THEMES.cybernetic.name).toBe('cybernetic');
+      expect(THEMES.cybernetic.label).toBe('Cybernetic');
+      expect(THEMES.cybernetic.icon).toBe('🧬');
+    });
+
+    test('has plasmodial theme', () => {
+      expect(THEMES.plasmodial).toBeDefined();
+      expect(THEMES.plasmodial.name).toBe('plasmodial');
+      expect(THEMES.plasmodial.label).toBe('Plasmodial');
+      expect(THEMES.plasmodial.icon).toBe('🍄');
+    });
+
     test('all themes have required fields', () => {
       Object.values(THEMES).forEach((theme: ThemeInfo) => {
         expect(theme.name).toBeTruthy();
@@ -57,9 +71,9 @@ describe('Theme Store', () => {
       expect(themeStore.get()).toBe('abyss');
     });
 
-    test('getAll returns 3 themes', () => {
+    test('getAll returns 5 themes', () => {
       const themes = themeStore.getAll();
-      expect(themes).toHaveLength(3);
+      expect(themes).toHaveLength(5);
     });
 
     test('getAll returns correct theme names', () => {
@@ -68,6 +82,8 @@ describe('Theme Store', () => {
       expect(names).toContain('abyss');
       expect(names).toContain('temple');
       expect(names).toContain('clarity');
+      expect(names).toContain('cybernetic');
+      expect(names).toContain('plasmodial');
     });
   });
 
@@ -101,7 +117,7 @@ describe('Theme Store', () => {
     });
 
     test('persisting to localStorage works for all themes', () => {
-      const themes: ThemeName[] = ['abyss', 'temple', 'clarity'];
+      const themes: ThemeName[] = ['abyss', 'temple', 'clarity', 'cybernetic', 'plasmodial'];
       themes.forEach((theme) => {
         themeStore.set(theme);
         expect(localStorage.getItem('tektos-theme')).toBe(theme);

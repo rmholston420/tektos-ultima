@@ -42,6 +42,7 @@ from tektos.runtime.loop_safety import (
     LoopState,
     StopReason,
 )
+from tektos.runtime.observability import TraceStatus
 from tektos.runtime.session import LiveSession
 from tektos.store.event_store import append_event
 from tektos.metabolism import MetabolismEngine
@@ -239,6 +240,11 @@ class RuntimeSDK:
         llm_base_url: str = LLM_BASE_URL,
         llm_model: str = LLM_MODEL,
         loop_safety_config: LoopSafetyConfig | None = None,
+        self_improvement_adapter: Any = None,
+        observability_manager: Any = None,
+        tool_router: Any = None,
+        repo_memory: Any = None,
+        hook_manager: Any = None,
     ) -> None:
         self._llm_base_url = llm_base_url
         self._llm_model = llm_model
@@ -250,6 +256,18 @@ class RuntimeSDK:
         self._metabolism_engine = MetabolismEngine()
         # Immune system — self-defending architecture
         self._immune_system: ImmuneSystem | None = None
+        # Self-improvement adapter
+        self._self_improvement = self_improvement_adapter
+        # Observability manager
+        self._observability = observability_manager
+        # Tool router
+        self._tool_router = tool_router
+        # Repo memory
+        self._repo_memory = repo_memory
+        # Hook manager
+        self._hook_manager = hook_manager
+        # Self-repair engine
+        self._self_repair_engine: Any = None
 
     async def start(self) -> None:
         """Create the httpx client and start the immune system."""
@@ -297,6 +315,14 @@ class RuntimeSDK:
         if not self._client:
             raise RuntimeError("RuntimeSDK not started. Call start() first.")
 
+        # ── Observability: trace for entire prompt ──
+        trace_id: str | None = None
+        if self._observability:
+            trace_id = self._observability.start_trace(
+                f"llm_prompt_{session.id[:8]}",
+                attributes={"session_id": session.id},
+            )
+
         async with self._lock:
             session.status = "running"
             session.updated_at = _time.monotonic()
@@ -304,7 +330,7 @@ class RuntimeSDK:
             start_time = _time.monotonic()
 
             try:
-                await self._stream_llm(session, prompt, system_prompt, on_event, on_tool_approval)
+                await self._stream_llm(session, prompt, system_prompt, on_event, on_tool_approval, trace_id)
             except Exception as exc:
                 log.error(f"LLM error in {session.id[:8]}: {exc}", exc_info=True)
                 if on_event:
@@ -315,6 +341,50 @@ class RuntimeSDK:
 
             finally:
                 wall_time = _time.monotonic() - start_time
+
+                # ── Observability: end trace ──
+                if self._observability and trace_id:
+                    status = "ready" if session.status == "ready" else "failed"
+                    self._observability.end_trace(
+                        trace_id, "",
+                        TraceStatus.OK if status == "ready" else TraceStatus.ERROR,
+                        {"session_id": session.id, "status": status},
+                    )
+                    self._observability.record_metric(
+                        "session.duration",
+                        wall_time,
+                        labels={"session_id": session.id, "status": status},
+                    )
+
+                # ── Self-Improvement: record experience ──
+                if self._self_improvement and session.status == "ready":
+                    try:
+                        await self._self_improvement.on_session_completed(
+                            session_id=session.id,
+                            task=prompt[:500],
+                            spec="",
+                            model=self._llm_model,
+                            success=True,
+                            tests_passed=0,
+                            tests_total=0,
+                            wall_time_seconds=wall_time,
+                        )
+                    except Exception as e:
+                        log.warning("[SDK] Self-improvement recording failed: %s", e)
+
+                # ── Self-Improvement: record failure ──
+                if self._self_improvement and session.status == "failed":
+                    try:
+                        await self._self_improvement.on_session_failed(
+                            session_id=session.id,
+                            task=prompt[:500],
+                            spec="",
+                            model=self._llm_model,
+                            error="LLM error",
+                            wall_time_seconds=wall_time,
+                        )
+                    except Exception as e:
+                        log.warning("[SDK] Self-improvement failure recording failed: %s", e)
 
                 # Run completion hook
                 await hooks.run("session.completed", HookContext(
@@ -335,6 +405,7 @@ class RuntimeSDK:
         system_prompt: str | None,
         on_event: Any,
         on_tool_approval: Any,
+        trace_id: str | None = None,
     ) -> None:
         """Stream LLM response via SSE to llama.cpp.
 
@@ -376,7 +447,15 @@ class RuntimeSDK:
         # Build conversation history
         messages = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            # ── RepoMemory: inject project instructions into system prompt ──
+            if self._repo_memory:
+                repo_ctx = self._repo_memory.context_prompt
+                if repo_ctx:
+                    messages.append({"role": "system", "content": f"{system_prompt}\n{repo_ctx}"})
+                else:
+                    messages.append({"role": "system", "content": system_prompt})
+            else:
+                messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         log.info(f"[SDK] Messages: {len(messages)}, model: {self._llm_model}")
 
@@ -596,10 +675,26 @@ class RuntimeSDK:
                         saw_text = False
 
             except httpx.ConnectError as exc:
+                # ── Observability: end trace on error ──
+                if self._observability and trace_id:
+                    self._observability.end_trace(
+                        trace_id, "", TraceStatus.ERROR,
+                        {"error": str(exc)},
+                    )
                 raise RuntimeError(f"Cannot connect to LLM at {self._llm_base_url}: {exc}")
             except httpx.TimeoutException as exc:
+                if self._observability and trace_id:
+                    self._observability.end_trace(
+                        trace_id, "", TraceStatus.ERROR,
+                        {"error": "timeout"},
+                    )
                 raise RuntimeError(f"LLM request timed out: {exc}")
             except Exception as exc:
+                if self._observability and trace_id:
+                    self._observability.end_trace(
+                        trace_id, "", TraceStatus.ERROR,
+                        {"error": str(exc)},
+                    )
                 raise RuntimeError(f"LLM streaming error: {exc}")
 
     async def _handle_tool_completion(
@@ -644,6 +739,16 @@ class RuntimeSDK:
                 log.warning(f"[SDK] Dangerous command detected in {session.id[:8]}: {danger_threats[0].description}")
                 for t in danger_threats:
                     response = await self._immune_system.responses.respond(t)
+                    # ── Self-Repair: trigger repair on threat ──
+                    if self._self_repair_engine:
+                        try:
+                            await self._self_repair_engine.repair_threat(
+                                threat_category="dangerous_command",
+                                threat_severity=int(t.severity),
+                                ctx={"session_id": session.id, "tool_name": tool_name, "description": t.description},
+                            )
+                        except Exception as e:
+                            log.warning("[SDK] Self-repair trigger failed: %s", e)
                     if t.metadata.get("_emergency") or t.metadata.get("_halted"):
                         completed_tools.add(tool_id)
                         await on_event(tool_completed(session.id, tool_id, "blocked", f"Blocked by immune system: {t.description}"))
@@ -700,15 +805,70 @@ class RuntimeSDK:
 
         # Execute tool (actual execution via SandboxProvider or MCP registry)
         try:
-            result = await self._execute_tool(tool_name, tool_input)
+            # ── Hook: fire tool.before hooks ──
+            if self._hook_manager:
+                hook_results = await self._hook_manager.fire(
+                    "tool.before",
+                    session_id=session.id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                )
+                if any(r.outcome.value in ("abort", "reject") for r in hook_results):
+                    abort_msg = next((r.message for r in hook_results if r.outcome.value in ("abort", "reject")), "Tool blocked by hook")
+                    completed_tools.add(tool_id)
+                    await on_event(tool_completed(session.id, tool_id, "blocked", abort_msg))
+                    return f"BLOCKED: {abort_msg}"
+
+            # ── Tool Router: use router if available ──
+            if self._tool_router:
+                result = self._tool_router.execute_with_recovery(tool_name, tool_input)
+                if isinstance(result, dict) and "success" in result:
+                    if result["success"]:
+                        completed_tools.add(tool_id)
+                        await on_event(tool_completed(session.id, tool_id, "success", result.get("result", str(result))))
+                        # ── Observability: record tool metric ──
+                        if self._observability:
+                            self._observability.record_metric(
+                                f"tool.{tool_name}.duration",
+                                0.0,  # would need timing wrapper
+                                labels={"tool": tool_name, "status": "success"},
+                            )
+                        return result.get("result", str(result))
+                    else:
+                        completed_tools.add(tool_id)
+                        await on_event(tool_completed(session.id, tool_id, "error", result.get("error", "Tool failed")))
+                        return f"Error: {result.get('error', 'Tool failed')}"
+
+            # Fallback to sandbox execution
+            result = self._sandbox.execute(tool_name, tool_input)
+            log.info(f"[TOOK] {tool_name} → {len(str(result))} chars")
             completed_tools.add(tool_id)  # Mark as completed BEFORE returning
             await on_event(tool_completed(session.id, tool_id, "success", str(result)))
+            # ── Observability: record tool metric ──
+            if self._observability:
+                self._observability.record_metric(
+                    f"tool.{tool_name}.duration",
+                    0.0,
+                    labels={"tool": tool_name, "status": "success"},
+                )
             return str(result)
         except Exception as exc:
             completed_tools.add(tool_id)  # Mark as completed on error too
             error_msg = str(exc)
             await on_event(tool_completed(session.id, tool_id, "error", error_msg))
             return f"Error: {error_msg}"
+        finally:
+            # ── Hook: fire tool.after hooks ──
+            if self._hook_manager:
+                try:
+                    await self._hook_manager.fire(
+                        "tool.after",
+                        session_id=session.id,
+                        tool_name=tool_name,
+                        outcome="success" if tool_id in completed_tools else "error",
+                    )
+                except Exception:
+                    pass  # Hook errors should not break tool execution
 
     async def _execute_tool(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         """Execute a tool via the SandboxProvider or MCP registry.

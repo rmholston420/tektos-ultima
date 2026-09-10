@@ -20,6 +20,7 @@ import { TektosExternalStoreAdapter, TektosExternalStoreAdapterWrapper } from "@
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { Composer } from "@/components/composer/Composer";
 import { ThreadView } from "@/components/streaming/ThreadView";
+import { LandingPage } from "@/components/landing/LandingPage";
 import { themeStore, type ThemeName } from "@/lib/theme-store";
 
 // Dynamic imports for client-only components (SSR-safe)
@@ -87,6 +88,7 @@ export default function App() {
   const [visionModel, setVisionModel] = useState("");
   const [hasHydrated, setHasHydrated] = useState(false);
   const [clientTheme, setClientTheme] = useState<ThemeName>("abyss");
+  const [showLanding, setShowLanding] = useState(true);
 
   // Streaming adapter + runtime
   // Persistent base adapter holds all message data.
@@ -219,6 +221,18 @@ export default function App() {
           adapterRef.current.completeMessage();
           streamStart.current = null;
           setAdapterVersion(v => v + 1);
+          break;
+        }
+        case EventType.FILE_ATTACHED: {
+          const files = envelope.payload.files as Array<{original_filename: string; path: string; size: number}>;
+          if (files && files.length > 0) {
+            const names = files.map(f => f.original_filename).join(", ");
+            console.log(`Files attached: ${names}`);
+          }
+          break;
+        }
+        case EventType.SESSION_RESUMED: {
+          console.log("Session resumed:", envelope.payload);
           break;
         }
         default:
@@ -422,7 +436,24 @@ export default function App() {
   // -------------------------------------------------------------------
 
   return (
-    <div className="shell">
+    <>
+      {/* Landing page overlay — full screen, sits above everything */}
+      {showLanding && (
+        <LandingPage
+          onEnter={() => setShowLanding(false)}
+          backendUrl="http://localhost:8020"
+        />
+      )}
+
+      {/* Main app — fades in after landing */}
+      <div
+        className="shell"
+        style={{
+          opacity: showLanding ? 0 : 1,
+          transition: "opacity 0.6s ease",
+          pointerEvents: showLanding ? "none" : "auto",
+        }}
+      >
       <Sidebar
         sessionStore={sessionStore}
         activeSessionId={activeSession?.id ?? null}
@@ -531,5 +562,6 @@ export default function App() {
         )}
       </div>
     </div>
+    </>
   );
 }

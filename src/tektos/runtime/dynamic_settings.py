@@ -398,3 +398,16 @@ def detect_task_type(prompt: str) -> TaskType:
         return TaskType.CREATIVE_WRITING
     else:
         return TaskType.SIMPLE_QUERY
+
+
+# ── Singleton accessor ────────────────────────────────────────────────────────
+
+_dynamic_settings: DynamicSettings | None = None
+
+
+def get_dynamic_settings() -> DynamicSettings:
+    """Get or create the singleton DynamicSettings."""
+    global _dynamic_settings
+    if _dynamic_settings is None:
+        _dynamic_settings = DynamicSettings()
+    return _dynamic_settings

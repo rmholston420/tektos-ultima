@@ -57,6 +57,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import logging
@@ -68,6 +69,12 @@ try:
     from .persistence import MemoryPersistence as _MemoryPersistence  # noqa: F401
 except ImportError:
     _MemoryPersistence = None  # type: ignore
+
+# Import FileBasedMemory as fallback persistence
+try:
+    from .file_based_memory import FileBasedMemory as _FileBasedMemory  # noqa: F401
+except ImportError:
+    _FileBasedMemory = None  # type: ignore
 
 log = logging.getLogger("tektos.memory")
 
@@ -225,11 +232,30 @@ class MemorySystem:
                 self.persistence = _MemoryPersistence()
             else:
                 self.persistence = None  # type: ignore
+        # FileBasedMemory fallback for cross-session persistence
+        if _FileBasedMemory is not None:
+            try:
+                self.file_memory = _FileBasedMemory(
+                    memory_dir=str(Path(__file__).parent / "file_memory"),
+                    project_root=str(Path(__file__).parent.parent.parent),
+                )
+            except Exception as e:
+                log.warning(f"Failed to initialize FileBasedMemory: {e}")
+                self.file_memory = None
+        else:
+            self.file_memory = None
         # Load persisted entries into memory on init
         self._load_from_persistence()
         # Start background decay scheduler
         if self.persistence:
             self.persistence.start_decay_scheduler(interval=30.0)
+        # Backup scheduler for all databases
+        try:
+            from .backup_scheduler import BackupScheduler
+            self.backup_scheduler = BackupScheduler()
+        except Exception as e:
+            log.warning(f"Failed to initialize BackupScheduler: {e}")
+            self.backup_scheduler = None
         # Dreamtime engine (passive reflection) — initialized last to avoid circular deps
         self.dreamtime: DreamtimeEngine = DreamtimeEngine(self)
 

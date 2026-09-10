@@ -249,7 +249,7 @@ class SelfGUIExpander:
             "",
             store_import,
             "",
-            "  let isOpen = $state(false);",
+            "  let isOpen = false;",
             "",
             "  function toggle(): void {",
             "    isOpen = !isOpen;",

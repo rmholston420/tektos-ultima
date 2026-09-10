@@ -39,6 +39,22 @@ from pydantic import Field as _Field
 log = _log.getLogger("tektos.main")
 
 
+
+# Supporting systems
+from tektos.runtime.context_compactor import ContextCompactor, get_context_compactor
+from tektos.runtime.conversation_compressor import ConversationCompressor, get_conversation_compressor
+from tektos.runtime.dynamic_settings import DynamicSettings, get_dynamic_settings
+from tektos.runtime.state_manager import StateManager, get_state_manager
+from tektos.runtime.experience_replay import ExperienceReplay, get_experience_replay
+from tektos.runtime.reflection_engine import ReflectionEngine, get_reflection_engine
+from tektos.runtime.synthesis_engine import SynthesisEngine, get_synthesis_engine
+from tektos.runtime.backup_scheduler import BackupScheduler, get_backup_scheduler
+from tektos.runtime.telemetry_collector import TelemetryCollector, get_telemetry_collector
+from tektos.runtime.repo_map import RepoMap, get_repo_map
+from tektos.self_improvement.loop import SelfImprovementLoop, get_self_improvement_loop
+from tektos.repograph import Repograph, get_repograph
+from tektos.runtime.rag_retriever import RAGRetriever, get_rag_retriever
+
 # ---------------------------------------------------------------------------
 # Globals — initialized in lifespan
 # ---------------------------------------------------------------------------
@@ -51,6 +67,66 @@ _mcp_client: Any = None
 _metabolism: Any = None
 _voice_manager: Any = None
 
+# Self-repair and recovery
+self_repair_engine: SelfRepairEngine | None = None
+auto_recovery: AutoRecoveryManager | None = None
+loop_guard: ToolCallLoopGuard | None = None
+
+# VSM core — Manager (S3), Planner (S4), Executor (S1)
+manager: Manager | None = None
+planner: Planner | None = None
+executor: Executor | None = None
+
+# Immune system
+immune_system: ImmuneSystem | None = None
+
+# Self-modification
+self_modification_engine: SelfModificationEngine | None = None
+
+# Supporting systems
+context_compactor: ContextCompactor | None = None
+conversation_compressor: ConversationCompressor | None = None
+dynamic_settings: DynamicSettings | None = None
+state_manager: StateManager | None = None
+experience_replay: ExperienceReplay | None = None
+reflection_engine: ReflectionEngine | None = None
+synthesis_engine: SynthesisEngine | None = None
+backup_scheduler: BackupScheduler | None = None
+telemetry_collector: TelemetryCollector | None = None
+repo_map: RepoMap | None = None
+self_improvement_loop: SelfImprovementLoop | None = None
+repograph: Repograph | None = None
+
+
+# Observability and context engineering
+observability: ObservabilityManager | None = None
+ace_framework: ACEFramework | None = None
+
+# Long-running agent support
+long_running_agent: LongRunningAgent | None = None
+
+# Multi-agent orchestration
+multi_agent_orchestrator: MultiAgentOrchestrator | None = None
+hierarchical_agent: HierarchicalAgent | None = None
+
+# Evaluation framework
+evaluation_harness: EvaluationHarness | None = None
+
+# Tool routing
+tool_router: ToolRouter | None = None
+
+# Plugin loading
+plugin_loader: PluginLoader | None = None
+
+# Git integration
+git_integration: GitIntegration | None = None
+
+# Email gateway
+email_gateway: EmailGateway | None = None
+
+# Rate limiter
+rate_limiter: RateLimiter | None = None
+
 from tektos.db_manager import DatabaseManager
 from tektos.migrations.schema_evolution import SchemaEvolutionEngine
 from tektos.protocol.envelope import (
@@ -59,10 +135,11 @@ from tektos.protocol.envelope import (
     session_ready,
     system_message,
 )
-from tektos.runtime.sdk import RuntimeSDK
+from tektos.runtime.sdk import RuntimeSDK, HookContext
 from tektos.runtime.session import LiveSession, SessionManager
 from tektos.runtime.session_state import SessionState, SessionStateManager
 from tektos.runtime.ws_manager import WebSocketManager
+from tektos.runtime.hooks import HookManager
 from tektos.self_improvement.engine import SelfImprovementAdapter
 from tektos.store.event_store import (
     append_event,
@@ -73,6 +150,54 @@ from tektos.store.event_store import (
 from tektos.store.event_store import close as store_close
 from tektos.event_bus import get_event_bus
 from tektos.state_machine import get_state_machine, State
+
+# Self-repair and recovery
+from tektos.self_repair.engine import SelfRepairEngine, get_self_repair_engine
+from tektos.recovery import AutoRecoveryManager, RecoveryConfig
+from tektos.runtime.loop_guard import get_guard, ToolCallLoopGuard
+
+# Observability and context engineering
+from tektos.runtime.observability import ObservabilityManager, get_observability_manager
+from tektos.runtime.context_engineering import ACEFramework, get_ace_framework
+
+# Long-running agent support
+from tektos.runtime.long_running_agent import LongRunningAgent, get_long_running_agent
+
+# Multi-agent orchestration
+from tektos.runtime.multi_agent_orchestrator import MultiAgentOrchestrator
+from tektos.runtime.hierarchical_agent import HierarchicalAgent, get_hierarchical_agent
+
+# Evaluation framework
+from tektos.runtime.evaluation_framework import EvaluationHarness, get_evaluation_harness
+
+# Tool routing
+from tektos.runtime.tool_router import ToolRouter
+
+# VSM core — Manager (S3), Planner (S4), Executor (S1)
+from tektos.agents.manager.orchestrator import Manager
+from tektos.agents.planner.orchestrator import Planner
+from tektos.agents.coding_agent.executor import Executor
+
+# Immune system
+from tektos.runtime.immune_system import ImmuneSystem, get_immune_system
+
+# Self-modification
+from tektos.runtime.self_modification import SelfModificationEngine, get_self_modification_engine
+
+# Repo memory
+from tektos.runtime.repo_memory import get_repo_memory
+
+# Plugin loading
+from tektos.plugin_loader import PluginLoader
+
+# Git integration
+from tektos.git_integration import GitIntegration
+
+# Email gateway
+from tektos.email_gateway import EmailGateway, EmailConfig
+
+# Rate limiter
+from rate_limiter import RateLimiter
 
 session_manager: SessionManager
 runtime_sdk: RuntimeSDK
@@ -92,7 +217,7 @@ state_managers: dict[str, SessionStateManager] = {}
 @_asynccontextmanager
 async def lifespan(app: _FastAPI):
     """Initialize and clean up resources."""
-    global session_manager, runtime_sdk, ws_manager, schema_engine, self_improvement
+    global session_manager, runtime_sdk, ws_manager, schema_engine, self_improvement, observability, tool_router, self_repair_engine, evaluation_harness
 
     # 1. Initialize event store FIRST (provides db_path)
     from tektos.store.event_store import init as init_event_store
@@ -118,10 +243,15 @@ async def lifespan(app: _FastAPI):
     except Exception as exc:
         log.warning("Schema migration failed (continuing): %s", exc)
 
-    # 5. Initialize runtime SDK
+    # 5. Initialize runtime SDK (self_improvement_adapter=None initially — set at step 7)
     runtime_sdk = RuntimeSDK(
         llm_base_url=_os.getenv("TEKTOS_LLM_BASE_URL", "http://127.0.0.1:8091/v1"),
         llm_model=_os.getenv("TEKTOS_LLM_MODEL", "Qwen3.6-35B-A3B-Q4_K_M"),
+        self_improvement_adapter=None,
+        observability_manager=observability,
+        tool_router=tool_router,
+        repo_memory=get_repo_memory(str(_Path(__file__).parent.parent.parent)),
+        hook_manager=HookManager(),
     )
 
     # 5b. Initialize model router with running LLM as default
@@ -171,6 +301,8 @@ async def lifespan(app: _FastAPI):
         ws_event_emitter=lambda **kw: _emit_schema_event(**kw),
         skill_manager=_skill_manager,
     )
+    # Wire self-improvement into SDK (SDK was created at step 5 with None)
+    runtime_sdk._self_improvement = self_improvement
 
     # 8. Initialize event bus + state machine (nervous system)
     _event_bus = get_event_bus()
@@ -187,6 +319,49 @@ async def lifespan(app: _FastAPI):
     _event_bus.subscribe("*", lambda e: log.debug(f"VSM S2 recorded {e.event_type}"), "vsm_event_stream")
 
     log.info("Event bus + state machine initialized (nervous system)")
+
+    # 8b. Initialize VSM core — Manager (S3), Planner (S4), Executor (S1)
+    global manager, planner, executor, immune_system, self_modification_engine
+    manager = Manager()
+    planner = Planner()
+    executor = Executor(workspace=str(_Path(__file__).parent.parent.parent / "sandbox"))
+    log.info("VSM core initialized: Manager (S3), Planner (S4), Executor (S1)")
+
+    # 8c. Initialize immune system (self-defending architecture)
+    try:
+        immune_system = get_immune_system()
+        await immune_system.start()
+        log.info("Immune system initialized and started")
+    except Exception as exc:
+        log.warning("Failed to initialize immune system (continuing without it): %s", exc)
+        immune_system = None
+
+    # 8d. Initialize self-modification engine
+    self_modification_engine = get_self_modification_engine(
+        project_root=str(_Path(__file__).parent.parent.parent),
+        max_risk_level="medium",
+    )
+    log.info("Self-modification engine initialized")
+
+    # 8e. Initialize supporting systems
+    global context_compactor, conversation_compressor, dynamic_settings, state_manager
+    global experience_replay, reflection_engine, synthesis_engine, backup_scheduler
+    global telemetry_collector, repo_map, self_improvement_loop, repograph
+    
+    context_compactor = get_context_compactor()
+    conversation_compressor = get_conversation_compressor()
+    dynamic_settings = get_dynamic_settings()
+    state_manager = get_state_manager()
+    experience_replay = get_experience_replay()
+    reflection_engine = get_reflection_engine()
+    synthesis_engine = get_synthesis_engine()
+    backup_scheduler = get_backup_scheduler()
+    telemetry_collector = get_telemetry_collector()
+    repo_map = get_repo_map(project_root=str(_Path(__file__).parent.parent.parent))
+    self_improvement_loop = get_self_improvement_loop()
+    repograph = get_repograph()
+    log.info("Supporting systems initialized: ContextCompactor, ConversationCompressor, DynamicSettings, StateManager, ExperienceReplay, ReflectionEngine, SynthesisEngine, BackupScheduler, TelemetryCollector, RepoMap, SelfImprovementLoop, Repograph")
+
 
     # 9. Initialize tool registry (replaces hardcoded TOOLS_SCHEMA)
     from tektos.tools.registry import ToolRegistry, MCPClient, ToolDefinition
@@ -511,6 +686,120 @@ async def lifespan(app: _FastAPI):
     log.info("Voice system initialized")
     log.info("Metabolism engine initialized (VRAM + context budget + power)")
 
+    # 11b. Initialize HookManager with BuiltinHooks
+    if runtime_sdk._hook_manager:
+        from tektos.runtime.hooks import BuiltinHooks
+        BuiltinHooks(runtime_sdk._hook_manager.registry, resource_monitor=runtime_sdk._metabolism_engine)
+        log.info("HookManager with BuiltinHooks initialized")
+
+    # 12. Initialize self-repair engine (self-healing architecture)
+    self_repair_engine = SelfRepairEngine(
+        check_interval=30.0,
+        warning_threshold=0.7,
+        critical_threshold=0.5,
+        max_repair_attempts=3,
+        max_repair_time_seconds=120.0,
+    )
+    await self_repair_engine.start()
+    log.info("Self-repair engine initialized and started")
+
+    # 12b. Wire self-repair engine into SDK for immune system integration
+    runtime_sdk._self_repair_engine = self_repair_engine
+
+    # 13. Initialize auto-recovery manager (state recovery on restart)
+    auto_recovery = AutoRecoveryManager(
+        session_manager=session_manager,
+        config=RecoveryConfig(enabled=True),
+    )
+    try:
+        recovery_report = await auto_recovery.recover()
+        log.info("Auto-recovery complete: %d recovered, %d interrupted, %d archived",
+                 recovery_report.sessions_recovered,
+                 recovery_report.sessions_interrupted,
+                 recovery_report.sessions_archived)
+    except Exception as exc:
+        log.warning("Auto-recovery failed (continuing): %s", exc)
+
+    # 14. Initialize loop guard (tool-call loop detection)
+    loop_guard = get_guard()
+    log.info("Loop guard initialized")
+
+    # 15. Initialize observability manager (metrics + tracing)
+    observability = get_observability_manager(
+        project_root=str(_Path(__file__).parent.parent.parent),
+        output_dir=str(_Path(__file__).parent.parent.parent / "observability"),
+    )
+    log.info("Observability manager initialized")
+
+    # 16. Initialize ACE framework (context engineering)
+    ace_framework = get_ace_framework(max_context_tokens=262144)
+    log.info("ACE framework initialized")
+
+    # 17. Initialize long-running agent support
+    long_running_agent = LongRunningAgent(
+        session_id="system",
+        checkpoint_dir=str(_Path(__file__).parent.parent.parent / "checkpoints"),
+    )
+    log.info("Long-running agent support initialized")
+
+    # 18. Initialize multi-agent orchestrator
+    multi_agent_orchestrator = MultiAgentOrchestrator(max_concurrent_agents=5)
+    log.info("Multi-agent orchestrator initialized")
+
+    # 19. Initialize hierarchical agent
+    hierarchical_agent = get_hierarchical_agent(session_id="system", max_concurrent_agents=3)
+    log.info("Hierarchical agent initialized")
+
+    # 20. Initialize evaluation harness
+    evaluation_harness = get_evaluation_harness(
+        project_root=str(_Path(__file__).parent.parent.parent),
+        output_dir=str(_Path(__file__).parent.parent.parent / "evaluations"),
+    )
+    log.info("Evaluation harness initialized")
+
+    # 21. Initialize tool router
+    tool_router = ToolRouter()
+    log.info("Tool router initialized")
+
+    # 22. Initialize plugin loader
+    from tektos.plugin import PluginRegistry
+    _plugin_registry = PluginRegistry()
+    plugin_loader = PluginLoader(registry=_plugin_registry)
+    try:
+        loaded = plugin_loader.load_plugins()
+        log.info("Plugin loader initialized — %d plugin(s) loaded", len(loaded))
+    except Exception as exc:
+        log.warning("Plugin loader initialization failed (continuing): %s", exc)
+
+    # 23. Initialize git integration
+    git_integration = GitIntegration(
+        repo_root=str(_Path(__file__).parent.parent.parent),
+    )
+    git_integration.init_repo()
+    log.info("Git integration initialized")
+
+    # 24. Initialize email gateway (optional — only if credentials are set)
+    email_enabled = _os.getenv("TEKTOS_EMAIL_ENABLED", "false").lower() == "true"
+    if email_enabled:
+        try:
+            email_config = EmailConfig(
+                email_address=_os.getenv("TEKTOS_EMAIL_ADDRESS", ""),
+                password=_os.getenv("TEKTOS_EMAIL_PASSWORD", ""),
+                use_oauth2=_os.getenv("TEKTOS_EMAIL_OAUTH2", "true").lower() == "true",
+            )
+            email_gateway = EmailGateway(config=email_config)
+            await email_gateway.initialize()
+            log.info("Email gateway initialized: %s", email_config.email_address)
+        except Exception as exc:
+            log.warning("Failed to initialize email gateway: %s", exc)
+            email_gateway = None
+    else:
+        log.info("Email gateway skipped (TEKTOS_EMAIL_ENABLED not set)")
+
+    # 25. Initialize rate limiter (token bucket for API calls)
+    rate_limiter = RateLimiter(rate=10.0, capacity=20)
+    log.info("Rate limiter initialized (rate=10/s, capacity=20)")
+
     # 11. Start runtime SDK
     await runtime_sdk.start()
 
@@ -534,12 +823,46 @@ async def lifespan(app: _FastAPI):
         log.info("Vision client skipped (TEKTOS_VISION_LLM_URL not set)")
 
     # 10. Initialize memory persistence layer
-    global memory_system
     from tektos.memory.memory_system import MemorySystem
     memory_system = MemorySystem()
     if memory_system.persistence:
         memory_system.persistence.start_decay_scheduler(interval=60.0)
     log.info("Memory persistence initialized (SQLite-backed 4-tier)")
+
+    # 10b. Initialize RAG retriever (semantic search over codebase, memory, events)
+    from tektos.runtime.embedder import EmbedderClient
+    embedder_client = EmbedderClient(
+        llm_base_url=_os.getenv("TEKTOS_EMBEDDER_BASE_URL", "http://127.0.0.1:8091/v1"),
+        model=_os.getenv("TEKTOS_EMBEDDER_MODEL", "Qwen3-Embedding-0.6B-Q8_0"),
+    )
+    await embedder_client.start()
+    rag_retriever = RAGRetriever(
+        embedder_client=embedder_client,
+        project_root=str(_Path(__file__).parent.parent.parent),
+        db_path=str(_Path(__file__).parent / ".." / ".." / "data" / "tektos_rag.db"),
+    )
+    await rag_retriever.start()
+    # Wire module-level singleton
+    from tektos.runtime.rag_retriever import set_rag_retriever
+    set_rag_retriever(rag_retriever)
+    # Index memory entries if any exist
+    if memory_system.file_memory:
+        try:
+            entries = memory_system.file_memory.get_memory()
+            if entries:
+                entry_dicts = []
+                for e in entries:
+                    entry_dicts.append({
+                        "content": e.content,
+                        "category": e.category,
+                        "source": e.source,
+                        "id": f"mem-{hash(e.content) % 100000:05d}",
+                    })
+                await rag_retriever.index_memory_entries(entry_dicts)
+                log.info("Indexed %d memory entries into RAG", len(entry_dicts))
+        except Exception as exc:
+            log.warning("Failed to index memory into RAG: %s", exc)
+    log.info("RAG retriever initialized (embedder + SQLite vector index)")
 
     # 11. Initialize Telegram gateway (optional — only if bot token is set)
     telegram_bot_token = _os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN")
@@ -567,12 +890,45 @@ async def lifespan(app: _FastAPI):
     yield
 
     # Cleanup
+    # Stop self-repair engine
+    if self_repair_engine:
+        try:
+            await self_repair_engine.stop()
+            log.info("Self-repair engine stopped")
+        except Exception as exc:
+            log.warning("Error stopping self-repair engine: %s", exc)
+
+    # Stop email gateway
+    if email_gateway:
+        try:
+            await email_gateway.shutdown()
+            log.info("Email gateway stopped")
+        except Exception as exc:
+            log.warning("Error stopping email gateway: %s", exc)
+
     if telegram_gateway:
         try:
             await telegram_gateway.stop()
             log.info("Telegram gateway stopped")
         except Exception as exc:
             log.warning("Error stopping Telegram gateway: %s", exc)
+
+    # Stop immune system
+    if immune_system:
+        try:
+            await immune_system.stop()
+            log.info("Immune system stopped")
+        except Exception as exc:
+            log.warning("Error stopping immune system: %s", exc)
+
+    # Stop RAG retriever
+    if rag_retriever:
+        try:
+            await rag_retriever.stop()
+            log.info("RAG retriever stopped")
+        except Exception as exc:
+            log.warning("Error stopping RAG retriever: %s", exc)
+
     await runtime_sdk.stop()
     await store_close()
     log.info("Tektos-Ultima-v1 backend stopped")
@@ -632,6 +988,26 @@ class InterruptRequest(_BaseModel):
 
 class ModelRequest(_BaseModel):
     model: str
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# WebSocket event emitter
+# ---------------------------------------------------------------------------
+
+async def _emit_schema_event(session_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    """Emit an event to all connected WebSocket clients."""
+    try:
+        for ws in list(ws_manager._sessions.get(session_id, set())):
+            await ws.send_text(_json.dumps({
+                "type": event_type,
+                "session_id": session_id,
+                "payload": payload,
+                "protocol_version": PROTOCOL_VERSION,
+                "timestamp": _datetime.now(_timezone.utc).isoformat(),
+            }))
+    except Exception as exc:
+        log.error(f"Error emitting {event_type}: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -949,30 +1325,6 @@ async def search_skills(query: str, limit: int = 20):
     }
 
 
-@app.post("/api/skills")
-async def create_skill(body: _CreateSkillBody):
-    """Create a new skill."""
-    if not _skill_manager:
-        return {"error": "Skill manager not initialized"}
-    try:
-        skill = _skill_manager.create_skill(
-            name=body.name,
-            description=body.description,
-            trigger_conditions=body.trigger_conditions,
-            steps=body.steps,
-            category=body.category,
-            source=body.source,
-            metadata=body.metadata,
-        )
-        return {
-            "id": skill.id,
-            "name": skill.name,
-            "created": True,
-        }
-    except Exception as e:
-        raise _HTTPException(status_code=400, detail=str(e))
-
-
 @app.get("/api/skills/{skill_id}")
 async def get_skill(skill_id: str):
     """Get a single skill by ID."""
@@ -1009,49 +1361,6 @@ class _UpdateSkillBody(_BaseModel):
     enabled: bool | None = None
     version: str | None = None
     metadata: dict[str, Any] | None = None
-
-
-@app.put("/api/skills/{skill_id}")
-async def update_skill(skill_id: str, body: _UpdateSkillBody):
-    """Update an existing skill."""
-    if not _skill_manager:
-        return {"error": "Skill manager not initialized"}
-    skill = _skill_manager.registry.get_by_id(skill_id)
-    if not skill:
-        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
-    if body.name is not None:
-        skill.name = body.name
-    if body.description is not None:
-        skill.description = body.description
-    if body.trigger_conditions is not None:
-        skill.trigger_conditions = body.trigger_conditions
-    if body.steps is not None:
-        skill.steps = body.steps
-    if body.category is not None:
-        skill.category = body.category
-    if body.enabled is not None:
-        skill.is_active = body.enabled
-    if body.version is not None:
-        skill.version = body.version
-    if body.metadata is not None:
-        skill.metadata = body.metadata
-    updated = _skill_manager.registry.update(skill)
-    return {
-        "id": updated.id,
-        "name": updated.name,
-        "updated": True,
-    }
-
-
-@app.delete("/api/skills/{skill_id}")
-async def delete_skill(skill_id: str):
-    """Delete a skill."""
-    if not _skill_manager:
-        return {"error": "Skill manager not initialized"}
-    deleted = _skill_manager.registry.delete(skill_id)
-    if not deleted:
-        raise _HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
-    return {"deleted": True}
 
 
 @app.post("/api/skills/{skill_id}/toggle")
@@ -1451,6 +1760,110 @@ async def get_immune_memory_entries(limit: int = 50):
 # ---------------------------------------------------------------------------
 # REST API — Schema Evolution
 # ---------------------------------------------------------------------------
+
+
+# VSM core endpoints
+@app.get("/api/manager")
+async def get_manager_health():
+    """Get Manager (S3) health report: archetypes, metrics, guardrails, spiral radius."""
+    if not manager:
+        return {"error": "Manager not initialized"}
+    return manager.get_health_report()
+
+
+@app.get("/api/manager/feedback")
+async def get_manager_feedback(limit: int = 20):
+    """Get recent Manager feedback history."""
+    if not manager:
+        return {"error": "Manager not initialized"}
+    return {
+        "feedback": [
+            {
+                "type": f.type.value,
+                "severity": f.severity.value,
+                "what": f.what,
+                "why": f.why,
+                "try_this": f.try_this,
+            }
+            for f in manager._feedback_history[-limit:]
+        ],
+        "count": len(manager._feedback_history),
+    }
+
+
+@app.get("/api/planner")
+async def get_planner_status():
+    """Get Planner (S4) status and configuration."""
+    if not planner:
+        return {"error": "Planner not initialized"}
+    return {
+        "context_budget": planner.context_budget,
+        "max_clarifying_questions": planner.max_clarifying_questions,
+        "status": "initialized",
+    }
+
+
+@app.post("/api/planner/plan")
+async def run_planner_plan(prompt: str, context: dict = {}):
+    """Run the full planning pipeline on a natural language prompt."""
+    if not planner:
+        return {"error": "Planner not initialized"}
+    try:
+        result = planner.plan(prompt=prompt, context=context)
+        return {
+            "spec": result.spec.to_dict() if result.spec else None,
+            "language_game": result.language_game_detected.value if result.language_game_detected else None,
+            "ambiguities_found": len(result.ambiguities_found),
+            "clarifying_questions": [q.question for q in result.clarifying_questions_asked],
+            "context_budget_used": result.context_budget_used,
+            "context_budget_total": result.context_budget_total,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/executor")
+async def get_executor_status():
+    """Get Executor (S1) status and execution history."""
+    if not executor:
+        return {"error": "Executor not initialized"}
+    return {
+        "workspace": str(executor.workspace),
+        "execution_count": executor.execution_count,
+        "status": "initialized",
+    }
+
+
+@app.get("/api/self-modification")
+async def get_self_modification_status():
+    """Get SelfModificationEngine status."""
+    if not self_modification_engine:
+        return {"error": "Self-modification engine not initialized"}
+    return self_modification_engine.get_status()
+
+
+@app.post("/api/self-modification/submit")
+async def submit_self_modification(request: dict):
+    """Submit a self-modification request."""
+    if not self_modification_engine:
+        return {"error": "Self-modification engine not initialized"}
+    try:
+        from tektos.runtime.self_modification import ModificationRequest, ModificationType
+        mod_request = ModificationRequest(
+            request_id=request.get("request_id", f"mod_{len(self_modification_engine._requests) + 1}"),
+            modification_type=ModificationType(request.get("modification_type", "code")),
+            description=request.get("description", ""),
+            target=request.get("target", ""),
+            changes=request.get("changes", {}),
+            justification=request.get("justification", ""),
+            risk_level=request.get("risk_level", "low"),
+            rollback_plan=request.get("rollback_plan"),
+        )
+        result = await self_modification_engine.submit_modification(mod_request)
+        return result.to_dict()
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @app.get("/api/schema")
 async def get_schema():
@@ -2104,72 +2517,6 @@ async def get_session(session_id: str):
     }
 
 
-@app.post("/api/sessions")
-async def create_session(req: CreateSessionRequest):
-    """Create a new session."""
-    # Handle fork
-    if req.fork_session or req.fork_session_id:
-        source_id = req.fork_session_id or (req.resume_session_id if req.resume_session_id else None)
-        if not source_id:
-            raise _HTTPException(status_code=400, detail="fork_session requires fork_session_id")
-        session = await session_manager.fork_session(
-            source_session_id=source_id,
-            model=req.model,
-            cwd=req.cwd,
-        )
-    # Handle resume
-    elif req.resume_session_id:
-        session = await session_manager.resume_session(req.resume_session_id)
-    else:
-        session = await session_manager.create_session(
-            model=req.model,
-            cwd=req.cwd,
-            provider=req.provider,
-            permission_mode=req.permission_mode,
-            resume_session_id=req.resume_session_id,
-        )
-
-    return {
-        "id": session.id,
-        "title": session.title or "",
-        "model": session.model,
-        "cwd": session.cwd,
-        "status": session.status,
-    }
-
-
-class _UpdateSessionBody(_BaseModel):
-    title: str | None = None
-    status: str | None = None
-
-
-@app.patch("/api/sessions/{session_id}")
-async def update_session(session_id: str, body: _UpdateSessionBody):
-    """Update a session (rename, status change, etc)."""
-    try:
-        session = await session_manager.get_session(session_id)
-        if not session:
-            raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        if body.title is not None:
-            session.title = body.title
-        if body.status is not None:
-            session.status = body.status
-        session.updated_at = _time.time()
-        await append_event(session_id, "session.updated", {"status": session.status, "title": session.title})
-        return {
-            "id": session.id,
-            "title": session.title,
-            "model": session.model,
-            "status": session.status,
-            "is_archived": session.is_archived,
-            "tag": session.tag,
-        }
-    except _HTTPException:
-        raise
-    except Exception as exc:
-        raise _HTTPException(status_code=500, detail=str(exc))
-
-
 @app.post("/api/sessions/{session_id}/archive")
 async def archive_session(session_id: str):
     """Archive a session."""
@@ -2213,16 +2560,6 @@ async def fork_session(session_id: str, body: _ForkSessionBody):
         raise
     except Exception as exc:
         raise _HTTPException(status_code=500, detail=str(exc))
-
-
-@app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session and its events."""
-    try:
-        count = await session_manager.delete_session(session_id)
-        return {"ok": True, "events_deleted": count}
-    except KeyError:
-        raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
 
 @app.post("/api/sessions/{session_id}/interrupt")
@@ -2504,37 +2841,7 @@ async def vision_status():
 
 
 # ---------------------------------------------------------------------------
-# Schema introspection endpoint
-# ---------------------------------------------------------------------------
-
-@app.get("/api/schema")
-async def get_schema_info():
-    """Expose current schema version, history, and self-model for agent introspection."""
-    schema = schema_engine.get_schema()
-    history = schema_engine.get_evolution_history()
-    snapshot = schema_engine.introspect()
-    
-    # Get self-improvement stats
-    experiences = self_improvement.get_experience()
-    metrics = self_improvement.get_learning_metrics()
-    
-    return {
-        "version": schema_engine.get_current_version(),
-        "schema": schema,
-        "evolution_history": history,
-        "introspection": snapshot,
-        "self_improvement": {
-            "experiences_tracked": len(experiences),
-            "total_tasks": metrics.get("total_tasks", 0),
-            "total_improvements": metrics.get("total_improvements", 0),
-            "learning_velocity": metrics.get("learning_velocity", 0.0),
-            "best_model": metrics.get("best_model_for_coding"),
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# LAST_KNOWN_STATE.md endpoints
+# State management request models
 # ---------------------------------------------------------------------------
 
 class StateSaveRequest(_BaseModel):
@@ -2553,6 +2860,10 @@ class StateSaveRequest(_BaseModel):
     notes: list[str] = _Field(default_factory=list)
     referenced_files: list[str] = _Field(default_factory=list)
 
+
+# ---------------------------------------------------------------------------
+# Schema introspection endpoint
+# ---------------------------------------------------------------------------
 
 @app.get("/api/state/{session_id}")
 async def get_session_state(session_id: str):
@@ -2922,395 +3233,205 @@ async def list_api_keys():
 # Telemetry API
 # ---------------------------------------------------------------------------
 
-@app.get("/api/telemetry")
-async def get_telemetry():
-    """Real GPU/CPU/memory telemetry."""
-    import psutil
-    import os
+@app.post("/api/hooks/{hook_name}/trigger")
+async def api_trigger_hook(hook_name: str):
+    """Trigger a hook."""
     try:
-        import pynvml
-        pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        gpu = {
-            "temperature": pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU),
-            "utilization": pynvml.nvmlDeviceGetUtilizationRates(handle).gpu,
-            "memory_used": pynvml.nvmlDeviceGetMemoryInfo(handle).used,
-            "memory_total": pynvml.nvmlDeviceGetMemoryInfo(handle).total,
-            "power_draw": pynvml.nvmlDeviceGetPowerUsage(handle),
-            "power_limit": pynvml.nvmlDeviceGetPowerManagementLimit(handle) // 1000,
+        from tektos.runtime.hooks import hooks as hook_registry
+        await hook_registry.run(hook_name, HookContext(
+            session_id="api",
+            model="api",
+            task_description=f"Triggered {hook_name}",
+            outcome="triggered",
+        ))
+        return {"triggered": True, "hook": hook_name}
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Config ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/scheduling")
+async def api_scheduling():
+    """Get scheduling status."""
+    try:
+        return {
+            "enabled": True,
+            "jobs": [],
+            "next_run": None,
         }
-        pynvml.nvmlShutdown()
-    except Exception as e:
-        log.warning("Failed to read GPU status: %s", e)
-        gpu = {"temperature": 0, "utilization": 0, "memory_used": 0, "memory_total": 0, "power_draw": 0, "power_limit": 400}
-    
-    return {
-        "gpu": gpu,
-        "cpu": {
-            "utilization": psutil.cpu_percent(interval=0.1),
-            "cores": psutil.cpu_count(logical=True),
-            "load_avg": list(psutil.getloadavg()),
-        },
-        "memory": {
-            "used": psutil.virtual_memory().used,
-            "total": psutil.virtual_memory().total,
-            "percent": psutil.virtual_memory().percent,
-        },
-        "timestamp": _time.time(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Hooks API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/hooks")
-async def list_hooks():
-    """List all registered hooks."""
-    from tektos.runtime.hooks import BuiltinHooks, HookRegistry
-    hooks = []
-    for name, hook_fn in BuiltinHooks._hooks.items():
-        hooks.append({
-            "name": name,
-            "handler": hook_fn.__name__ if hasattr(hook_fn, "__name__") else str(hook_fn),
-            "category": "builtin",
-        })
-    return hooks
-
-
-# ---------------------------------------------------------------------------
-# Config API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/config")
-async def get_config():
-    """Return runtime configuration."""
-    import os
-    config = [
-        {"key": "llm_base_url", "value": runtime_sdk._llm_base_url, "type": "string", "description": "LLM server base URL", "sensitive": False},
-        {"key": "llm_model", "value": runtime_sdk._llm_model, "type": "string", "description": "Active LLM model", "sensitive": False},
-        {"key": "protocol_version", "value": PROTOCOL_VERSION, "type": "string", "description": "Protocol version", "sensitive": False},
-        {"key": "gpu_power_limit", "value": os.getenv("GPU_POWER_LIMIT", "400"), "type": "string", "description": "GPU power limit (watts)", "sensitive": False},
-        {"key": "log_level", "value": os.getenv("TEKTOS_LOG_LEVEL", "INFO"), "type": "string", "description": "Logging level", "sensitive": False},
-        {"key": "vision_llm_url", "value": os.getenv("TEKTOS_VISION_LLM_URL", ""), "type": "string", "description": "Vision LLM URL", "sensitive": False},
-        {"key": "vision_model", "value": os.getenv("TEKTOS_VISION_MODEL", ""), "type": "string", "description": "Vision model", "sensitive": False},
-        {"key": "telegram_bot_token", "value": "••••••••" if os.getenv("TEKTOS_TELEGRAM_BOT_TOKEN") else "(not set)", "type": "string", "description": "Telegram bot token", "sensitive": True},
-    ]
-    return {"config": config}
-
-
-# ---------------------------------------------------------------------------
-# Schedule API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/schedule")
-async def list_schedule():
-    """List scheduled tasks from backup scheduler."""
-    from tektos.memory.backup_scheduler import BackupScheduler
-    scheduler = BackupScheduler()
-    backups = scheduler.list_backups()
-    tasks = []
-    for i, b in enumerate(backups):
-        tasks.append({
-            "id": str(i),
-            "name": b.get("name", "backup"),
-            "type": b.get("type", "unknown"),
-            "status": "completed",
-            "last_run": b.get("timestamp", ""),
-            "next_run": "",
-            "interval": "daily",
-            "enabled": True,
-        })
-    return tasks
-
-
-# ---------------------------------------------------------------------------
-# Skills/Plugins API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/skills")
-async def list_skills():
-    """List all registered plugins as skills."""
-    from tektos.plugin import PluginRegistry
-    registry = PluginRegistry()
-    plugins = registry.list_plugins()
-    skills = []
-    for p in plugins:
-        skills.append({
-            "name": p.name,
-            "version": p.version,
-            "category": p.config.get("category", "general"),
-            "description": p.config.get("description", ""),
-            "enabled": True,
-        })
-    return skills
-
-
-# ---------------------------------------------------------------------------
-# Keys API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/keys")
-async def list_keys():
-    """List configured API keys (masked values)."""
-    import os
-    keys = []
-    for var in ["TEKTOS_LLM_API_KEY", "TEKTOS_VISION_LLM_API_KEY", "TEKTOS_TELEGRAM_BOT_TOKEN", "TEKTOS_HUGGINGFACE_TOKEN"]:
-        value = os.getenv(var)
-        keys.append({
-            "name": var.replace("TEKTOS_", "").replace("_", " "),
-            "key": var,
-            "value": "••••••••" if value else "(not set)",
-            "configured": bool(value),
-        })
-    return {"keys": keys}
-
-
-# ---------------------------------------------------------------------------
-# Routing API
-# ---------------------------------------------------------------------------
-
-@app.get("/api/routing/decide")
-async def route_decision(task: str = "", category: str = "general"):
-    """Make a model routing decision."""
-    from tektos.routing import ModelRouter
-    router = ModelRouter()
-    decision = router.route(task=task, category=category)
-    return {
-        "recommended_model": decision.get("model", runtime_sdk._llm_model),
-        "category": category,
-        "confidence": decision.get("confidence", 0.8),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-async def _emit_schema_event(session_id: str, event_type: str, payload: dict[str, Any]) -> None:
-    """Emit an event to all connected WebSocket clients."""
-    try:
-        for ws in list(ws_manager._sessions.get(session_id, set())):
-            await ws.send_text(_json.dumps({
-                "type": event_type,
-                "session_id": session_id,
-                "payload": payload,
-                "protocol_version": PROTOCOL_VERSION,
-                "timestamp": _datetime.now(_timezone.utc).isoformat(),
-            }))
     except Exception as exc:
-        log.error(f"Error emitting {event_type}: {exc}")
+        raise _HTTPException(status_code=500, detail=str(exc))
 
 
-async def _handle_prompt(
-    websocket: _WebSocket,
-    session: LiveSession,
-    prompt: str,
-    system_prompt: str | None,
-) -> None:
-    """Handle a prompt submission. Streams events to the WebSocket."""
-    approved_tools: dict[str, bool] = {}
-    approval_event: _asyncio.Event = _asyncio.Event()
+# ── Model Router ────────────────────────────────────────────────────────────
 
-    async def on_event(envelope):
-        """Send envelope to WebSocket."""
-        try:
-            await websocket.send_text(envelope.to_json())
-        except Exception as e:
-            log.warning("WebSocket send failed (client may have disconnected): %s", e)
-
-    async def on_tool_approval(tool_id: str, tool_name: str) -> bool:
-        """Wait for user approval on a tool call."""
-        try:
-            await _asyncio.wait_for(approval_event.wait(), timeout=30.0)
-            return approved_tools.get(tool_id, False)
-        except _asyncio.TimeoutError:
-            log.warning(f"Tool approval timeout for {tool_id}")
-            return False
-
-    await runtime_sdk.submit_prompt(
-        session=session,
-        prompt=prompt,
-        system_prompt=system_prompt,
-        on_event=on_event,
-        on_tool_approval=on_tool_approval,
-    )
-
-
-# ---------------------------------------------------------------------------
-# WebSocket handler
-# ---------------------------------------------------------------------------
-
-@app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: _WebSocket, session_id: str):
-    """WebSocket endpoint for live session streaming.
-
-    Protocol versioned via query param: ?protocol_version=1.0.0
-    """
-    log.info(f"WS handler: incoming connection for session {session_id[:8]}")
-    # Accept the WebSocket with CORS headers (CORSMiddleware doesn't apply to WS)
-    # Starlette expects headers as a list of (name, value) tuples
-    extra_headers = []
-    origin = websocket.headers.get("origin", "")
-    allowed_origins = ["http://localhost:3000", "http://localhost:3003", "http://localhost:3006", "http://localhost:5555"]
-    if origin in allowed_origins:
-        extra_headers.extend([
-            (b"access-control-allow-origin", origin.encode()),
-            (b"access-control-allow-methods", b"GET, POST"),
-            (b"access-control-allow-headers", b"*"),
-            (b"access-control-allow-credentials", b"true"),
-        ])
-    await websocket.accept(headers=extra_headers if extra_headers else None)
-    log.info(f"WS handler: accepted, now checking session {session_id[:8]}")
-
-    # Check if session exists
-    session = await session_manager.get_session(session_id)
-    if not session:
-        log.warning(f"WS handler: session {session_id[:8]} NOT FOUND — available sessions: {[s.id[:8] for s in session_manager._sessions.values()]}")
-        await websocket.close(code=4004, reason="Session not found")
-        return
-    log.info(f"WS handler: session found, status={session.status}")
-
-    # Add WS connection to both registries (session_manager for lifecycle,
-    # ws_manager for broadcast fanout)
-    await session_manager.add_ws_connection(session_id, websocket)
-    await ws_manager.add(session_id, websocket)
-
-    # Send session.ready (first message after connect)
-    await websocket.send_text(session_ready(session_id, since_seq=0).to_json())
-    log.info(f"WS handler: sent session.ready, entering main loop for {session_id[:8]}")
-
+@app.post("/api/rag/retrieve")
+async def api_rag_retrieve(body: RAGRetrieveRequest):
+    """Retrieve relevant chunks via semantic search."""
     try:
-        # Main loop: receive prompts and tool approvals
-        log.info(f"WebSocket main loop starting for session {session_id[:8]}")
-        while True:
-            try:
-                log.debug(f"Waiting for WS message on session {session_id[:8]}")
-                text = await websocket.receive_text()
-                log.info(f"WS message received on session {session_id[:8]}: {text[:200]}")
-            except _WebSocketDisconnect:
-                log.info(f"WS disconnected on session {session_id[:8]}")
-                break
-            except Exception as exc:
-                log.error(f"WS receive error on session {session_id[:8]}: {exc}", exc_info=True)
-                break
+        retriever = get_rag_retriever()
+        if not retriever:
+            raise _HTTPException(status_code=503, detail="RAG retriever not initialized")
 
-            # JSON parsing wrapped in try/except (PlexClaw bug #9 fix)
-            log.debug(f"WS message received: {text[:200]}")
-            try:
-                data = _json.loads(text)
-            except _json.JSONDecodeError:
-                log.error(f"Invalid JSON from WS: {text[:200]}")
-                await websocket.send_text(_json.dumps({
-                    "type": "error",
-                    "detail": "invalid JSON",
-                    "protocol_version": PROTOCOL_VERSION,
-                }))
-                continue
+        results = await retriever.retrieve(
+            query=body.query,
+            top_k=body.top_k,
+            sources=body.sources,
+            min_score=body.min_score,
+        )
 
-            msg_type = data.get("type", "")
-            log.debug(f"Message type: {msg_type}")
-
-            if msg_type == "prompt":
-                # Submit prompt to LLM
-                prompt_text = data.get("prompt", "")
-                system_prompt = data.get("system_prompt")
-                log.info(f"[WS] Prompt received for session {session_id[:8]}: {prompt_text[:100]}")
-
-                if not prompt_text:
-                    await websocket.send_text(_json.dumps({
-                        "type": "error",
-                        "detail": "empty prompt",
-                        "protocol_version": PROTOCOL_VERSION,
-                    }))
-                    continue
-
-                # Run prompt in background task
-                log.info(f"[WS] Creating prompt task for session {session_id[:8]}")
-                task = _asyncio.create_task(
-                    _handle_prompt(websocket, session, prompt_text, system_prompt)
-                )
-                log.info(f"[WS] Prompt task created: {task}")
-                log.info(f"[WS] Task done? {task.done()}")
-
-            elif msg_type == "approve":
-                # Approve a tool call
-                tool_id = data.get("tool_id")
-                try:
-                    # Approve is handled in the runtime SDK's approval callback
-                    # For now, emit a system message
-                    await websocket.send_text(system_message(
-                        session_id, f"Tool {tool_id} approved", "info"
-                    ).to_json())
-                except KeyError:
-                    await websocket.send_text(_json.dumps({
-                        "type": "error",
-                        "detail": f"no pending tool {tool_id}",
-                        "protocol_version": PROTOCOL_VERSION,
-                    }))
-
-            elif msg_type == "reject":
-                # Reject a tool call
-                tool_id = data.get("tool_id")
-                try:
-                    await websocket.send_text(system_message(
-                        session_id, f"Tool {tool_id} rejected", "warning"
-                    ).to_json())
-                except KeyError:
-                    await websocket.send_text(_json.dumps({
-                        "type": "error",
-                        "detail": f"no pending tool {tool_id}",
-                        "protocol_version": PROTOCOL_VERSION,
-                    }))
-
-            elif msg_type == "interrupt":
-                await session_manager.interrupt_session(session_id)
-                await websocket.send_text(session_interrupted(session_id).to_json())
-
-            elif msg_type == "archive":
-                await session_manager.archive_session(session_id)
-                await websocket.send_text(system_message(
-                    session_id, "Session archived", "info"
-                ).to_json())
-
-            elif msg_type == "ping":
-                await websocket.send_text(_json.dumps({
-                    "type": "pong",
-                    "timestamp": _time.time(),
-                    "protocol_version": PROTOCOL_VERSION,
-                }))
-
-            else:
-                await websocket.send_text(_json.dumps({
-                    "type": "error",
-                    "detail": f"unknown message type: {msg_type}",
-                    "protocol_version": PROTOCOL_VERSION,
-                }))
-
-    except _WebSocketDisconnect:
-        log.debug(f"WS disconnected from {session_id[:8]}")
+        return {
+            "query": body.query,
+            "results": [
+                {
+                    "source": r.source,
+                    "source_id": r.source_id,
+                    "content": r.content,
+                    "score": r.score,
+                    "metadata": r.metadata,
+                }
+                for r in results
+            ],
+            "count": len(results),
+        }
     except Exception as exc:
-        log.error(f"WS handler error: {exc}", exc_info=True)
-    finally:
-        await session_manager.remove_ws_connection(session_id, websocket)
-        await ws_manager.remove(session_id, websocket)
+        raise _HTTPException(status_code=500, detail=str(exc))
 
 
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
+@app.post("/api/rag/retrieve/code")
+async def api_rag_retrieve_code(body: RAGRetrieveRequest):
+    """Retrieve relevant code chunks."""
+    try:
+        retriever = get_rag_retriever()
+        if not retriever:
+            raise _HTTPException(status_code=503, detail="RAG retriever not initialized")
 
-def main():
-    """Run the server."""
-    import uvicorn
-    uvicorn.run(
-        "tektos.main:app",
-        host="127.0.0.1",
-        port=8020,
-        reload=False,
-        log_level="info",
-    )
+        results = await retriever.retrieve_code(
+            query=body.query,
+            top_k=body.top_k,
+            min_score=body.min_score,
+        )
+
+        return {
+            "query": body.query,
+            "results": [
+                {
+                    "source": r.source,
+                    "source_id": r.source_id,
+                    "content": r.content,
+                    "score": r.score,
+                    "metadata": r.metadata,
+                }
+                for r in results
+            ],
+            "count": len(results),
+        }
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
 
 
-if __name__ == "__main__":
-    main()
+@app.post("/api/rag/retrieve/memory")
+async def api_rag_retrieve_memory(body: RAGRetrieveRequest):
+    """Retrieve relevant memory chunks."""
+    try:
+        retriever = get_rag_retriever()
+        if not retriever:
+            raise _HTTPException(status_code=503, detail="RAG retriever not initialized")
+
+        results = await retriever.retrieve_memory(
+            query=body.query,
+            top_k=body.top_k,
+            min_score=body.min_score,
+        )
+
+        return {
+            "query": body.query,
+            "results": [
+                {
+                    "source": r.source,
+                    "source_id": r.source_id,
+                    "content": r.content,
+                    "score": r.score,
+                    "metadata": r.metadata,
+                }
+                for r in results
+            ],
+            "count": len(results),
+        }
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/rag/index")
+async def api_rag_index(body: RAGIndexRequest):
+    """Index the codebase (or re-index)."""
+    try:
+        retriever = get_rag_retriever()
+        if not retriever:
+            raise _HTTPException(status_code=503, detail="RAG retriever not initialized")
+
+        count = await retriever.index_codebase(project_root=body.project_root)
+        stats = await retriever.get_stats()
+        return {
+            "indexed": count,
+            "stats": stats,
+        }
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/rag/reindex")
+async def api_rag_reindex(body: RAGIndexRequest):
+    """Clear the index and re-index everything."""
+    try:
+        retriever = get_rag_retriever()
+        if not retriever:
+            raise _HTTPException(status_code=503, detail="RAG retriever not initialized")
+
+        count = await retriever.reindex(project_root=body.project_root)
+        stats = await retriever.get_stats()
+        return {
+            "reindexed": count,
+            "stats": stats,
+        }
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/rag/stats")
+async def api_rag_stats():
+    """Get RAG index statistics."""
+    try:
+        retriever = get_rag_retriever()
+        if not retriever:
+            raise _HTTPException(status_code=503, detail="RAG retriever not initialized")
+
+        stats = await retriever.get_stats()
+        return stats
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/rag/context")
+async def api_rag_context(body: RAGRetrieveRequest):
+    """Build a context prompt from retrieved chunks (for context injection)."""
+    try:
+        retriever = get_rag_retriever()
+        if not retriever:
+            raise _HTTPException(status_code=503, detail="RAG retriever not initialized")
+
+        context = await retriever.build_context_prompt(
+            query=body.query,
+            max_tokens=16384,
+            top_k=body.top_k,
+        )
+
+        return {
+            "query": body.query,
+            "context": context,
+            "has_context": bool(context),
+        }
+    except Exception as exc:
+        raise _HTTPException(status_code=500, detail=str(exc))
+

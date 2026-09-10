@@ -315,7 +315,10 @@ class ToolRouter:
         }
 
     def _execute_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Execute a tool (placeholder for actual tool execution).
+        """Execute a tool by delegating to the appropriate handler.
+
+        In production, this would call the actual tool via the tool registry.
+        For now, we provide a basic implementation that routes to known tools.
 
         Args:
             tool_name: Name of the tool.
@@ -324,14 +327,114 @@ class ToolRouter:
         Returns:
             Tool execution result.
         """
-        # In production, this would call the actual tool
-        # For now, return a placeholder result
-        return {
-            "success": True,
-            "tool": tool_name,
-            "args": args,
-            "result": f"Executed {tool_name} with args: {args}",
-        }
+        # Route to known tool implementations
+        if tool_name == "terminal":
+            import subprocess
+            command = args.get("command", "")
+            try:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=args.get("timeout", 300),
+                )
+                return {
+                    "success": result.returncode == 0,
+                    "tool": tool_name,
+                    "stdout": result.stdout[:10000],
+                    "stderr": result.stderr[:10000],
+                    "exit_code": result.returncode,
+                }
+            except subprocess.TimeoutExpired:
+                return {"success": False, "error": "Command timed out", "tool": tool_name}
+            except Exception as e:
+                return {"success": False, "error": str(e), "tool": tool_name}
+        
+        elif tool_name == "read_file":
+            import os
+            path = args.get("path", "")
+            if not os.path.exists(path):
+                return {"success": False, "error": f"File not found: {path}", "tool": tool_name}
+            try:
+                with open(path, 'r') as f:
+                    content = f.read()
+                return {
+                    "success": True,
+                    "tool": tool_name,
+                    "path": path,
+                    "content": content[:100000],
+                    "size": len(content),
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e), "tool": tool_name}
+        
+        elif tool_name == "write_file":
+            import os
+            path = args.get("path", "")
+            file_content = args.get("content", "")
+            mode = args.get("mode", "write")
+            try:
+                os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+                with open(path, 'w') as f:
+                    f.write(file_content)
+                return {
+                    "success": True,
+                    "tool": tool_name,
+                    "path": path,
+                    "mode": mode,
+                    "bytes_written": len(file_content),
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e), "tool": tool_name}
+        
+        elif tool_name == "search_files":
+            import subprocess
+            query = args.get("query", "")
+            search_path = args.get("path", ".")
+            case_sensitive = args.get("case_sensitive", False)
+            max_results = args.get("max_results", 50)
+            try:
+                cmd = ["grep", "-r", "-l"]
+                if not case_sensitive:
+                    cmd.append("-i")
+                cmd.extend(["--max-count", str(max_results), query, search_path])
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                matches = [m.strip() for m in result.stdout.strip().splitlines() if m.strip()]
+                return {
+                    "success": True,
+                    "tool": tool_name,
+                    "query": query,
+                    "path": search_path,
+                    "matches": matches[:max_results],
+                    "count": len(matches),
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e), "tool": tool_name}
+        
+        elif tool_name == "web_search":
+            # Placeholder for web search - would integrate with a search API
+            return {
+                "success": True,
+                "tool": tool_name,
+                "query": args.get("query", ""),
+                "results": [],
+                "note": "Web search integration pending",
+            }
+        
+        else:
+            # Unknown tool - return error
+            return {
+                "success": False,
+                "error": f"Unknown tool: {tool_name}",
+                "tool": tool_name,
+                "available_tools": list(self.capabilities.keys()),
+            }
 
     def _classify_error(self, error: Exception) -> ErrorType:
         """Classify an error type.

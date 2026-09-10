@@ -405,3 +405,16 @@ class ContextCompactor:
         relevant_indices = {idx for _, idx in scored[:top_k]}
 
         return [msg for i, msg in enumerate(messages) if i in relevant_indices]
+
+
+# ── Singleton accessor ────────────────────────────────────────────────────────
+
+_compactor: ContextCompactor | None = None
+
+
+def get_context_compactor() -> ContextCompactor:
+    """Get or create the singleton ContextCompactor."""
+    global _compactor
+    if _compactor is None:
+        _compactor = ContextCompactor()
+    return _compactor

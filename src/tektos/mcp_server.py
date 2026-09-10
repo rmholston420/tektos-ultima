@@ -334,3 +334,87 @@ def _handle_tools_call(request: MCPRequest) -> dict:
 
     result = mcp_registry.call_tool(name, arguments)
     return request.to_response(result.to_dict())
+
+
+# ── HTTP Transport (FastAPI) ────────────────────────────────────────────────
+
+
+def create_app(sandbox=None, runtime_sdk=None) -> Any:
+    """Create a FastAPI application with MCP HTTP transport.
+
+    This wires the MCP protocol handler to actual HTTP endpoints so
+    external agents can discover and call Tektos tools over HTTP.
+
+    Args:
+        sandbox: Optional sandbox for tool execution.
+        runtime_sdk: Optional runtime SDK reference.
+
+    Returns:
+        A FastAPI app instance.
+    """
+    try:
+        from fastapi import FastAPI, Request
+        from fastapi.responses import JSONResponse
+    except ImportError:
+        raise RuntimeError(
+            "fastapi not installed. Install with: pip install fastapi uvicorn"
+        )
+
+    app = FastAPI(
+        title="Tektos MCP Server",
+        description="Model Context Protocol server for Tektos tools",
+        version="0.1.0",
+    )
+
+    # Register Tektos tools if sandbox is provided
+    if sandbox is not None:
+        register_tektos_tools(sandbox, runtime_sdk=runtime_sdk)
+
+    @app.post("/mcp")
+    async def handle_mcp_http(request: Request) -> JSONResponse:
+        """Handle MCP JSON-RPC 2.0 requests over HTTP POST."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid JSON body"},
+            )
+
+        mcp_req = MCPRequest.from_json(body)
+        response = handle_mcp_request(mcp_req)
+        return JSONResponse(content=response)
+
+    @app.get("/mcp")
+    async def handle_mcp_http_get() -> JSONResponse:
+        """Handle MCP initialization over HTTP GET."""
+        mcp_req = MCPRequest(method="initialize", request_id=0)
+        response = handle_mcp_request(mcp_req)
+        return JSONResponse(content=response)
+
+    @app.get("/health")
+    async def health_check() -> dict:
+        """Health check endpoint."""
+        return {
+            "status": "ok",
+            "server": "tektos-mcp",
+            "version": "0.1.0",
+            "tools_registered": len(mcp_registry._tools),
+        }
+
+    return app
+
+
+def run_server(host: str = "0.0.0.0", port: int = 8093, sandbox=None, runtime_sdk=None) -> None:
+    """Run the MCP server as a standalone HTTP service.
+
+    Args:
+        host: Bind address.
+        port: Port to listen on.
+        sandbox: Optional sandbox for tool execution.
+        runtime_sdk: Optional runtime SDK reference.
+    """
+    import uvicorn
+
+    app = create_app(sandbox=sandbox, runtime_sdk=runtime_sdk)
+    uvicorn.run(app, host=host, port=port)

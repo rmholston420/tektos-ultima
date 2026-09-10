@@ -198,55 +198,56 @@ Write the plan as a markdown document. You MUST include the exact words PCI DSS,
         ("multi-region", "multi-region disaster recovery"),
     ], "Extremely Difficult 5: Global Fintech Platform Architecture Plan")
 
-# Main
-print("=" * 60)
-print("Tektos-Ultima v1 — Remaining 4 Extremely Difficult Planning Tests")
-print("Timeout: 1800s (30 minutes)")
-print("=" * 60)
+if __name__ == "__main__":
+    # Main
+    print("=" * 60)
+    print("Tektos-Ultima v1 — Remaining 4 Extremely Difficult Planning Tests")
+    print("Timeout: 1800s (30 minutes)")
+    print("=" * 60)
 
-# Check backend
-try:
-    resp = requests.get(f"{BACKEND}/health", timeout=5)
-    resp.raise_for_status()
-    health = resp.json()
-    print(f"Backend running: LLM={health['llm_url']}, Model={health['llm_model']}")
-except Exception as e:
-    print(f"Backend not running: {e}")
-    sys.exit(1)
-
-tests = [
-    ("Extremely Difficult 2: Megacity Smart Infrastructure", test_megacity),
-    ("Extremely Difficult 3: Enterprise Data Mesh", test_data_mesh),
-    ("Extremely Difficult 4: M&A Technology Integration", test_ma_integration),
-    ("Extremely Difficult 5: Global Fintech Platform", test_fintech),
-]
-
-results = []
-for name, test_func in tests:
+    # Check backend
     try:
-        passed = test_func()
-        results.append((name, passed))
+        resp = requests.get(f"{BACKEND}/health", timeout=5)
+        resp.raise_for_status()
+        health = resp.json()
+        print(f"Backend running: LLM={health['llm_url']}, Model={health['llm_model']}")
     except Exception as e:
-        print(f"FAIL Test '{name}' raised exception: {e}")
-        import traceback
-        traceback.print_exc()
-        results.append((name, False))
+        print(f"Backend not running: {e}")
+        sys.exit(1)
 
-# Summary
-print("\n" + "=" * 60)
-print("SUMMARY")
-print("=" * 60)
+    tests = [
+        ("Extremely Difficult 2: Megacity Smart Infrastructure", test_megacity),
+        ("Extremely Difficult 3: Enterprise Data Mesh", test_data_mesh),
+        ("Extremely Difficult 4: M&A Technology Integration", test_ma_integration),
+        ("Extremely Difficult 5: Global Fintech Platform", test_fintech),
+    ]
 
-passed = sum(1 for _, p in results if p)
-total = len(results)
+    results = []
+    for name, test_func in tests:
+        try:
+            passed = test_func()
+            results.append((name, passed))
+        except Exception as e:
+            print(f"FAIL Test '{name}' raised exception: {e}")
+            import traceback
+            traceback.print_exc()
+            results.append((name, False))
 
-print(f"\n  Total: {passed}/{total} tests passed")
+    # Summary
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
 
-for name, result_passed in results:
-    status = "PASS" if result_passed else "FAIL"
-    print(f"  {status} — {name}")
+    passed = sum(1 for _, p in results if p)
+    total = len(results)
 
-if passed == total:
-    print("\nAll remaining Extremely Difficult tests passed!")
-else:
-    print(f"\n{total - passed} test(s) failed")
+    print(f"\n  Total: {passed}/{total} tests passed")
+
+    for name, result_passed in results:
+        status = "PASS" if result_passed else "FAIL"
+        print(f"  {status} — {name}")
+
+    if passed == total:
+        print("\nAll remaining Extremely Difficult tests passed!")
+    else:
+        print(f"\n{total - passed} test(s) failed")

@@ -55,24 +55,25 @@ def check_file_exists(filepath, timeout=1800):
         time.sleep(5)
     return False
 
-print("=" * 60)
-print("Retry: Extremely Difficult 3 (simpler prompt)")
-print("=" * 60)
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Retry: Extremely Difficult 3 (simpler prompt)")
+    print("=" * 60)
 
-# Check backend
-try:
-    resp = requests.get(f"{BACKEND}/health", timeout=5)
-    resp.raise_for_status()
-    health = resp.json()
-    print(f"Backend: LLM={health['llm_url']}, Model={health['llm_model']}")
-except Exception as e:
-    print(f"Backend not running: {e}")
-    sys.exit(1)
+    # Check backend
+    try:
+        resp = requests.get(f"{BACKEND}/health", timeout=5)
+        resp.raise_for_status()
+        health = resp.json()
+        print(f"Backend: LLM={health['llm_url']}, Model={health['llm_model']}")
+    except Exception as e:
+        print(f"Backend not running: {e}")
+        sys.exit(1)
 
-session_id = create_session()
+    session_id = create_session()
 
-# Much simpler prompt - fewer requirements, shorter
-prompt = """Write an enterprise data mesh implementation plan at /tmp/data_mesh.md.
+    # Much simpler prompt - fewer requirements, shorter
+    prompt = """Write an enterprise data mesh implementation plan at /tmp/data_mesh.md.
 
 Requirements:
 1. Data mesh principles (domain ownership, data as a product, self-serve platform)
@@ -86,23 +87,23 @@ Requirements:
 
 Write the plan as a markdown document. You MUST include the exact words data as a product, federated governance, and self-serve in the content."""
 
-print("Sending prompt...")
-events = send_prompt(session_id, prompt, timeout=TIMEOUT)
-print(f"  Received {len(events)} events")
+    print("Sending prompt...")
+    events = send_prompt(session_id, prompt, timeout=TIMEOUT)
+    print(f"  Received {len(events)} events")
 
-if check_file_exists("/tmp/data_mesh.md", timeout=TIMEOUT):
-    content = open("/tmp/data_mesh.md").read()
-    content_lower = content.lower()
-    print(f"PASS: File created ({len(content)} bytes)")
-    
-    for keyword, name in [("data as a product", "data as a product"), 
-                           ("federated governance", "federated governance"),
-                           ("self-serve", "self-serve"),
-                           ("domain ownership", "domain ownership"),
-                           ("ABAC", "ABAC access control")]:
-        if keyword.lower() in content_lower:
-            print(f"  {name} found")
-        else:
-            print(f"  {name} NOT found")
-else:
-    print("FAIL: File not created within timeout")
+    if check_file_exists("/tmp/data_mesh.md", timeout=TIMEOUT):
+        content = open("/tmp/data_mesh.md").read()
+        content_lower = content.lower()
+        print(f"PASS: File created ({len(content)} bytes)")
+        
+        for keyword, name in [("data as a product", "data as a product"), 
+                               ("federated governance", "federated governance"),
+                               ("self-serve", "self-serve"),
+                               ("domain ownership", "domain ownership"),
+                               ("ABAC", "ABAC access control")]:
+            if keyword.lower() in content_lower:
+                print(f"  {name} found")
+            else:
+                print(f"  {name} NOT found")
+    else:
+        print("FAIL: File not created within timeout")

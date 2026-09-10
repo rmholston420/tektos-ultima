@@ -697,10 +697,389 @@
   }
 }
 
+/* ─── Cybernetic Theme (Bio-Tech Fusion) ─────────────────────── */
+
+[data-theme="cybernetic"] {
+  --bg-1: #070d0a;
+  --bg-2: #0a120e;
+  --bg-3: #0e1a14;
+  --bg-4: #12221a;
+  --bg-5: #162c22;
+
+  --surface: #0c1610;
+  --surface-hover: #111e17;
+  --surface-active: #162820;
+  --surface-glass: rgba(12, 22, 16, 0.75);
+
+  --border: rgba(0, 229, 160, 0.07);
+  --border-hover: rgba(0, 229, 160, 0.14);
+  --border-active: rgba(0, 229, 160, 0.22);
+
+  --text-primary: #dce8e0;
+  --text-secondary: #6b8a7a;
+  --text-muted: #3d5a4a;
+  --text-tertiary: #5a7a6a;
+  --text-accent: #00e5a0;
+
+  --accent: #00e5a0;
+  --accent-hover: #33f0b5;
+  --accent-glow: rgba(0, 229, 160, 0.12);
+  --accent-glow-lg: rgba(0, 229, 160, 0.25);
+
+  --status-success: #00e5a0;
+  --status-success-bg: rgba(0, 229, 160, 0.1);
+  --status-warning: #fbbf24;
+  --status-warning-bg: rgba(251, 191, 36, 0.1);
+  --status-error: #f87171;
+  --status-error-bg: rgba(248, 113, 113, 0.1);
+  --status-info: #a855f7;
+  --status-info-bg: rgba(168, 85, 247, 0.1);
+
+  --gradient-bg: linear-gradient(135deg, #070d0a 0%, #0a1410 50%, #08100c 100%);
+  --gradient-surface: linear-gradient(180deg, rgba(0,229,160,0.03) 0%, transparent 100%);
+  --gradient-accent: linear-gradient(135deg, #00e5a0 0%, #06b6d4 100%);
+  --gradient-flow: linear-gradient(90deg, #00e5a0, #06b6d4, #a855f7, #00e5a0);
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 20px var(--accent-glow);
+  --shadow-glow-lg: 0 0 40px var(--accent-glow-lg);
+}
+
+[data-theme="cybernetic"] body::before {
+  background:
+    radial-gradient(ellipse 70% 50% at 25% 35%, rgba(0, 229, 160, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 70% at 75% 65%, rgba(168, 85, 247, 0.06) 0%, transparent 60%);
+  animation: breathe 6s ease-in-out infinite;
+}
+
+/* Cybernetic-specific panel overrides */
+[data-theme="cybernetic"] .panel {
+  border-color: var(--border);
+  background: var(--surface-glass);
+}
+[data-theme="cybernetic"] .panel:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-lg);
+}
+
+[data-theme="cybernetic"] .shell-sidebar {
+  background: var(--surface-glass);
+  border-right-color: var(--border);
+}
+
+[data-theme="cybernetic"] .shell-header {
+  background: var(--surface-glass);
+  border-bottom-color: var(--border);
+}
+
+[data-theme="cybernetic"] .composer {
+  background: var(--surface-glass);
+  border-top-color: var(--border);
+}
+
+[data-theme="cybernetic"] .composer-input-wrapper {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+[data-theme="cybernetic"] .composer-input-wrapper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+[data-theme="cybernetic"] .message-card-user {
+  background: var(--gradient-accent);
+}
+
+[data-theme="cybernetic"] .message-card-assistant {
+  background: var(--surface-glass);
+  border-color: var(--border);
+}
+
+[data-theme="cybernetic"] .code-block {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+[data-theme="cybernetic"] .code-block-header {
+  background: var(--bg-4);
+  border-bottom-color: var(--border);
+}
+
+[data-theme="cybernetic"] .file-change {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+[data-theme="cybernetic"] .progress-bar {
+  background: var(--bg-4);
+}
+[data-theme="cybernetic"] .progress-bar-fill {
+  background: var(--gradient-accent);
+}
+
+[data-theme="cybernetic"] .dashboard-card {
+  background: var(--surface);
+  border-color: var(--border);
+}
+[data-theme="cybernetic"] .dashboard-card:hover {
+  border-color: var(--border-hover);
+}
+
+[data-theme="cybernetic"] .sidebar-item {
+  color: var(--text-secondary);
+}
+[data-theme="cybernetic"] .sidebar-item:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+[data-theme="cybernetic"] .sidebar-item-active {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+[data-theme="cybernetic"] .theme-selector {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+[data-theme="cybernetic"] .theme-btn.active {
+  background: var(--accent);
+  color: #070d0a;
+}
+
+/* Cybernetic glass panel override for SystemDashboard */
+[data-theme="cybernetic"] .glass-panel,
+[data-theme="cybernetic"] .panel-glass {
+  background: rgba(12, 22, 16, 0.6) !important;
+  backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(0, 229, 160, 0.1) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Cybernetic theme overrides for input elements */
+[data-theme="cybernetic"] input,
+[data-theme="cybernetic"] textarea,
+[data-theme="cybernetic"] select {
+  background: var(--bg-3);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+[data-theme="cybernetic"] input:focus,
+[data-theme="cybernetic"] textarea:focus,
+[data-theme="cybernetic"] select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* Cybernetic scrollbar */
+[data-theme="cybernetic"] ::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+}
+[data-theme="cybernetic"] ::-webkit-scrollbar-thumb:hover {
+  background: var(--border-active);
+}
+[data-theme="cybernetic"] ::selection {
+  background: var(--accent-glow);
+  color: var(--text-primary);
+}
+
 /* ─── Clarity Theme Overrides ───────────────────────────────── */
 
 [data-theme="clarity"] body::before {
   background:
     radial-gradient(ellipse 80% 60% at 20% 30%, rgba(37, 99, 235, 0.04) 0%, transparent 60%),
     radial-gradient(ellipse 60% 80% at 80% 70%, rgba(124, 58, 237, 0.04) 0%, transparent 60%);
+}
+
+/* ─── Plasmodial Theme (Slime Mold / Physarum) ───────────────── */
+
+[data-theme="plasmodial"] {
+  /* Primary: Golden Yellow (Physarum polycephalum) — vitality, presence, awakening */
+  --bg-1: #1a1408;
+  --bg-2: #221c0e;
+  --bg-3: #2c2414;
+  --bg-4: #362e1a;
+  --bg-5: #403820;
+
+  --surface: #241e10;
+  --surface-hover: #2e2618;
+  --surface-active: #383020;
+  --surface-glass: rgba(36, 30, 16, 0.75);
+
+  /* Border: subtle golden warmth */
+  --border: rgba(245, 158, 11, 0.08);
+  --border-hover: rgba(245, 158, 11, 0.16);
+  --border-active: rgba(245, 158, 11, 0.28);
+
+  /* Text: cream white (Ceratiomyxa fructiculosa) — potential, purity */
+  --text-primary: #fef3c7;
+  --text-secondary: #b89a6a;
+  --text-muted: #7a6a4a;
+  --text-tertiary: #9a8a6a;
+  --text-accent: #fbbf24;
+
+  /* Accent: Golden Yellow (Physarum polycephalum) */
+  --accent: #f59e0b;
+  --accent-hover: #fbbf24;
+  --accent-glow: rgba(245, 158, 11, 0.12);
+  --accent-glow-lg: rgba(245, 158, 11, 0.25);
+
+  /* Status colors — mapped to slime mold species */
+  --status-success: #fbbf24; /* Physarum — vitality */
+  --status-success-bg: rgba(251, 191, 36, 0.1);
+  --status-warning: #ea580c; /* Fuligo — transformation */
+  --status-warning-bg: rgba(234, 88, 12, 0.1);
+  --status-error: #dc2626; /* Lycogala — witness, aliveness */
+  --status-error-bg: rgba(220, 38, 38, 0.1);
+  --status-info: #7c3aed; /* Cribraria — deep insight */
+  --status-info-bg: rgba(124, 58, 237, 0.1);
+
+  /* Gradients: Physarum → Fuligo → Cribraria → Ceratiomyxa */
+  --gradient-bg: linear-gradient(135deg, #1a1408 0%, #221c0e 50%, #1c140a 100%);
+  --gradient-surface: linear-gradient(180deg, rgba(245,158,11,0.04) 0%, transparent 100%);
+  --gradient-accent: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
+  --gradient-flow: linear-gradient(90deg, #f59e0b, #ea580c, #7c3aed, #fef3c7, #f59e0b);
+
+  /* Shadows: warm, organic */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.7);
+  --shadow-glow: 0 0 20px var(--accent-glow);
+  --shadow-glow-lg: 0 0 40px var(--accent-glow-lg);
+}
+
+[data-theme="plasmodial"] body::before {
+  background:
+    radial-gradient(ellipse 70% 50% at 30% 40%, rgba(245, 158, 11, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 70% at 70% 60%, rgba(234, 88, 12, 0.06) 0%, transparent 60%);
+  animation: breathe 7s ease-in-out infinite;
+}
+
+/* Plasmodial-specific panel overrides */
+[data-theme="plasmodial"] .panel {
+  border-color: var(--border);
+  background: var(--surface-glass);
+}
+[data-theme="plasmodial"] .panel:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-lg);
+}
+
+[data-theme="plasmodial"] .shell-sidebar {
+  background: var(--surface-glass);
+  border-right-color: var(--border);
+}
+
+[data-theme="plasmodial"] .shell-header {
+  background: var(--surface-glass);
+  border-bottom-color: var(--border);
+}
+
+[data-theme="plasmodial"] .composer {
+  background: var(--surface-glass);
+  border-top-color: var(--border);
+}
+
+[data-theme="plasmodial"] .composer-input-wrapper {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+[data-theme="plasmodial"] .composer-input-wrapper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+[data-theme="plasmodial"] .message-card-user {
+  background: var(--gradient-accent);
+}
+
+[data-theme="plasmodial"] .message-card-assistant {
+  background: var(--surface-glass);
+  border-color: var(--border);
+}
+
+[data-theme="plasmodial"] .code-block {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+[data-theme="plasmodial"] .code-block-header {
+  background: var(--bg-4);
+  border-bottom-color: var(--border);
+}
+
+[data-theme="plasmodial"] .file-change {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+[data-theme="plasmodial"] .progress-bar {
+  background: var(--bg-4);
+}
+[data-theme="plasmodial"] .progress-bar-fill {
+  background: var(--gradient-accent);
+}
+
+[data-theme="plasmodial"] .dashboard-card {
+  background: var(--surface);
+  border-color: var(--border);
+}
+[data-theme="plasmodial"] .dashboard-card:hover {
+  border-color: var(--border-hover);
+}
+
+[data-theme="plasmodial"] .sidebar-item {
+  color: var(--text-secondary);
+}
+[data-theme="plasmodial"] .sidebar-item:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+[data-theme="plasmodial"] .sidebar-item-active {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+[data-theme="plasmodial"] .theme-selector {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+[data-theme="plasmodial"] .theme-btn.active {
+  background: var(--accent);
+  color: #1a1408;
+}
+
+/* Plasmodial glass panel override for SystemDashboard */
+[data-theme="plasmodial"] .glass-panel,
+[data-theme="plasmodial"] .panel-glass {
+  background: rgba(36, 30, 16, 0.6) !important;
+  backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(245, 158, 11, 0.1) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Plasmodial theme overrides for input elements */
+[data-theme="plasmodial"] input,
+[data-theme="plasmodial"] textarea,
+[data-theme="plasmodial"] select {
+  background: var(--bg-3);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+[data-theme="plasmodial"] input:focus,
+[data-theme="plasmodial"] textarea:focus,
+[data-theme="plasmodial"] select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* Plasmodial scrollbar */
+[data-theme="plasmodial"] ::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+}
+[data-theme="plasmodial"] ::-webkit-scrollbar-thumb:hover {
+  background: var(--border-active);
+}
+[data-theme="plasmodial"] ::selection {
+  background: var(--accent-glow);
+  color: var(--text-primary);
 }

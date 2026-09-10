@@ -416,3 +416,16 @@ def create_default_state(project: str) -> LastKnownState:
         memory_context="",
         referenced_files=[],
     )
+
+
+# ── Singleton accessor ────────────────────────────────────────────────────────
+
+_state_manager: StateManager | None = None
+
+
+def get_state_manager(project: str = "tektos") -> StateManager:
+    """Get or create the singleton StateManager."""
+    global _state_manager
+    if _state_manager is None:
+        _state_manager = StateManager(project=project)
+    return _state_manager

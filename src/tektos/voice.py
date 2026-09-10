@@ -20,13 +20,42 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncGenerator
 
-import edge_tts
-import numpy as np
-from faster_whisper import WhisperModel
-from pydub import AudioSegment
-from pydub.silence import split_on_silence
-
 log = logging.getLogger("tektos.voice")
+
+# ---------------------------------------------------------------------------
+# Optional dependency detection
+# ---------------------------------------------------------------------------
+
+_EDGE_TTS_AVAILABLE = False
+_FASTER_WHISPER_AVAILABLE = False
+_NUMPY_AVAILABLE = False
+_PYDUB_AVAILABLE = False
+
+try:
+    import edge_tts
+    _EDGE_TTS_AVAILABLE = True
+except ImportError:
+    log.warning("edge_tts not installed — TTS unavailable (pip install edge-tts)")
+
+try:
+    from faster_whisper import WhisperModel
+    _FASTER_WHISPER_AVAILABLE = True
+except ImportError:
+    log.warning("faster-whisper not installed — STT unavailable (pip install faster-whisper)")
+
+try:
+    import numpy as np
+    _NUMPY_AVAILABLE = True
+except ImportError:
+    log.warning("numpy not installed — VAD unavailable (pip install numpy)")
+
+try:
+    from pydub import AudioSegment
+    from pydub.silence import split_on_silence
+    _PYDUB_AVAILABLE = True
+except ImportError:
+    log.warning("pydub not installed — audio processing unavailable (pip install pydub)")
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -69,6 +98,10 @@ class STTEngine:
         """Load the Whisper model (lazy, on first use)."""
         if self._model is not None:
             return
+        if not _FASTER_WHISPER_AVAILABLE:
+            raise RuntimeError(
+                "faster-whisper not installed. Install with: pip install faster-whisper"
+            )
         log.info(
             "Loading Whisper %s on %s (%s) — this may take a moment…",
             _WHISPER_MODEL_NAME,
@@ -88,6 +121,11 @@ class STTEngine:
         """Transcribe audio bytes (WAV/MP3) to text."""
         await self.initialize()
         assert self._model is not None
+
+        if not _PYDUB_AVAILABLE:
+            raise RuntimeError(
+                "pydub not installed. Install with: pip install pydub"
+            )
 
         # Convert to temp file for faster-whisper
         tmp = Path("/tmp/tektos_stt_input.wav")
@@ -110,6 +148,10 @@ class TTSVoice:
 
     async def synthesize(self, text: str) -> bytes:
         """Synthesize text to MP3 bytes."""
+        if not _EDGE_TTS_AVAILABLE:
+            raise RuntimeError(
+                "edge_tts not installed. Install with: pip install edge-tts"
+            )
         log.debug("TTS: synthesizing %d chars", len(text))
         communicate = edge_tts.Communicate(text, _TTS_VOICE, rate=_TTS_RATE)
         audio_data = b""
@@ -121,6 +163,10 @@ class TTSVoice:
 
     async def synthesize_stream(self, text: str) -> AsyncGenerator[bytes, None]:
         """Stream TTS audio chunks (for real-time playback)."""
+        if not _EDGE_TTS_AVAILABLE:
+            raise RuntimeError(
+                "edge_tts not installed. Install with: pip install edge-tts"
+            )
         communicate = edge_tts.Communicate(text, _TTS_VOICE, rate=_TTS_RATE)
         async for chunk in communicate.stream():
             if chunk.get("type") == "audio":
@@ -140,6 +186,10 @@ class VoiceActivityDetector:
 
     def detect(self, audio_data: bytes) -> bool:
         """Return True if speech is detected in the audio chunk."""
+        if not _NUMPY_AVAILABLE:
+            raise RuntimeError(
+                "numpy not installed. Install with: pip install numpy"
+            )
         # Convert to numpy array (16-bit PCM)
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float64)
         # Normalize to [-1, 1]

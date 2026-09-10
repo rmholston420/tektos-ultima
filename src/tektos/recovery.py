@@ -30,6 +30,9 @@ from tektos.runtime.session import LiveSession, SessionManager
 from tektos.store.event_store import get_events
 
 import sqlite3
+import os
+
+logger = logging.getLogger(__name__)
 
 
 def _get_all_session_ids() -> list[str]:
@@ -50,8 +53,6 @@ def _get_all_session_ids() -> list[str]:
     finally:
         if "conn" in locals():
             conn.close()
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

@@ -336,6 +336,7 @@ class MetabolismEngine:
                 clock_memory=float(fields[6]) if fields[6] != "N/A" else 0.0,
                 vram_used_mb=float(fields[7]),
                 vram_total_mb=float(fields[8]),
+                vram_free_mb=float(fields[8]) - float(fields[7]),
             )
         except FileNotFoundError:
             log.warning("nvidia-smi not found — GPU metrics unavailable")

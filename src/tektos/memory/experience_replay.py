@@ -20,6 +20,7 @@ The spiral staircase.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -112,6 +113,23 @@ class ExperienceReplay:
         self._max_age_hours = max_age_hours
         self._min_confidence = min_confidence_for_storage
         self._hindsight_enabled = True
+        # Wire SynthesisEngine for direct synthesis storage
+        self._synthesis_engine = None
+        self._memory_system = None
+
+    def link_synthesis_engine(self, synthesis_engine: Any) -> None:
+        """Link this ExperienceReplay to a SynthesisEngine for direct wiring.
+
+        This connects the synthesis→planner wiring so that when
+        SynthesisEngine produces SynthesisFeedback, it is automatically
+        stored in ExperienceReplay for planner guidance.
+
+        Args:
+            synthesis_engine: The SynthesisEngine instance to link.
+        """
+        self._synthesis_engine = synthesis_engine
+        if hasattr(synthesis_engine, 'memory'):
+            self._memory_system = synthesis_engine.memory
 
     def store(
         self,
