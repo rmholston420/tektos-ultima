@@ -10,8 +10,77 @@
 
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { api, type TelemetryData } from "@/lib/api";
+import React, { useState, useEffect, useMemo } from "react";
+import { type TelemetryData } from "@/lib/api";
+
+// ─── Backend Response Normalization ─────────────────────────────────────────
+//
+// The backend `/api/telemetry` endpoint currently returns a flat GPU-only
+// snapshot:
+//   {
+//     timestamp: "ISO-8601 string",
+//     temperature_gpu, power_draw, power_limit, utilization, fan_speed,
+//     clocks: { graphics_mhz, memory_mhz },
+//     memory: { used_mb, total_mb },
+//     thermal_zone, power_state
+//   }
+// The panel was written against a richer nested shape ({gpu:{}, system:{}}).
+// This normalizer bridges the gap without crashing when fields are missing.
+
+interface RawTelemetry {
+  timestamp?: string | number;
+  temperature_gpu?: number;
+  power_draw?: number;
+  power_limit?: number;
+  utilization?: number;
+  fan_speed?: number;
+  clocks?: { graphics_mhz?: number; memory_mhz?: number };
+  memory?: { used_mb?: number; total_mb?: number };
+  // Forward-compat: if the backend later adds these keys, use them.
+  gpu?: Partial<TelemetryData["gpu"]>;
+  system?: Partial<TelemetryData["system"]>;
+}
+
+function normalizeTelemetry(raw: RawTelemetry): TelemetryData {
+  const gpu = raw.gpu ?? {};
+  const system = raw.system ?? {};
+  const memTotal = raw.memory?.total_mb ?? gpu.memory_total ?? 0;
+  const memUsed = raw.memory?.used_mb ?? gpu.memory_used ?? 0;
+  let ts: number;
+  if (typeof raw.timestamp === "number") {
+    ts = raw.timestamp;
+  } else if (typeof raw.timestamp === "string") {
+    const parsed = Date.parse(raw.timestamp);
+    ts = Number.isNaN(parsed) ? Date.now() / 1000 : parsed / 1000;
+  } else {
+    ts = Date.now() / 1000;
+  }
+  return {
+    timestamp: ts,
+    gpu: {
+      temperature: gpu.temperature ?? raw.temperature_gpu ?? 0,
+      utilization: gpu.utilization ?? raw.utilization ?? 0,
+      memory_used: memUsed,
+      memory_total: memTotal || 1, // avoid divide-by-zero in gauges
+      power_draw: gpu.power_draw ?? raw.power_draw ?? 0,
+      power_limit: gpu.power_limit ?? raw.power_limit ?? 0,
+      fan_speed: gpu.fan_speed ?? raw.fan_speed ?? 0,
+      clocks_graphics: gpu.clocks_graphics ?? raw.clocks?.graphics_mhz ?? 0,
+      clocks_memory: gpu.clocks_memory ?? raw.clocks?.memory_mhz ?? 0,
+      memory_utilization:
+        gpu.memory_utilization ?? (memTotal > 0 ? (memUsed / memTotal) * 100 : 0),
+    },
+    system: {
+      cpu_util: system.cpu_util ?? 0,
+      mem_used_gb: system.mem_used_gb ?? 0,
+      mem_total_gb: system.mem_total_gb ?? 1,
+      mem_percent: system.mem_percent ?? 0,
+      disk_used_gb: system.disk_used_gb ?? 0,
+      disk_total_gb: system.disk_total_gb ?? 1,
+      disk_percent: system.disk_percent ?? 0,
+    },
+  };
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -149,9 +218,10 @@ export function TelemetryPanel() {
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
-        const raw: TelemetryData = await res.json();
-        setData(raw);
-        setHistory((prev) => [...prev.slice(-maxHistory + 1), raw]);
+        const rawJson = (await res.json()) as RawTelemetry;
+        const normalized = normalizeTelemetry(rawJson);
+        setData(normalized);
+        setHistory((prev) => [...prev.slice(-maxHistory + 1), normalized]);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to fetch telemetry");

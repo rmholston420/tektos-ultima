@@ -5493,12 +5493,16 @@ async def hindsight_reflect(payload: dict[str, Any]):
 
 
 @app.get("/api/hindsight/experiences")
-async def hindsight_experiences(limit: int = 10):
-    """Get recent experiences from Hindsight."""
+async def hindsight_experiences(context: str = "", limit: int = 10):
+    """Get recent experiences from Hindsight.
+
+    ``context`` is an optional tag/query string. When empty, callers still
+    receive the top ``limit`` recall results with no tag preference.
+    """
     if _hindsight_client is None:
         raise _HTTPException(status_code=503, detail="Hindsight not initialized")
     try:
-        experiences = _hindsight_client.get_experiences(limit=limit)
+        experiences = _hindsight_client.get_experiences(context, limit=limit)
         return experiences
     except Exception as e:
         raise _HTTPException(status_code=500, detail=str(e))

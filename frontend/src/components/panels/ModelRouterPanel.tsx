@@ -106,21 +106,36 @@ export function ModelRouterPanel() {
           <div className="text-center py-4 text-text-muted">Loading models...</div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {models.map((model) => (
-              <div key={model.name} className="p-3 rounded-lg bg-bg-3 border border-border">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-text-primary">{model.model_name}</span>
-                  <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${TIER_STYLES[model.tier]?.bg || "bg-gray-500/20"} ${TIER_STYLES[model.tier]?.text || "text-gray-300"}`}>
-                    {TIER_STYLES[model.tier]?.label || model.tier}
-                  </span>
+            {models.map((model, idx) => {
+              const key = model.name ?? model.model_name ?? `model-${idx}`;
+              const tier = model.tier ?? "";
+              const tierStyle = TIER_STYLES[tier];
+              const contextWindow = model.context_window;
+              return (
+                <div key={key} className="p-3 rounded-lg bg-bg-3 border border-border">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-text-primary">
+                      {model.model_name ?? model.name ?? "(unnamed)"}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-xs font-medium ${tierStyle?.bg || "bg-gray-500/20"} ${tierStyle?.text || "text-gray-300"}`}
+                    >
+                      {tierStyle?.label || tier || "—"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-text-muted">
+                    <div>API: {model.api_base ?? "—"}</div>
+                    <div>
+                      Context:{" "}
+                      {typeof contextWindow === "number"
+                        ? `${contextWindow.toLocaleString()} tokens`
+                        : "—"}
+                    </div>
+                    {model.is_default && <span className="text-accent ml-2">★ Default</span>}
+                  </div>
                 </div>
-                <div className="text-xs text-text-muted">
-                  <div>API: {model.api_base}</div>
-                  <div>Context: {model.context_window.toLocaleString()} tokens</div>
-                  {model.is_default && <span className="text-accent ml-2">★ Default</span>}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
