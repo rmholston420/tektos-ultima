@@ -17,6 +17,7 @@ from tektos.protocol.envelope import (
     tool_permission_required,
     tool_started,
 )
+from tektos.metabolism import MetabolismEngine
 from tektos.runtime.loop_safety import LoopSafetyConfig, LoopSafetyMonitor
 from tektos.runtime.sdk import (
     HookContext,
@@ -408,20 +409,23 @@ class TestHandleToolCompletion:
 
     @pytest.mark.asyncio
     async def test_handle_tool_completion_no_on_tool_approval_in_manual_mode(self):
-        """Test manual mode with no on_tool_approval callback -- execution falls through."""
+        """Test manual mode with no on_tool_approval callback -- execution is rejected."""
         sdk = RuntimeSDK()
         session = LiveSession(id="s1", model="test", cwd=".", permission_mode="manual")
         events = []
         async def on_event(env):
             events.append(env)
 
-        sdk._sandbox.execute = MagicMock(return_value="auto output")
-
         result = await sdk._handle_tool_completion(
             session, on_event, "tc-1", "bash",
             _json.dumps({"command": "ls"}), set(), None
         )
-        assert result == "auto output"
+        assert result == "Tool rejected: no approval callback"
+        event_types = [e.event_type for e in events]
+        assert "tool.permission_required" in event_types
+        completed_events = [e for e in events if e.event_type == "tool.completed"]
+        assert len(completed_events) == 1
+        assert completed_events[0].payload.get("status") == "rejected"
 
     @pytest.mark.asyncio
     async def test_handle_tool_completion_execution_error(self):
@@ -484,8 +488,11 @@ class TestCheckResources:
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="45\n")
+            with patch.object(MetabolismEngine, "assess_health") as mock_assess:
+                mock_assess.return_value = MagicMock(
+                    overall_health=MagicMock(value="normal"),
+                    gpu=MagicMock(temperature=45.0),
+                )
                 await sdk._check_resources(session)
                 mock_append.assert_not_called()
 
@@ -496,8 +503,11 @@ class TestCheckResources:
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="55\n")
+            with patch.object(MetabolismEngine, "assess_health") as mock_assess:
+                mock_assess.return_value = MagicMock(
+                    overall_health=MagicMock(value="normal"),
+                    gpu=MagicMock(temperature=55.0),
+                )
                 await sdk._check_resources(session)
                 mock_append.assert_not_called()
 
@@ -508,8 +518,11 @@ class TestCheckResources:
         session = LiveSession(id="s1", model="test", cwd=".")
 
         with patch("tektos.runtime.sdk.append_event", new_callable=AsyncMock) as mock_append:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="85\n")
+            with patch.object(MetabolismEngine, "assess_health") as mock_assess:
+                mock_assess.return_value = MagicMock(
+                    overall_health=MagicMock(value="normal"),
+                    gpu=MagicMock(temperature=85.0),
+                )
                 await sdk._check_resources(session)
                 mock_append.assert_called_once()
                 call_args = mock_append.call_args

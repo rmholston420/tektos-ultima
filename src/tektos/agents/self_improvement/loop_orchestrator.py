@@ -88,7 +88,10 @@ class SelfImprovementLoop:
         experience_replay_max: int = 50,
     ) -> None:
         self._memory = MemorySystem()
-        self._reflection = ReflectionEngine(memory_system=self._memory)
+        self._reflection = ReflectionEngine(
+            memory_system=self._memory,
+            dreamtime_engine=self._memory.dreamtime,
+        )
         self._synthesis_engine = SynthesisEngine(
             reflection_engine=self._reflection,
             memory_system=self._memory,

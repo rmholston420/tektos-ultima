@@ -44,6 +44,7 @@ from tektos.runtime.loop_safety import (
 )
 from tektos.runtime.session import LiveSession
 from tektos.store.event_store import append_event
+from tektos.metabolism import MetabolismEngine
 
 log = _log.getLogger("tektos.runtime")
 
@@ -238,6 +239,8 @@ class RuntimeSDK:
         self._lock = _asyncio.Lock()
         self._sandbox = SandboxProvider()
         self._loop_monitor = LoopSafetyMonitor(loop_safety_config or LoopSafetyConfig())
+        # Metabolism engine for resource monitoring
+        self._metabolism_engine = MetabolismEngine()
 
     async def start(self) -> None:
         """Create the httpx client."""
@@ -575,6 +578,11 @@ class RuntimeSDK:
                     completed_tools.add(tool_id)
                     await on_event(tool_completed(session.id, tool_id, "rejected", "Tool rejected by user"))
                     return "Tool rejected by user"
+            else:
+                # No approval callback provided — reject to prevent unauthorized execution
+                completed_tools.add(tool_id)
+                await on_event(tool_completed(session.id, tool_id, "rejected", "Tool approval callback not provided in manual mode"))
+                return "Tool rejected: no approval callback"
 
         # Execute tool (actual execution via SandboxProvider)
         try:
@@ -589,7 +597,24 @@ class RuntimeSDK:
             return f"Error: {error_msg}"
 
     async def _execute_tool(self, tool_name: str, tool_input: dict[str, Any]) -> str:
-        """Execute a tool via the SandboxProvider."""
+        """Execute a tool via the SandboxProvider or MCP registry.
+
+        MCP tools take priority — if a tool is registered in the MCP registry,
+        invoke it there. Otherwise fall back to sandbox execution.
+        """
+        # Check MCP registry first
+        from tektos.runtime.mcp_integration import get_mcp_registry
+        registry = get_mcp_registry()
+        if tool_name in registry._tools:
+            result = await registry.invoke_tool(tool_name, tool_input)
+            if result.success:
+                log.info(f"[MCP] {tool_name} → {len(result.content)} chars")
+                return result.content
+            else:
+                log.error(f"[MCP] {tool_name} failed: {result.error}")
+                raise RuntimeError(f"MCP tool execution failed: {result.error}")
+
+        # Fall back to sandbox execution
         try:
             result = self._sandbox.execute(tool_name, tool_input)
             log.info(f"[TOOK] {tool_name} → {len(str(result))} chars")
@@ -599,28 +624,36 @@ class RuntimeSDK:
             raise RuntimeError(f"Tool execution failed: {exc}")
 
     async def _check_resources(self, session: LiveSession) -> None:
-        """Check GPU temp, disk, VRAM and emit warnings if needed."""
-        # GPU temperature check
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5,
-            )
-            gpu_temp = float(result.stdout.strip().split("\n")[0])
-        except Exception:
-            gpu_temp = 0
+        """Check GPU temp, disk, VRAM and emit warnings if needed.
 
-        if gpu_temp > 80:  # Operational ceiling
+        Delegates to MetabolismEngine for comprehensive resource monitoring.
+        """
+        # Delegate to MetabolismEngine for full resource assessment
+        health = self._metabolism_engine.assess_health()
+        state_dict = health.to_dict()
+
+        # Emit resource warnings based on MetabolismEngine assessment
+        if health.overall_health.value != "normal":
             await append_event(session.id, "resource.warning", {
-                "resource": "gpu_temp",
-                "current": gpu_temp,
-                "threshold": 80,
-                "message": f"GPU temperature {gpu_temp}°C exceeds operational ceiling (80°C)",
+                "resource": "overall",
+                "level": health.overall_health.value,
+                "details": state_dict,
             })
-            log.warning(f"GPU temp {gpu_temp}°C — above operational ceiling")
-        elif gpu_temp > 51:  # Yellow zone
-            log.info(f"GPU temp {gpu_temp}°C — in yellow zone (monitoring)")
+            log.warning(f"Resource alert: {health.overall_health.value}")
+
+        # Also check GPU temp specifically for backward compatibility
+        if health.gpu:
+            gpu_temp = health.gpu.temperature
+            if gpu_temp > 80:  # Operational ceiling
+                await append_event(session.id, "resource.warning", {
+                    "resource": "gpu_temp",
+                    "current": gpu_temp,
+                    "threshold": 80,
+                    "message": f"GPU temperature {gpu_temp}°C exceeds operational ceiling (80°C)",
+                })
+                log.warning(f"GPU temp {gpu_temp}°C — above operational ceiling")
+            elif gpu_temp > 51:  # Yellow zone
+                log.info(f"GPU temp {gpu_temp}°C — in yellow zone (monitoring)")
 
     async def interrupt(self, session: LiveSession) -> None:
         """Interrupt a running session."""
