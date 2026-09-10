@@ -1,0 +1,29 @@
+[Unit]
+Description=Tektos-Ultima Gateway WebSocket Proxy (:8765)
+Documentation=https://github.com/rmholston420/tektos-ultima
+# Gateway proxies to the backend, so backend must be up first.
+Requires=tektos-backend.service
+After=tektos-backend.service
+PartOf=tektos.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/tektos-ultima-v1
+EnvironmentFile=%h/dev/tektos-ultima-v1/.env
+Environment=TEKTOS_GATEWAY_PORT=8765
+ExecStart=%h/dev/tektos-ultima-v1/.venv/bin/python -m tektos.gateway_proxy \
+    --port 8765 \
+    --tektos-url http://127.0.0.1:8020
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tektos-gateway
+
+[Install]
+WantedBy=tektos.target

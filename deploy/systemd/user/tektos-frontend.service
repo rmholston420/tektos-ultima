@@ -1,0 +1,30 @@
+[Unit]
+Description=Tektos-Ultima frontend (Next.js production, :5556)
+Documentation=https://github.com/rmholston420/tektos-ultima
+# Frontend proxies to backend + gateway. Soft dependency (Wants=) so a
+# backend restart does not force-restart the frontend; failed API calls
+# just retry once backend/gateway come back.
+Wants=tektos-backend.service tektos-gateway.service
+After=tektos-backend.service tektos-gateway.service
+PartOf=tektos.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/tektos-ultima-v1/frontend
+EnvironmentFile=%h/dev/tektos-ultima-v1/.env
+# npm resolves to whatever version is on PATH; explicit shell keeps
+# environment consistent with an interactive session.
+ExecStart=/bin/bash -lc 'exec npm run start'
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tektos-frontend
+
+[Install]
+WantedBy=tektos.target

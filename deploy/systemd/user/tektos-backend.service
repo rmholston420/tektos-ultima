@@ -1,0 +1,35 @@
+[Unit]
+Description=Tektos-Ultima FastAPI backend (uvicorn on :8020)
+Documentation=https://github.com/rmholston420/tektos-ultima
+# Wait for network so LLM/DB endpoints resolve.
+After=network-online.target
+Wants=network-online.target
+PartOf=tektos.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/tektos-ultima-v1
+EnvironmentFile=%h/dev/tektos-ultima-v1/.env
+# Bind to loopback by default; override TEKTOS_HOST in .env to expose.
+Environment=TEKTOS_HOST=127.0.0.1
+Environment=TEKTOS_PORT=8020
+Environment=TEKTOS_LOG_LEVEL=info
+ExecStart=%h/dev/tektos-ultima-v1/.venv/bin/python -m tektos.main serve
+# Send SIGTERM to the main process, then SIGKILL the whole cgroup so
+# no orphan uvicorn worker survives a stop/restart (the zombie problem
+# we hit during PR #43 consolidation).
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+# Give uvicorn enough startup time (Whisper model load, DB migrations).
+TimeoutStartSec=120
+
+# Log via journald; view with `journalctl --user -u tektos-backend -f`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tektos-backend
+
+[Install]
+WantedBy=tektos.target
