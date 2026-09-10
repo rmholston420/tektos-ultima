@@ -4,8 +4,13 @@ Documentation=https://github.com/rmholston420/tektos-ultima
 # Hindsight is *optional* to the rest of the stack — it enriches memory
 # panels but the backend runs fine without it. Use Wants= (not Requires=)
 # so a failing hindsight does not tank backend/gateway/frontend.
-After=network-online.target
+#
+# Hindsight talks to a dedicated local llama-server (see
+# tektos-llm-hindsight.service). Hard-depend on it so hindsight waits
+# for the model to load before trying to hit /v1/chat/completions.
+After=network-online.target tektos-llm-hindsight.service
 Wants=network-online.target
+Requires=tektos-llm-hindsight.service
 PartOf=tektos.target
 # Rate-limit restart attempts on repeated startup failure (usually a
 # missing env var like HINDSIGHT_API_LLM_API_KEY). After 3 failures

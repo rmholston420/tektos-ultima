@@ -6,13 +6,14 @@ survives reboots (assuming `loginctl enable-linger`).
 
 ## Services
 
-| Unit                        | Port  | Depends on                    | Restart policy       |
-|-----------------------------|-------|-------------------------------|----------------------|
-| `tektos-backend.service`    | 8020  | `network-online.target`       | on-failure, 5s       |
-| `tektos-gateway.service`    | 8765  | `tektos-backend` (Requires=)  | on-failure, 3s       |
-| `tektos-hindsight.service`  | 9000  | `network-online.target`       | on-failure, 3× / 2m  |
-| `tektos-frontend.service`   | 5556  | backend + gateway (Wants=)    | on-failure, 3s       |
-| `tektos.target`             | —     | Wants= all four               | —                    |
+| Unit                              | Port  | Depends on                            | Restart policy       |
+|-----------------------------------|-------|---------------------------------------|----------------------|
+| `tektos-backend.service`          | 8020  | `network-online.target`               | on-failure, 5s       |
+| `tektos-gateway.service`          | 8765  | `tektos-backend` (Requires=)          | on-failure, 3s       |
+| `tektos-llm-hindsight.service`    | 8095  | `network-online.target`               | on-failure, 5s       |
+| `tektos-hindsight.service`        | 9000  | `tektos-llm-hindsight` (Requires=)    | on-failure, 3× / 2m  |
+| `tektos-frontend.service`         | 5556  | backend + gateway (Wants=)            | on-failure, 3s       |
+| `tektos.target`                   | —     | Wants= all five                       | —                    |
 
 **Design notes**:
 
@@ -66,16 +67,47 @@ systemctl --user status 'tektos-*.service' tektos.target
 - **Frontend build present** — `deploy/systemd/user/tektos-frontend.service`
   runs `npm run start` (Next.js production). Run `npm run build` in
   `frontend/` at least once before starting the frontend unit.
+- **`llama-server` on PATH** — required by `tektos-llm-hindsight.service`.
+  Install llama.cpp system-wide, or symlink into `~/.local/bin/`.
+- **Hindsight LLM model downloaded** — one-time:
+  ```bash
+  mkdir -p ~/dev/tektos-ultima-v1/models
+  huggingface-cli download unsloth/granite-4.0-h-tiny-GGUF \
+      'granite-4.0-h-tiny-Q4_K_M.gguf' \
+      --local-dir ~/dev/tektos-ultima-v1/models \
+      --local-dir-use-symlinks False
+  ```
+  Different model? Set `TEKTOS_HINDSIGHT_LLM_MODEL_PATH` in `.env`.
 
 ## Environment variables the units read (from `.env`)
+
+### Backend / gateway / frontend
 
 - `TEKTOS_HOST` (default `127.0.0.1`) — override to `0.0.0.0` to expose backend on LAN.
 - `TEKTOS_PORT` (default `8020`).
 - `TEKTOS_LOG_LEVEL` (default `info`).
 - `TEKTOS_GATEWAY_PORT` (default `8765`).
-- `HINDSIGHT_API_LLM_API_KEY` — **required** for hindsight; the daemon
-  refuses to start without it.
-- Any other `HINDSIGHT_API_*` keys the hindsight config expects.
+
+### Hindsight LLM server (llama-server)
+
+- `TEKTOS_HINDSIGHT_LLM_HOST` (default `127.0.0.1`).
+- `TEKTOS_HINDSIGHT_LLM_PORT` (default `8095`).
+- `TEKTOS_HINDSIGHT_LLM_MODEL_PATH` (default `~/dev/tektos-ultima-v1/models/granite-4.0-h-tiny-Q4_K_M.gguf`).
+- `TEKTOS_HINDSIGHT_LLM_CTX` (default `16384`).
+- `TEKTOS_HINDSIGHT_LLM_GPU_LAYERS` (default `-1` — all layers on GPU; set to `0` for pure CPU).
+
+### Hindsight service
+
+Point hindsight at the local llama-server (defaults in `.env.example`):
+
+```dotenv
+HINDSIGHT_API_LLM_PROVIDER=ollama            # OpenAI-compat provider; works with any /v1 endpoint
+HINDSIGHT_API_LLM_API_KEY=local               # dummy value; server does not check
+HINDSIGHT_API_LLM_BASE_URL=http://127.0.0.1:8095/v1
+HINDSIGHT_API_LLM_MODEL=granite-4.0-h-tiny    # matches the loaded model
+```
+
+Embeddings stay `provider=local` (BGE), no change needed.
 
 ## Common commands
 

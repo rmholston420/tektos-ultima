@@ -24,6 +24,7 @@ DST_DIR="${HOME}/.config/systemd/user"
 UNITS=(
     tektos-backend.service
     tektos-gateway.service
+    tektos-llm-hindsight.service
     tektos-hindsight.service
     tektos-frontend.service
     tektos.target
@@ -78,6 +79,7 @@ Manual commands:
     # Follow logs (any single service)
     journalctl --user -u tektos-backend -f
     journalctl --user -u tektos-gateway -f
+    journalctl --user -u tektos-llm-hindsight -f
     journalctl --user -u tektos-hindsight -f
     journalctl --user -u tektos-frontend -f
 
@@ -101,9 +103,17 @@ Notes:
         systemctl --user restart tektos-hindsight
 
   * Ports (adjust in .env if these conflict):
-      backend       127.0.0.1:8020
-      gateway       0.0.0.0:8765   (WebSocket, LAN-reachable)
-      hindsight     127.0.0.1:9000
-      frontend      0.0.0.0:5556   (Next.js prod)
+      backend         127.0.0.1:8020
+      gateway         0.0.0.0:8765    (WebSocket, LAN-reachable)
+      llm-hindsight   127.0.0.1:8095  (llama-server for hindsight)
+      hindsight       127.0.0.1:9000
+      frontend        0.0.0.0:5556    (Next.js prod)
+
+  * Before first start, download the hindsight LLM model:
+      mkdir -p ~/dev/tektos-ultima-v1/models
+      huggingface-cli download unsloth/granite-4.0-h-tiny-GGUF \\
+          'granite-4.0-h-tiny-Q4_K_M.gguf' \\
+          --local-dir ~/dev/tektos-ultima-v1/models \\
+          --local-dir-use-symlinks False
 
 EOF

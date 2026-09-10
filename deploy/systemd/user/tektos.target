@@ -5,8 +5,8 @@ Documentation=https://github.com/rmholston420/tektos-ultima
 # failing service does not stop the whole target — matches PartOf= on each
 # unit, which means stopping the target stops all four, but any one of
 # them failing does not cascade.
-Wants=tektos-backend.service tektos-gateway.service tektos-hindsight.service tektos-frontend.service
-After=tektos-backend.service tektos-gateway.service tektos-hindsight.service tektos-frontend.service
+Wants=tektos-backend.service tektos-gateway.service tektos-llm-hindsight.service tektos-hindsight.service tektos-frontend.service
+After=tektos-backend.service tektos-gateway.service tektos-llm-hindsight.service tektos-hindsight.service tektos-frontend.service
 
 [Install]
 WantedBy=default.target
