@@ -1,0 +1,41 @@
+[Unit]
+Description=Tektos-Ultima Hindsight cross-session memory service (:9000)
+Documentation=https://github.com/rmholston420/tektos-ultima
+# Hindsight is *optional* to the rest of the stack — it enriches memory
+# panels but the backend runs fine without it. Use Wants= (not Requires=)
+# so a failing hindsight does not tank backend/gateway/frontend.
+After=network-online.target
+Wants=network-online.target
+PartOf=tektos.target
+# Rate-limit restart attempts on repeated startup failure (usually a
+# missing env var like HINDSIGHT_API_LLM_API_KEY). After 3 failures
+# within 2 minutes, systemd will stop retrying until an operator runs
+# `systemctl --user restart tektos-hindsight`.
+StartLimitBurst=3
+StartLimitIntervalSec=120
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/tektos-ultima-v1
+# Requires HINDSIGHT_API_LLM_API_KEY, HINDSIGHT_API_DATABASE_URL etc.
+# to be set in .env. Without them the service exits with a clear
+# ValueError and the log will show which env var is missing.
+EnvironmentFile=%h/dev/tektos-ultima-v1/.env
+ExecStart=%h/dev/tektos-ultima-v1/.venv/bin/hindsight-api \
+    --port 9000 \
+    --log-level info
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
+# Hindsight can fail on missing config (e.g. LLM API key). Do not restart
+# forever — retry a few times, then give up until an operator fixes the
+# config and runs `systemctl --user restart tektos-hindsight`.
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tektos-hindsight
+
+[Install]
+WantedBy=tektos.target
