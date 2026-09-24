@@ -32,6 +32,13 @@ Thumbs.db
 .env
 .env.local
 .env.production
+.env.bak*
+
+# Model weights (local inference assets, not source)
+models/
+
+# Runtime logs
+logs/
 
 # Last known state (session-specific, not for repo)
 LAST_KNOWN_STATE.md
