@@ -3949,10 +3949,12 @@ async def archive_session(session_id: str):
         session = await session_manager.get_session(session_id)
         if not session:
             raise _HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        session.is_archived = True
-        session.status = "created"
+        # is_archived is a read-only property derived from status, so archive
+        # by setting the status (no ARCHIVED state in the state machine — the
+        # string is what the archive list + property key off).
+        session.status = "archived"
         session.updated_at = _time.time()
-        await append_event(session_id, "session.updated", {"is_archived": True})
+        await append_event(session_id, "session.updated", {"is_archived": True, "status": "archived"})
         return {"ok": True}
     except _HTTPException:
         raise
