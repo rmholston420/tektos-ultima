@@ -85,16 +85,23 @@ class PluginLoader:
         return loaded
 
     def _import_plugin(self, name: str) -> Plugin | None:
-        """Import a plugin by module name."""
-        try:
-            module = importlib.import_module(f"plugins.{name}.{name}")
-            # Look for a class that inherits from Plugin
+        """Import a plugin by module name.
+
+        Tektos plugins live at ``plugins/{name}/plugin.py`` (module
+        ``plugins.{name}.plugin``); a handful also expose a
+        ``plugins.{name}.{name}`` module. Try both candidate names and scan
+        each for a concrete :class:`Plugin` subclass.
+        """
+        for module_name in (f"plugins.{name}.plugin", f"plugins.{name}.{name}"):
+            try:
+                module = importlib.import_module(module_name)
+            except ImportError:
+                continue
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
                 if isinstance(attr, type) and issubclass(attr, Plugin) and attr is not Plugin:
                     return attr()
-        except ImportError as e:
-            logger.warning("Plugin %s not found: %s", name, e)
+        logger.warning("Plugin %s not found (no Plugin subclass in plugins.%s)", name, name)
         return None
 
     def get_loaded_plugins(self) -> list[Plugin]:

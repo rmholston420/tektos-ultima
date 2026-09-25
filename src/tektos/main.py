@@ -1459,21 +1459,7 @@ async def lifespan(app: _FastAPI):
         log.warning("Failed to initialize planner orchestrator: %s", exc)
         _planner_orchestrator = None
 
-    # 24. Initialize RAG engine
-    try:
-        from tektos.runtime.rag_engine import RAGEngine
-
-        _rag_engine = RAGEngine(
-            embedder_client=_embedder_client,
-            retriever=None,  # RAGRetriever initialized separately
-        )
-        await _rag_engine.start()
-        log.info("RAG engine initialized")
-    except Exception as exc:
-        log.warning("Failed to initialize RAG engine: %s", exc)
-        _rag_engine = None
-
-    # 25. Initialize RAG retriever
+    # 24. Initialize RAG retriever, then the engine around it
     try:
         from tektos.runtime.rag_retriever import RAGRetriever
 
@@ -1486,6 +1472,19 @@ async def lifespan(app: _FastAPI):
     except Exception as exc:
         log.warning("Failed to initialize RAG retriever: %s", exc)
         _rag_retriever = None
+
+    try:
+        from tektos.runtime.rag_engine import RAGEngine
+
+        _rag_engine = RAGEngine(
+            embedder_client=_embedder_client,
+            retriever=_rag_retriever,
+        )
+        await _rag_engine.start()
+        log.info("RAG engine initialized")
+    except Exception as exc:
+        log.warning("Failed to initialize RAG engine: %s", exc)
+        _rag_engine = None
 
     # 26. Initialize repo map generator
     try:
