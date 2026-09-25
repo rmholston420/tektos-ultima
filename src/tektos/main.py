@@ -3723,7 +3723,7 @@ async def list_backups():
     """List all available backups."""
     if not db_manager:
         return {"error": "Database manager not initialized"}
-    backups = db_manager.backup.list_backups()
+    backups = db_manager.backup_mgr.list_backups()
     return {
         "backups": [
             {
