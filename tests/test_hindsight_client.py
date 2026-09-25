@@ -200,10 +200,32 @@ class TestRecallEndpoint:
         assert result == {"results": [{"content": "relevant fact"}]}
         call_kwargs = mock_client.post.call_args
         assert call_kwargs[1]["json"]["query"] == "search query"
-        assert call_kwargs[1]["json"]["limit"] == 5
+        # v1 RecallRequest has no limit field — limit is applied client-side.
+        assert "limit" not in call_kwargs[1]["json"]
 
     @patch("tektos.memory.hindsight_client.httpx.Client")
     def test_recall_with_limit(self, mock_client_class):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "results": [{"content": "a"}, {"content": "b"}, {"content": "c"}],
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.post.return_value = mock_response
+        mock_client_class.return_value = mock_client
+
+        client = HindsightClient()
+        result = client.recall("query", limit=2)
+        # Client-side truncation to the requested limit.
+        assert len(result["results"]) == 2
+        assert [r["content"] for r in result["results"]] == ["a", "b"]
+
+
+    @patch("tektos.memory.hindsight_client.httpx.Client")
+    def test_recall_empty_query_uses_sentinel(self, mock_client_class):
+        # v1 rejects empty queries with 422 — the client must substitute a
+        # non-empty sentinel so "give me anything" callers don't error out.
         mock_response = MagicMock()
         mock_response.json.return_value = {"results": []}
         mock_response.raise_for_status = MagicMock()
@@ -213,9 +235,13 @@ class TestRecallEndpoint:
         mock_client_class.return_value = mock_client
 
         client = HindsightClient()
-        result = client.recall("query", limit=10)
+        client.recall("")
         call_kwargs = mock_client.post.call_args
-        assert call_kwargs[1]["json"]["limit"] == 10
+        assert call_kwargs[1]["json"]["query"] == "tektos"
+
+        client.recall("   ")
+        call_kwargs = mock_client.post.call_args
+        assert call_kwargs[1]["json"]["query"] == "tektos"
 
 
 class TestReflectEndpoint:
@@ -235,8 +261,8 @@ class TestReflectEndpoint:
         result = client.reflect("what do I know about testing?")
         assert result == {"answer": "synthesized reasoning"}
         call_kwargs = mock_client.post.call_args
-        assert call_kwargs[1]["json"]["question"] == "what do I know about testing?"
-        assert call_kwargs[1]["json"]["max_tokens"] == 1000
+        assert call_kwargs[1]["json"]["query"] == "what do I know about testing?"
+        assert call_kwargs[1]["json"]["budget"] == "low"
 
     @patch("tektos.memory.hindsight_client.httpx.Client")
     def test_reflect_with_max_tokens(self, mock_client_class):
@@ -251,7 +277,23 @@ class TestReflectEndpoint:
         client = HindsightClient()
         result = client.reflect("question", max_tokens=500)
         call_kwargs = mock_client.post.call_args
-        assert call_kwargs[1]["json"]["max_tokens"] == 500
+        assert call_kwargs[1]["json"]["budget"] == "low"
+
+    @patch("tektos.memory.hindsight_client.httpx.Client")
+    def test_reflect_normalizes_v1_text_to_answer(self, mock_client_class):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"text": "v1 markdown answer"}
+        mock_response.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.post.return_value = mock_response
+        mock_client_class.return_value = mock_client
+
+        client = HindsightClient()
+        result = client.reflect("q", max_tokens=4000)
+        assert result["answer"] == "v1 markdown answer"
+        call_kwargs = mock_client.post.call_args
+        assert call_kwargs[1]["json"]["budget"] == "medium"
 
 
 class TestGetExperiencesEndpoint:

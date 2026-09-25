@@ -217,7 +217,7 @@ class TestMetabolismEngine:
 
     def test_event_bus_emits_on_threshold_change(self):
         received = []
-        fake_bus = type("FakeBus", (), {"emit": lambda _, et, pl: received.append((et, pl))})()
+        fake_bus = type("FakeBus", (), {"publish": lambda _, et, sid, pl: received.append((et, sid, pl))})()
 
         engine = MetabolismEngine(event_bus=fake_bus, max_tokens=1000)
         # First call sets baseline
@@ -291,7 +291,7 @@ class TestMetabolismIntegration:
     def test_event_bus_integration(self):
         """Metabolism emits events to event bus on threshold changes."""
         received = []
-        fake_bus = type("FakeBus", (), {"emit": lambda _, et, pl: received.append((et, pl))})()
+        fake_bus = type("FakeBus", (), {"publish": lambda _, et, sid, pl: received.append((et, sid, pl))})()
         engine = MetabolismEngine(event_bus=fake_bus, max_tokens=1000)
 
         # Cross from normal → warning

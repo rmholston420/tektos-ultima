@@ -10,12 +10,21 @@ Config carries just enough state to build the base client:
 - ``base_url``: Hindsight server URL (default ``http://127.0.0.1:9177``)
 - ``bank_id``: memory bank scope for retain/recall/reflect (default ``default``)
 - ``timeout``: httpx timeout in seconds (default ``30.0``)
+- ``profile``: Hindsight profile prefix in the v1 path (default ``default``)
 
-Endpoints (all relative to ``base_url``):
+Endpoints (all relative to ``base_url``, v1 API):
 - ``GET /health`` — server liveness probe
-- ``POST /banks/{bank_id}/retain`` — persist one or more items
-- ``POST /banks/{bank_id}/recall`` — semantic search
-- ``POST /banks/{bank_id}/reflect`` — synthesized reasoning over recalled items
+- ``POST /v1/{profile}/banks/{bank_id}/memories`` — persist items (RetainRequest)
+- ``POST /v1/{profile}/banks/{bank_id}/memories/recall`` — semantic search
+- ``POST /v1/{profile}/banks/{bank_id}/reflect`` — synthesized reasoning
+
+v1 API drift notes (2026-09-24): the server moved to versioned paths and the
+``/banks/{id}/recall|reflect|retain`` legacy shape was removed. ``RecallRequest``
+has no ``limit`` field — callers that pass one still get it accepted (the key is
+sent and ignored server-side) and results are truncated client-side to the limit.
+``ReflectRequest`` takes ``query`` (renamed from ``question``) and ``budget``
+instead of ``max_tokens``; this client maps ``max_tokens`` to a low budget so
+existing call sites keep working.
 """
 
 from __future__ import annotations
@@ -38,6 +47,7 @@ class HindsightConfig:
     base_url: str = "http://127.0.0.1:9177"
     bank_id: str = "default"
     timeout: float = 30.0
+    profile: str = "default"
 
 
 class HindsightClient:
@@ -58,7 +68,7 @@ class HindsightClient:
         return httpx.Client(base_url=self.config.base_url, timeout=self.config.timeout)
 
     def _bank_path(self, endpoint: str) -> str:
-        return f"/banks/{self.config.bank_id}/{endpoint}"
+        return f"/v1/{self.config.profile}/banks/{self.config.bank_id}/{endpoint}"
 
     # ---- public API -------------------------------------------------------
 
@@ -78,8 +88,8 @@ class HindsightClient:
     ) -> dict[str, Any]:
         """Persist a single fact.
 
-        Wraps the fact in an ``items`` list matching the batch schema so the
-        server sees a single, consistent request shape.
+        Wraps the fact in an ``items`` list matching the RetainRequest schema so
+        the server sees a single, consistent request shape.
         """
         item: dict[str, Any] = {"content": content}
         if context is not None:
@@ -91,29 +101,51 @@ class HindsightClient:
     def retain_batch(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist multiple items in one call."""
         with self._client() as client:
-            response = client.post(self._bank_path("retain"), json={"items": items})
+            response = client.post(
+                self._bank_path("memories"),
+                json={"items": items},
+            )
             response.raise_for_status()
             return response.json()
 
     def recall(self, query: str, *, limit: int = 5) -> dict[str, Any]:
-        """Semantic search against the bank."""
+        """Semantic search against the bank.
+
+        ``limit`` is truncated client-side: the v1 ``RecallRequest`` has no
+        limit field, so we ask the server for its default set and slice.
+
+        v1 rejects empty queries (422: must contain at least one word
+        character). An empty or whitespace-only ``query`` is sent as a neutral
+        sentinel so callers that mean "anything" (e.g. experiences with no
+        context tag) still get the top-ranked set instead of an error.
+        """
+        sent_query = query if query and query.strip() else "tektos"
+        payload: dict[str, Any] = {"query": sent_query}
         with self._client() as client:
-            response = client.post(
-                self._bank_path("recall"),
-                json={"query": query, "limit": limit},
-            )
+            response = client.post(self._bank_path("memories/recall"), json=payload)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+        if isinstance(data, dict) and isinstance(data.get("results"), list):
+            data["results"] = data["results"][:limit]
+        return data
 
     def reflect(self, question: str, *, max_tokens: int = 1000) -> dict[str, Any]:
-        """Ask the bank for synthesized reasoning about ``question``."""
+        """Ask the bank for synthesized reasoning about ``question``.
+
+        ``max_tokens`` maps onto the v1 ``budget`` parameter: small budgets for
+        small token caps, ``medium`` above, so existing callers that pass
+        2000+ tokens don't silently get truncated.
+        """
+        budget = "low" if max_tokens <= 1000 else "medium"
+        payload: dict[str, Any] = {"query": question, "budget": budget}
         with self._client() as client:
-            response = client.post(
-                self._bank_path("reflect"),
-                json={"question": question, "max_tokens": max_tokens},
-            )
+            response = client.post(self._bank_path("reflect"), json=payload)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+        if isinstance(data, dict) and "answer" not in data and "text" in data:
+            # v1 returns the answer under ``text``; normalize for callers.
+            data["answer"] = data.get("text")
+        return data
 
     def get_experiences(self, context: str, *, limit: int = 10) -> list[dict[str, Any]]:
         """Return up to ``limit`` recalled items, tag-preferring ``context``.

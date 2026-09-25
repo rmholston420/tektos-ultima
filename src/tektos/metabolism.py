@@ -446,12 +446,14 @@ class MetabolismEngine:
             alert_name = budget.alert_level.value
             log.warning(f"Context budget alert: {alert_name} ({budget.pct:.1f}%)")
             if self.event_bus:
-                self.event_bus.emit(
+                self.event_bus.publish(
                     f"context.{alert_name}",
+                    "metabolism",
                     budget.to_dict(),
                 )
-                self.event_bus.emit(
+                self.event_bus.publish(
                     "resource.warning",
+                    "metabolism",
                     {
                         "type": "context_budget",
                         "level": alert_name,
@@ -511,8 +513,9 @@ class MetabolismEngine:
         # Emit overall health event if changed
         if health != self._last_gpu_alert:
             if self.event_bus:
-                self.event_bus.emit(
+                self.event_bus.publish(
                     "resource.health",
+                    "metabolism",
                     {"level": health.value, "alerts": [a.value for a in alerts]},
                 )
             self._last_gpu_alert = health
