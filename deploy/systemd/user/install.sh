@@ -9,7 +9,7 @@
 # What it does:
 #   1. Verifies `loginctl Linger=yes` for the invoking user
 #      (required for user services to run without a login session).
-#   2. Symlinks the five units into ~/.config/systemd/user/.
+#   2. Symlinks the units into ~/.config/systemd/user/.
 #   3. Reloads the systemd user manager.
 #   4. Enables tektos.target so it auto-starts on next login/boot.
 #   5. Prints the manual-start command and useful journalctl invocations.
@@ -23,10 +23,8 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DST_DIR="${HOME}/.config/systemd/user"
 UNITS=(
     tektos-backend.service
-    tektos-gateway.service
     tektos-llm-hindsight.service
     tektos-hindsight.service
-    tektos-frontend.service
     tektos.target
 )
 
@@ -78,16 +76,14 @@ Manual commands:
 
     # Follow logs (any single service)
     journalctl --user -u tektos-backend -f
-    journalctl --user -u tektos-gateway -f
     journalctl --user -u tektos-llm-hindsight -f
     journalctl --user -u tektos-hindsight -f
-    journalctl --user -u tektos-frontend -f
 
     # Follow all Tektos logs at once
     journalctl --user -u 'tektos-*' -f
 
-    # Restart just one service (e.g. after a code change to gateway_proxy)
-    systemctl --user restart tektos-gateway
+    # Restart just one service (e.g. after a code change to the backend)
+    systemctl --user restart tektos-backend
 
     # Stop the whole stack
     systemctl --user stop tektos.target
@@ -99,15 +95,17 @@ Notes:
 
   * Hindsight is optional. If it fails to start (e.g. missing
     HINDSIGHT_API_LLM_API_KEY in .env), it will retry 3 times, then stop.
-    Backend/gateway/frontend will still run. Fix the config and run:
+    The backend will still run. Fix the config and run:
         systemctl --user restart tektos-hindsight
+
+  * Stage 9.5 (ADR-113): the standalone frontend (:5556) and gateway
+    (:8765) units are retired — the Tektos API is served same-origin
+    through the kosmos kernel gateway. The backend itself is unchanged.
 
   * Ports (adjust in .env if these conflict):
       backend         127.0.0.1:8020
-      gateway         0.0.0.0:8765    (WebSocket, LAN-reachable)
       llm-hindsight   127.0.0.1:8095  (llama-server for hindsight)
       hindsight       127.0.0.1:9000
-      frontend        0.0.0.0:5556    (Next.js prod)
 
   * Before first start, download the hindsight LLM model:
       mkdir -p ~/dev/tektos-ultima-v1/models
