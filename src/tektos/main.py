@@ -5038,10 +5038,36 @@ async def get_telemetry():
         from tektos.agents.manager.telemetry import TelemetryCollector
 
         gpu_tel = TelemetryCollector.collect()
-        data = TelemetryCollector.to_dict(gpu_tel)
-        # Normalize to frontend-friendly keys
-        data["timestamp"] = gpu_tel.timestamp
-        return data
+        # Normalize to the canonical {gpu, system, timestamp} shape
+        # (same contract as the nvidia-smi fallback and frontend types)
+        nvml = TelemetryCollector.to_dict(gpu_tel)
+        gpu: dict[str, Any] = {
+            "temperature": nvml.get("temperature_gpu", 0),
+            "utilization": nvml.get("utilization", 0),
+            "memory_used": nvml.get("memory", {}).get("used_mb", 0),
+            "memory_total": nvml.get("memory", {}).get("total_mb", 0),
+            "power_draw": nvml.get("power_draw", 0),
+            "power_limit": nvml.get("power_limit", 400),
+            "fan_speed": nvml.get("fan_speed", 0),
+            "clocks_graphics": nvml.get("clocks", {}).get("graphics_mhz", 0),
+            "clocks_memory": nvml.get("clocks", {}).get("memory_mhz", 0),
+        }
+        try:
+            mu = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.memory", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            gpu["memory_utilization"] = float(mu.stdout.strip()) if mu.returncode == 0 else 0
+        except Exception:
+            gpu["memory_utilization"] = 0
+        system = _get_system_metrics()
+        return {
+            "gpu": gpu,
+            "system": system,
+            "timestamp": _time.time(),
+        }
     except Exception as exc:
         log.warning("NVML telemetry collection failed: %s", exc)
 
