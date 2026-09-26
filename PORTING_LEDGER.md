@@ -1,5 +1,15 @@
 # Porting Ledger — Tektos-Ultima v1
 
+## Porting COMPLETE (2026-09-26, Stage 14.2 gate close)
+
+The full 154-route donor surface has been ported to the Kosmos-LMS kernel
+(`~/dev/kosmos-lms`) per the ADR-141 functionality-preservation audit:
+**131 P (kernel-native, live-verified) / 23 D (documented deferrals with
+named carriers) / 0 T (unported)**. This donor's `src/tektos/main.py`,
+:8020 service, and all systemd units are retired. Per-route dispositions
+live in `kosmos-lms/docs/adrs/ADR-141-tektos-functionality-preservation-audit.md`;
+this ledger below is historical record only.
+
 ## New REST Endpoints
 
 | Endpoint | Method | Description | Added |

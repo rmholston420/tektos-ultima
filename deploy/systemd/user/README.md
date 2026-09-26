@@ -1,145 +1,32 @@
-# Tektos-Ultima systemd user units
+# Tektos-Ultima systemd user units — RETIRED
 
-Idempotent, dependency-ordered systemd **user** units for the three-service
-Tektos stack. Bring the whole stack up with a single command, and it
-survives reboots (assuming `loginctl enable-linger`).
+**Stage 14.2 (ADR-141 exit gate / ADR-144 follow-on, 2026-09-26):** every
+unit in this directory is retired. The standalone Tektos-Ultima stack is
+shut down — its functionality lives in the Kosmos-LMS kernel
+(`/home/rmholston/dev/kosmos-lms`, `:8000`), ported endpoint-for-endpoint
+per the ADR-141 functionality-preservation audit (131 P / 23 D / 0 T).
 
-## Services
+| Retired unit | Port | Final state |
+|---|---|---|
+| `tektos-backend.service` | 8020 | `systemctl --user disable --now`; symlink removed from `~/.config/systemd/user/` |
+| `tektos.target` | — | disabled; last live member was the backend |
+| `tektos-hindsight.service` | 9000 | already `not-found`/undeployed; unit deleted |
+| `tektos-llm-hindsight.service` | 8095 | already `not-found`/undeployed; unit deleted |
+| `install.sh` | — | deleted (nothing left to install) |
 
-| Unit                              | Port  | Depends on                            | Restart policy       |
-|-----------------------------------|-------|---------------------------------------|----------------------|
-| `tektos-backend.service`          | 8020  | `network-online.target`               | on-failure, 5s       |
-| `tektos-llm-hindsight.service`    | 8095  | `network-online.target`               | on-failure, 5s       |
-| `tektos-hindsight.service`        | 9000  | `tektos-llm-hindsight` (Requires=)    | on-failure, 3× / 2m  |
-| `tektos.target`                   | —     | Wants= all three                      | —                    |
+Earlier retirements for the record:
 
-**Stage 9.5 (ADR-113, kosmos-lms)**: `tektos-gateway.service` (:8765) and
-`tektos-frontend.service` (:5556) are retired. The Tektos API is served
-same-origin through the kosmos kernel gateway
-(`/api/tektos-ultima/gateway/*`, ADR-109) and the native Kosmos dashboard
-(`/tektos-ultima`) replaces the standalone Next.js frontend. If you
-re-enable the old standalone stack, see the git history for the unit files.
+- **Stage 9.5 (ADR-113):** `tektos-frontend.service` (:5556) +
+  `tektos-gateway.service` (:8765).
+- **Stage 14.1 (ADR-144):** the kernel-side ADR-109 gateway proxy
+  (`/api/tektos-ultima/gateway/*`) — kernel CSP middleware preserved at
+  `kernel/csp.py`.
 
-**Design notes**:
+The live hindsight lane is the **Kosmos** unit
+`kosmos-hindsight.service` (:9178) in the kosmos-lms repo — it never
+depended on anything in this directory.
 
-- `tektos.target` uses `Wants=`, not `Requires=`, so a failing hindsight
-  does not cascade into backend failure.
-- Every service is `PartOf=tektos.target`, so `systemctl --user stop tektos.target`
-  cleanly stops the whole stack.
-- `KillMode=mixed` sends SIGTERM to the main PID and SIGKILL to the rest
-  of the cgroup. This prevents the zombie/orphan situation that occurred
-  during the PR #43 consolidation, where an old uvicorn survived kill and
-  kept serving stale code from a deleted directory.
-- Hindsight has `StartLimitBurst=3 / StartLimitIntervalSec=120` — if it
-  can't start (usually a missing env var), it will stop retrying after
-  three failures so the log stays quiet until an operator fixes the config.
-
-## Install
-
-```bash
-cd ~/dev/tektos-ultima-v1
-deploy/systemd/user/install.sh
-```
-
-The installer:
-1. Symlinks the units into `~/.config/systemd/user/` (so `git pull`
-   picks up unit-file changes without a re-copy).
-2. `daemon-reload`s the systemd user manager.
-3. `enable`s `tektos.target` for auto-start on next login/boot.
-
-It does **not** start the services. Kick off manually:
-
-```bash
-systemctl --user start tektos.target
-systemctl --user status 'tektos-*.service' tektos.target
-```
-
-## Prerequisites
-
-- **Lingering must be enabled** so user services survive logout:
-  ```bash
-  sudo loginctl enable-linger $USER
-  loginctl show-user $USER | grep Linger    # Linger=yes
-  ```
-- **`.env` at `~/dev/tektos-ultima-v1/.env`** — every unit `EnvironmentFile=`s
-  this. Missing keys surface as clean startup errors in the journal.
-- **`.venv` at `~/dev/tektos-ultima-v1/.venv`** — units call
-  `.venv/bin/python` and `.venv/bin/hindsight-api` directly (no venv
-  activation needed).
-- **`llama-server` on PATH** — required by `tektos-llm-hindsight.service`.
-  Install llama.cpp system-wide, or symlink into `~/.local/bin/`.
-- **Hindsight LLM model downloaded** — one-time:
-  ```bash
-  mkdir -p ~/dev/tektos-ultima-v1/models
-  huggingface-cli download unsloth/granite-4.0-h-tiny-GGUF \
-      'granite-4.0-h-tiny-Q4_K_M.gguf' \
-      --local-dir ~/dev/tektos-ultima-v1/models \
-      --local-dir-use-symlinks False
-  ```
-  Different model? Set `TEKTOS_HINDSIGHT_LLM_MODEL_PATH` in `.env`.
-
-## Environment variables the units read (from `.env`)
-
-### Backend
-
-- `TEKTOS_HOST` (default `127.0.0.1`) — override to `0.0.0.0` to expose backend on LAN.
-- `TEKTOS_PORT` (default `8020`).
-- `TEKTOS_LOG_LEVEL` (default `info`).
-
-### Hindsight LLM server (llama-server)
-
-- `TEKTOS_HINDSIGHT_LLM_HOST` (default `127.0.0.1`).
-- `TEKTOS_HINDSIGHT_LLM_PORT` (default `8095`).
-- `TEKTOS_HINDSIGHT_LLM_MODEL_PATH` (default `~/dev/tektos-ultima-v1/models/granite-4.0-h-tiny-Q4_K_M.gguf`).
-- `TEKTOS_HINDSIGHT_LLM_CTX` (default `16384`).
-- `TEKTOS_HINDSIGHT_LLM_GPU_LAYERS` (default `-1` — all layers on GPU; set to `0` for pure CPU).
-
-### Hindsight service
-
-Point hindsight at the local llama-server (defaults in `.env.example`):
-
-```dotenv
-HINDSIGHT_API_LLM_PROVIDER=ollama            # OpenAI-compat provider; works with any /v1 endpoint
-HINDSIGHT_API_LLM_API_KEY=local               # dummy value; server does not check
-HINDSIGHT_API_LLM_BASE_URL=http://127.0.0.1:8095/v1
-HINDSIGHT_API_LLM_MODEL=granite-4.0-h-tiny    # matches the loaded model
-```
-
-Embeddings stay `provider=local` (BGE), no change needed.
-
-## Common commands
-
-```bash
-# Whole stack
-systemctl --user start tektos.target
-systemctl --user restart tektos.target
-systemctl --user stop tektos.target
-systemctl --user status 'tektos-*.service' tektos.target
-
-# One service (e.g. after editing a backend module)
-systemctl --user restart tektos-backend
-
-# Logs
-journalctl --user -u 'tektos-*' -f      # all services combined
-journalctl --user -u tektos-backend -f  # one service
-journalctl --user -u tektos-backend -n 200 --no-pager   # last 200 lines
-```
-
-## Upgrading
-
-Because the units are symlinks into the repo, a `git pull` that touches
-`deploy/systemd/user/*.service` takes effect after:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user restart tektos.target
-```
-
-## Uninstall
-
-```bash
-systemctl --user stop tektos.target
-systemctl --user disable tektos.target
-rm ~/.config/systemd/user/tektos-*.service ~/.config/systemd/user/tektos.target
-systemctl --user daemon-reload
-```
+Recovery, if ever needed: `git log --oneline -- deploy/systemd/user/`
+and `git show <sha>:deploy/systemd/user/tektos-backend.service` (the
+donor tree's git history is intact; the GitHub remote retains every
+commit).
